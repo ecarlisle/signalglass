@@ -1,0 +1,23 @@
+{
+  "name": "@signalglass/parsers",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Parsers that convert external run formats into Signalglass normalized runs.",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@signalglass/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vitest": "^1.6.0"
+  }
+}

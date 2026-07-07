@@ -1,0 +1,32 @@
+{
+  "name": "@signalglass/cli",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "CLI entrypoint for Signalglass.",
+  "bin": {
+    "signalglass": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/cli.js",
+      "types": "./dist/cli.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "dev": "cd ../.. && tsx packages/cli/src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@signalglass/core": "workspace:*",
+    "@signalglass/parsers": "workspace:*",
+    "@signalglass/reports": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.4",
+    "vitest": "^1.6.0"
+  }
+}

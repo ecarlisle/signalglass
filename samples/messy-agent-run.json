@@ -1,0 +1,135 @@
+{
+  "id": "run-messy-001",
+  "name": "messy-agent-run",
+  "model": "claude-sonnet-4",
+  "provider": "anthropic",
+  "agent": "pi",
+  "task": "Fix failing TypeScript build",
+  "turns": [
+    {
+      "id": "t1",
+      "turnNumber": 1,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a helpful software engineering assistant. Read the project instructions carefully before proposing changes."
+        },
+        {
+          "role": "user",
+          "content": "Fix the failing TypeScript build in this repo."
+        }
+      ],
+      "contextBlocks": [
+        {
+          "id": "b1",
+          "sourceType": "project_instruction",
+          "name": "AGENTS.md",
+          "content": "# AGENTS.md\n\n## Project rules\n- Keep the project observability-first.\n- Do not build a proxy in the initial scaffold.\n- Keep types explicit and domain-focused.\n- Prefer readable code over clever abstractions.\n- Avoid claiming exact token counts while using approximate estimation.\n- Update docs when project concepts change.\n"
+        },
+        {
+          "id": "b2",
+          "sourceType": "file_tree",
+          "name": "file-tree",
+          "content": ".\n├── package.json\n├── pnpm-lock.yaml\n├── tsconfig.json\n├── src\n│   ├── app.ts\n│   ├── build.ts\n│   └── index.ts\n└── dist\n    └── bundle.js"
+        },
+        {
+          "id": "b3",
+          "sourceType": "dependency_lockfile",
+          "name": "pnpm-lock.yaml",
+          "content": "lockfileVersion: '6.0'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\ndependencies:\n  react:\n    specifier: ^18.3.1\n    version: 18.3.1\n  typescript:\n    specifier: ^5.5.4\n    version: 5.5.4\n  vite:\n    specifier: ^5.3.0\n    version: 5.3.0\npackages:\n  /react@18.3.1:\n    resolution: {integrity: sha512-...}\n    engines: {node: '>=12'}\n  /typescript@5.5.4:\n    resolution: {integrity: sha512-...}\n    engines: {node: '>=14.17'}\n"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "turnNumber": 2,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Run the build and show me the error."
+        }
+      ],
+      "toolCalls": [
+        {
+          "id": "tc1",
+          "name": "run_command",
+          "arguments": "npm run build",
+          "output": "> tsc\n\nsrc/build.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n\nsrc/build.ts(7,14): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.\n\nsrc/app.ts(12,3): error TS7006: Parameter 'x' implicitly has an 'any' type.\n\nsrc/index.ts(5,10): error TS2305: Module '\"./missing\"' has no exported member 'doThing'.\n\nerror TS2345 repeated 24 times across the codebase.\nerror TS2322 repeated 18 times across the codebase.\nerror TS7006 repeated 12 times across the codebase.\nerror TS2305 repeated 6 times across the codebase.\nThe build failed with 1,247 lines of output. Most lines are repeated TypeScript diagnostics.\nThe same stack trace appears for every module that imports the misconfigured helper.\nConsider collapsing repeated diagnostics before sending them to the model.\nThis block is intentionally long to simulate a verbose build log that dominates the context window.\nLine after line after line after line after line after line after line after line.\n"
+        }
+      ],
+      "contextBlocks": [
+        {
+          "id": "b4",
+          "sourceType": "project_instruction",
+          "name": "AGENTS.md",
+          "content": "# AGENTS.md\n\n## Project rules\n- Keep the project observability-first.\n- Do not build a proxy in the initial scaffold.\n- Keep types explicit and domain-focused.\n- Prefer readable code over clever abstractions.\n- Avoid claiming exact token counts while using approximate estimation.\n- Update docs when project concepts change.\n"
+        },
+        {
+          "id": "b5",
+          "sourceType": "file_tree",
+          "name": "file-tree",
+          "content": ".\n├── package.json\n├── pnpm-lock.yaml\n├── tsconfig.json\n├── src\n│   ├── app.ts\n│   ├── build.ts\n│   └── index.ts\n└── dist\n    └── bundle.js"
+        },
+        {
+          "id": "b6",
+          "sourceType": "tool_output",
+          "name": "npm-run-build.log",
+          "content": "Build exited with code 1. See tool output for full log."
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "turnNumber": 3,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Try fixing src/app.ts and src/build.ts."
+        }
+      ],
+      "contextBlocks": [
+        {
+          "id": "b7",
+          "sourceType": "project_instruction",
+          "name": "AGENTS.md",
+          "content": "# AGENTS.md\n\n## Project rules\n- Keep the project observability-first.\n- Do not build a proxy in the initial scaffold.\n- Keep types explicit and domain-focused.\n- Prefer readable code over clever abstractions.\n- Avoid claiming exact token counts while using approximate estimation.\n- Update docs when project concepts change.\n"
+        },
+        {
+          "id": "b8",
+          "sourceType": "file_tree",
+          "name": "file-tree",
+          "content": ".\n├── package.json\n├── pnpm-lock.yaml\n├── tsconfig.json\n├── src\n│   ├── app.ts\n│   ├── build.ts\n│   └── index.ts\n└── dist\n    └── bundle.js"
+        },
+        {
+          "id": "b9",
+          "sourceType": "build_output",
+          "name": "build.log",
+          "content": "> tsc\n\nsrc/build.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n\nsrc/build.ts(7,14): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.\n\nsrc/app.ts(12,3): error TS7006: Parameter 'x' implicitly has an 'any' type.\n\nsrc/index.ts(5,10): error TS2305: Module '\"./missing\"' has no exported member 'doThing'.\n\nerror TS2345 repeated 24 times across the codebase.\nerror TS2322 repeated 18 times across the codebase.\nerror TS7006 repeated 12 times across the codebase.\nerror TS2305 repeated 6 times across the codebase.\nThe build failed with 1,247 lines of output. Most lines are repeated TypeScript diagnostics.\nThe same stack trace appears for every module that imports the misconfigured helper.\nConsider collapsing repeated diagnostics before sending them to the model.\nThis block is intentionally long to simulate a verbose build log that dominates the context window.\nLine after line after line after line after line after line after line after line.\n"
+        },
+        {
+          "id": "b10",
+          "sourceType": "file_content",
+          "name": "src/app.ts",
+          "content": "export function app(x: any) {\n  console.log('running app', x);\n  return x + 1;\n}\n"
+        },
+        {
+          "id": "b11",
+          "sourceType": "generated_artifact",
+          "name": "dist/bundle.js",
+          "content": "(()=>{var e={};function n(r){if(e[r])return e[r].exports;var t=e[r]={exports:{}};return t.exports=r.call(t.exports,t,t.exports,n),t.exports}n(1)})();"
+        }
+      ]
+    },
+    {
+      "id": "t4",
+      "turnNumber": 4,
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "I fixed the type mismatch in src/build.ts and added an explicit type for the parameter in src/app.ts. The build should now pass."
+        }
+      ],
+      "outputTokens": 42
+    }
+  ]
+}

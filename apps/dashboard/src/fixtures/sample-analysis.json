@@ -1,0 +1,139 @@
+{
+  "runName": "messy-agent-run",
+  "model": "claude-sonnet-4",
+  "provider": "anthropic",
+  "totalInputTokens": 1142,
+  "turnCount": 4,
+  "blockCount": 18,
+  "duplicateRatio": 0.31,
+  "tokensBySourceType": [
+    { "sourceType": "tool_output", "tokens": 267, "blockCount": 2, "percentage": 0.2338 },
+    { "sourceType": "build_output", "tokens": 253, "blockCount": 1, "percentage": 0.2215 },
+    { "sourceType": "project_instruction", "tokens": 246, "blockCount": 3, "percentage": 0.2154 },
+    { "sourceType": "dependency_lockfile", "tokens": 113, "blockCount": 1, "percentage": 0.0989 },
+    { "sourceType": "file_tree", "tokens": 105, "blockCount": 3, "percentage": 0.0919 },
+    { "sourceType": "generated_artifact", "tokens": 38, "blockCount": 1, "percentage": 0.0333 },
+    { "sourceType": "assistant_message", "tokens": 32, "blockCount": 1, "percentage": 0.0280 },
+    { "sourceType": "user_message", "tokens": 31, "blockCount": 3, "percentage": 0.0271 },
+    { "sourceType": "system_instruction", "tokens": 29, "blockCount": 1, "percentage": 0.0254 },
+    { "sourceType": "file_content", "tokens": 21, "blockCount": 1, "percentage": 0.0184 }
+  ],
+  "smells": [
+    {
+      "id": "high_duplicate_context_ratio",
+      "severity": "high",
+      "title": "High duplicate context ratio",
+      "isHeuristic": false,
+      "whatHappened": "Roughly 31% of the input tokens were repeated content.",
+      "whyItMatters": "High duplication means the model is spending a large share of the context budget on information it has already seen.",
+      "evidenceSummary": "351 duplicate tokens across repeated project instructions and file trees.",
+      "recommendation": "Deduplicate repeated instructions, file trees, and logs across turns to reclaim context budget.",
+      "suggestedNextSteps": ["Open the Context Timeline to see which blocks repeat across turns.", "Identify the top repeated groups and remove or cache them."]
+    },
+    {
+      "id": "generated_artifact_in_context",
+      "severity": "warning",
+      "title": "Generated artifact in context",
+      "isHeuristic": false,
+      "whatHappened": "One block looks like generated or build output.",
+      "whyItMatters": "Generated files are usually not helpful for reasoning about source code and can consume significant budget.",
+      "evidenceSummary": "Roughly 38 tokens in dist/bundle.js.",
+      "recommendation": "Exclude generated directories and minified bundles from the context window.",
+      "suggestedNextSteps": ["Review your file-inclusion rules for generated directories.", "Add dist, build, and coverage to an ignore list and re-analyze the run."]
+    },
+    {
+      "id": "repeated_project_instruction",
+      "severity": "info",
+      "title": "Repeated project instruction",
+      "isHeuristic": false,
+      "whatHappened": "The same project instruction (AGENTS.md) was sent 3 times.",
+      "whyItMatters": "Project instructions rarely change during a run. Resending them inflates the context window and crowds out task-specific information.",
+      "evidenceSummary": "246 tokens across 3 identical blocks.",
+      "recommendation": "Move persistent instructions into a system prompt or cache them rather than repeating them every turn.",
+      "suggestedNextSteps": ["Compare the repeated blocks in the Context Timeline.", "Check whether your agent framework supports a persistent project instruction."]
+    },
+    {
+      "id": "repeated_file_tree",
+      "severity": "info",
+      "title": "Repeated file tree",
+      "isHeuristic": false,
+      "whatHappened": "The same file tree was sent 3 times.",
+      "whyItMatters": "File trees are often large and change infrequently during a run.",
+      "evidenceSummary": "105 tokens across 3 identical file-tree blocks.",
+      "recommendation": "Send file-tree diffs or omit the tree when it has not changed since the previous turn.",
+      "suggestedNextSteps": ["Inspect the file-tree blocks to see how much is repeated.", "Try sending only files that changed."]
+    },
+    {
+      "id": "lockfile_in_context",
+      "severity": "info",
+      "title": "Lockfile included in context",
+      "isHeuristic": false,
+      "whatHappened": "A dependency lockfile was included in the context window.",
+      "whyItMatters": "Lockfiles can be large and are only useful when dependency resolution is the active task.",
+      "evidenceSummary": "Roughly 113 tokens in pnpm-lock.yaml.",
+      "recommendation": "Only include lockfiles when dependency changes are being discussed; otherwise omit them.",
+      "suggestedNextSteps": ["Check whether the lockfile was included intentionally.", "Remove it from the context and compare token usage."]
+    },
+    {
+      "id": "late_relevant_file_heuristic",
+      "severity": "info",
+      "title": "Likely relevant file appeared late",
+      "isHeuristic": true,
+      "whatHappened": "A source file (src/app.ts) first appeared in turn 3, after the midpoint of the run.",
+      "whyItMatters": "Relevant source files that appear late may be crowded out by earlier noise.",
+      "evidenceSummary": "File src/app.ts appeared in turn 3 of 4.",
+      "recommendation": "Try to surface files most relevant to the current task earlier in the run.",
+      "suggestedNextSteps": ["Verify that the file is actually relevant to the task.", "Check whether the agent could have included this file earlier."]
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "deduplicate-context",
+      "title": "Deduplicate repeated context",
+      "description": "Review repeated context across turns and remove or cache duplicates to reclaim budget.",
+      "whyItMatters": "High duplication means a large share of the budget is spent on information the model has already seen.",
+      "inspectSuggestion": "Open the Context Timeline and sort blocks by source type to find the biggest repeated groups.",
+      "trySuggestion": "Remove repeated instructions, file trees, and logs; keep one canonical copy where needed."
+    },
+    {
+      "id": "exclude-generated-artifacts",
+      "title": "Exclude generated artifacts",
+      "description": "Keep generated directories and minified bundles out of the context window.",
+      "whyItMatters": "Generated files rarely help the model reason about source code and can consume significant budget.",
+      "inspectSuggestion": "Look at the generated-artifact blocks to confirm they are build output.",
+      "trySuggestion": "Add dist, build, coverage, and *.min.js to your file-collection ignore list."
+    },
+    {
+      "id": "deduplicate-instructions",
+      "title": "Deduplicate instructions",
+      "description": "Avoid resending the same project instructions every turn.",
+      "whyItMatters": "Repeated instructions inflate the context window without adding new information.",
+      "inspectSuggestion": "Open the Context Timeline and compare the project-instruction blocks across turns.",
+      "trySuggestion": "Move the instruction to a system prompt or configure your agent to send it only once."
+    },
+    {
+      "id": "compress-file-tree",
+      "title": "Compress or diff file trees",
+      "description": "Only send the file tree when it changes, or send a compact diff.",
+      "whyItMatters": "File trees are often large and stable; repeating the full tree wastes tokens.",
+      "inspectSuggestion": "Look at the file-tree blocks in the Context Timeline.",
+      "trySuggestion": "Send a diff of changed files, or omit the tree when no files were added or removed."
+    },
+    {
+      "id": "lockfile-caution",
+      "title": "Be cautious with lockfiles",
+      "description": "Include lockfiles only when dependency resolution is the active topic.",
+      "whyItMatters": "Lockfiles can be large and are usually irrelevant unless the task involves changing dependencies.",
+      "inspectSuggestion": "Check why the lockfile was included and whether dependency resolution is part of the task.",
+      "trySuggestion": "Remove the lockfile from the context and re-run to see if the response quality changes."
+    },
+    {
+      "id": "prioritize-relevant-files",
+      "title": "Prioritize relevant files earlier",
+      "description": "Surface files likely to matter for the current task before noisy output accumulates.",
+      "whyItMatters": "Files that appear late may be crowded out by earlier tool output or repeated context.",
+      "inspectSuggestion": "Verify in the Context Timeline that the file is relevant and could have appeared earlier.",
+      "trySuggestion": "Adjust your agent's retrieval logic to rank task-relevant files higher in early turns."
+    }
+  ]
+}
