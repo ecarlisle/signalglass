@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { parseSignalglassJson } from '@signalglass/parsers';
 import { analyzeRun } from '@signalglass/core';
 import type { Trace } from '@signalglass/core';
@@ -20,7 +20,7 @@ function printIngressUsage() {
 function printTracesUsage() {
   console.error('Usage: signalglass traces --storage <path> <command> [options]');
   console.error('Commands:');
-  console.error('  list                                     List all stored traces');
+  console.error('  list [--report terminal|json] [--output <file>]           List all stored traces');
   console.error('  show <trace-id> [--report terminal|json|html] [--output <file>]');
 }
 
@@ -72,9 +72,13 @@ function analyzeCommand(args: string[]) {
       process.exit(1);
   }
 
-  if (values.output) {
-    writeFileSync(values.output, output);
-    console.log(`Report written to ${values.output}`);
+  writeOutput(output, values.output);
+}
+
+function writeOutput(output: string, outputPath?: string): void {
+  if (outputPath) {
+    writeFileSync(outputPath, output);
+    console.log(`Report written to ${outputPath}`);
   } else {
     console.log(output);
   }
@@ -187,6 +191,11 @@ function tracesCommand(args: string[]) {
     process.exit(1);
   }
 
+  if (!existsSync(values.storage)) {
+    console.error(`Error: storage database not found: ${values.storage}`);
+    process.exit(1);
+  }
+
   const subcommand = positionals[0];
 
   if (!subcommand) {
@@ -206,6 +215,7 @@ function tracesCommand(args: string[]) {
   switch (subcommand) {
     case 'list': {
       const traces = storage.listTraces();
+      storage.close();
       const reportType = values.report ?? 'terminal';
       let output = '';
       switch (reportType) {
@@ -213,23 +223,20 @@ function tracesCommand(args: string[]) {
           output = renderTraceListJson(traces);
           break;
         case 'terminal':
-        default:
           output = renderTraceListSummary(traces);
           break;
+        default:
+          console.error(`Unknown report type: ${reportType}`);
+          process.exit(1);
       }
-      if (values.output) {
-        writeFileSync(values.output, output);
-        console.log(`Report written to ${values.output}`);
-      } else {
-        console.log(output);
-      }
-      storage.close();
+      writeOutput(output, values.output);
       break;
     }
     case 'show': {
       const traceId = positionals[1];
       if (!traceId) {
         console.error('Error: missing trace-id argument');
+        storage.close();
         printTracesUsage();
         process.exit(1);
       }
@@ -249,20 +256,18 @@ function tracesCommand(args: string[]) {
           output = renderTraceHtml(trace);
           break;
         case 'terminal':
-        default:
           output = renderTraceTerminal(trace);
           break;
+        default:
+          console.error(`Unknown report type: ${reportType}`);
+          process.exit(1);
       }
-      if (values.output) {
-        writeFileSync(values.output, output);
-        console.log(`Report written to ${values.output}`);
-      } else {
-        console.log(output);
-      }
+      writeOutput(output, values.output);
       break;
     }
     default:
       console.error(`Unknown trace subcommand: ${subcommand}`);
+      storage.close();
       printTracesUsage();
       process.exit(1);
   }

@@ -12,23 +12,24 @@ export function renderTraceListSummary(traces: Trace[]): string {
   }
 
   const lines: string[] = [];
+  const widths = [20, 8, 16, 20, 6, 24];
 
   lines.push(`Signalglass traces (${traces.length})`);
   lines.push('');
 
   // Header
-  lines.push(formatRow(['ID', 'Status', 'Provider', 'Model', 'Events', 'Started']));
-  lines.push(formatRow(['', '', '', '', '', ''].map((_, i) => i === 0 ? '──' : '──')));
+  lines.push(formatRow(['ID', 'Status', 'Provider', 'Model', 'Events', 'Started'], widths));
+  lines.push(formatRow(widths.map((w) => '─'.repeat(w)), widths));
 
   for (const trace of traces) {
-    const id = truncate(trace.id, 20);
+    const id = truncate(trace.id, widths[0]);
     const status = trace.status;
-    const provider = truncate(trace.provider ?? '—', 16);
-    const model = truncate(trace.model ?? '—', 20);
+    const provider = truncate(trace.provider ?? '—', widths[2]);
+    const model = truncate(trace.model ?? '—', widths[3]);
     const events = String(trace.events?.length ?? 0);
-    const started = truncate(trace.startedAt, 24);
+    const started = truncate(trace.startedAt, widths[5]);
 
-    lines.push(formatRow([id, status, provider, model, events, started]));
+    lines.push(formatRow([id, status, provider, model, events, started], widths));
   }
 
   lines.push('');
@@ -76,8 +77,8 @@ export function renderTraceListJson(traces: Trace[]): string {
   return JSON.stringify(summaries, null, 2);
 }
 
-function formatRow(columns: string[]): string {
-  return columns.map((c) => `  ${c}`).join(' ');
+function formatRow(columns: string[], widths: number[]): string {
+  return columns.map((c, i) => `  ${c.padEnd(widths[i] ?? 0)}`).join(' ');
 }
 
 function truncate(text: string, maxLen: number): string {

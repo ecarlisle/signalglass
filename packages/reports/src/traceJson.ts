@@ -52,22 +52,22 @@ function buildTraceReport(trace: Trace) {
 }
 
 function buildTokenMetrics(events: TraceEvent[]) {
-  const totalInput = events
-    .filter((e) => e.tokens != null && e.contentPhase != null && ['sent', 'requested', 'observed'].includes(e.contentPhase))
-    .reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+  const inputEvents = events.filter(
+    (e) => e.tokens != null && e.contentPhase != null && ['sent', 'requested', 'observed'].includes(e.contentPhase),
+  );
+  const outputEvents = events.filter(
+    (e) => e.tokens != null && e.contentPhase != null && ['generated', 'returned'].includes(e.contentPhase),
+  );
+  const inferenceEvents = events.filter((e) => e.type === 'inference');
 
-  const totalOutput = events
-    .filter((e) => e.tokens != null && e.contentPhase != null && ['generated', 'returned'].includes(e.contentPhase))
-    .reduce((sum, e) => sum + (e.tokens ?? 0), 0);
-
-  const inferenceTokens = events
-    .filter((e) => e.type === 'inference')
-    .reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+  const totalInput = inputEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+  const totalOutput = outputEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+  const inferenceTokens = inferenceEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
 
   return {
-    totalInputTokens: totalInput > 0 ? totalInput : null,
-    totalOutputTokens: totalOutput > 0 ? totalOutput : null,
-    inferenceTokens: inferenceTokens > 0 ? inferenceTokens : null,
+    totalInputTokens: inputEvents.length > 0 ? totalInput : null,
+    totalOutputTokens: outputEvents.length > 0 ? totalOutput : null,
+    inferenceTokens: inferenceEvents.length > 0 ? inferenceTokens : null,
     approximate: true,
   };
 }

@@ -86,7 +86,7 @@ See `docs/privacy.md` for redaction rules and `specs/007-storage-and-privacy.md`
 
 ```bash
 signalglass ingress --config signalglass.config.json [--port <port>] [--storage <path>]
-signalglass traces --storage <path> list
+signalglass traces --storage <path> list [--report terminal|json] [--output <file>]
 signalglass traces --storage <path> show <trace-id> [--report terminal|json|html] [--output <file>]
 ```
 

@@ -34,19 +34,22 @@ export function renderTraceTerminal(trace: Trace): string {
   const events = trace.events ?? [];
   const totalInput = sumTokensByPhase(events, 'sent', 'requested', 'observed');
   const totalOutput = sumTokensByPhase(events, 'generated', 'returned');
+  const hasInputData = events.some((e) => e.tokens != null && e.contentPhase != null && ['sent', 'requested', 'observed'].includes(e.contentPhase));
+  const hasOutputData = events.some((e) => e.tokens != null && e.contentPhase != null && ['generated', 'returned'].includes(e.contentPhase));
+  const hasInferenceData = events.some((e) => e.type === 'inference' && e.tokens != null);
 
   lines.push(`  Events:      ${events.length}`);
 
-  if (totalInput > 0) {
+  if (hasInputData) {
     lines.push(`  Input tokens:  ${totalInput} (approximate)`);
   }
-  if (totalOutput > 0) {
+  if (hasOutputData) {
     lines.push(`  Output tokens: ${totalOutput} (approximate)`);
   }
 
   // Token total from inference events
   const inferenceTokens = sumInferenceTokens(events);
-  if (inferenceTokens > 0) {
+  if (hasInferenceData) {
     lines.push(`  Inference tokens: ${inferenceTokens} (approximate)`);
   }
 
