@@ -1,16 +1,16 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { openaiAdapter, resolveProviderApiKey, type ProviderConfig } from '@signalglass/providers';
 import {
-  createTraceEvent,
   createDefaultCapturePolicy,
   type Trace,
   type TraceEvent,
 } from '@signalglass/core';
 import type { IngressConfig } from './config.js';
 import { selectProvider } from './routing.js';
-import { forwardToUpstream, type UpstreamResponse } from './forward.js';
+import { forwardToUpstream } from './forward.js';
 
 const DEFAULT_PORT = 8080;
+export const DEFAULT_BODY_SIZE_LIMIT_BYTES = 10 * 1024 * 1024; // 10 MB
 
 function generateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -20,11 +20,20 @@ function setTraceId(events: TraceEvent[], traceId: string): TraceEvent[] {
   return events.map((event) => ({ ...event, traceId }));
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+async function readJsonBody(
+  req: IncomingMessage,
+  limitBytes: number,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let body = '';
+    let size = 0;
     req.setEncoding('utf8');
-    req.on('data', (chunk) => {
+    req.on('data', (chunk: string) => {
+      size += Buffer.byteLength(chunk, 'utf8');
+      if (size > limitBytes) {
+        reject(new Error(`Request body exceeds ${limitBytes} byte limit`));
+        return;
+      }
       body += chunk;
     });
     req.on('end', () => {
@@ -62,16 +71,27 @@ function handleModels(providers: ProviderConfig[], res: ServerResponse): void {
   sendJson(res, 200, { object: 'list', data: models });
 }
 
+export interface IngressServerOptions {
+  config: IngressConfig;
+  port?: number;
+  bodySizeLimitBytes?: number;
+  onTrace?: (trace: Trace) => void | Promise<void>;
+}
+
 async function handleChatCompletion(
-  config: IngressConfig,
+  options: IngressServerOptions,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  const { config, bodySizeLimitBytes = DEFAULT_BODY_SIZE_LIMIT_BYTES, onTrace } = options;
+
   let requestBody: unknown;
   try {
-    requestBody = await readJsonBody(req);
-  } catch {
-    sendJson(res, 400, { error: { message: 'Invalid JSON body', type: 'invalid_request_error' } });
+    requestBody = await readJsonBody(req, bodySizeLimitBytes);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid request body';
+    const status = message.includes('limit') ? 413 : 400;
+    sendJson(res, status, { error: { message, type: 'invalid_request_error' } });
     return;
   }
 
@@ -113,6 +133,16 @@ async function handleChatCompletion(
     return;
   }
 
+  if (typeof upstream.body !== 'object' || upstream.body === null) {
+    sendJson(res, 502, {
+      error: {
+        message: 'Upstream returned an invalid response body for /v1/chat/completions',
+        type: 'api_error',
+      },
+    });
+    return;
+  }
+
   const responseEvents = setTraceId(openaiAdapter.normalizeResponse(upstream.body, provider), traceId);
 
   const allEvents = [...requestEvents, ...responseEvents];
@@ -133,12 +163,12 @@ async function handleChatCompletion(
   };
 
   // The trace is assembled but not persisted; storage is Spec 007.
-  // Attach the trace id to the response so callers can correlate later.
-  const clientResponse =
-    typeof upstream.body === 'object' && upstream.body !== null
-      ? upstream.body
-      : { choices: [], usage: {} };
+  // The optional onTrace seam lets callers observe the trace without persistence.
+  if (onTrace) {
+    await Promise.resolve(onTrace(trace));
+  }
 
+  const clientResponse = upstream.body;
   const body = JSON.stringify(clientResponse);
   res.writeHead(200, {
     'content-type': 'application/json',
@@ -146,14 +176,6 @@ async function handleChatCompletion(
     'x-signalglass-trace-id': traceId,
   });
   res.end(body);
-
-  // Suppress unused-variable lint while keeping the assembled trace visible.
-  void trace;
-}
-
-export interface IngressServerOptions {
-  config: IngressConfig;
-  port?: number;
 }
 
 export function createIngressServer(options: IngressServerOptions): Server {
@@ -169,7 +191,7 @@ export function createIngressServer(options: IngressServerOptions): Server {
       } else if (url === '/v1/models' && method === 'GET') {
         handleModels(config.providers, res);
       } else if (url === '/v1/chat/completions' && method === 'POST') {
-        await handleChatCompletion(config, req, res);
+        await handleChatCompletion(options, req, res);
       } else {
         sendJson(res, 404, { error: { message: 'Not found', type: 'invalid_request_error' } });
       }

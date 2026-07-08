@@ -5,6 +5,7 @@ import { parseSignalglassJson } from '@signalglass/parsers';
 import { analyzeRun } from '@signalglass/core';
 import { renderTerminal, renderJson, renderHtml } from '@signalglass/reports';
 import { loadConfig, startIngressServer } from '@signalglass/ingress';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 function printAnalyzeUsage() {
   console.error('Usage: signalglass analyze <file> [--report terminal|json|html] [--output <file>]');
@@ -69,6 +70,17 @@ function analyzeCommand(args: string[]) {
   }
 }
 
+export function validatePort(raw: string): number {
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`Invalid port: "${raw}"`);
+  }
+  const port = Number.parseInt(raw, 10);
+  if (Number.isNaN(port) || port < 1 || port > 65535) {
+    throw new Error(`Port must be an integer between 1 and 65535, got: ${raw}`);
+  }
+  return port;
+}
+
 async function ingressCommand(args: string[]) {
   const { values } = parseArgs({
     args,
@@ -84,8 +96,18 @@ async function ingressCommand(args: string[]) {
     process.exit(1);
   }
 
+  let port: number | undefined;
+  if (values.port !== undefined) {
+    try {
+      port = validatePort(values.port);
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : error}`);
+      printIngressUsage();
+      process.exit(1);
+    }
+  }
+
   const config = await loadConfig(values.config);
-  const port = values.port ? Number.parseInt(values.port, 10) : undefined;
 
   const server = await startIngressServer({ config, port });
   const address = server.address();
@@ -101,14 +123,15 @@ async function main() {
     args = args.slice(1);
   }
 
-  const { positionals, values: _values } = parseArgs({
+  const { positionals } = parseArgs({
     args,
     allowPositionals: true,
+    strict: false,
     options: {},
   });
 
   const command = positionals[0];
-  const commandArgs = positionals.slice(1);
+  const commandArgs = args.slice(1);
 
   switch (command) {
     case 'analyze':
@@ -123,7 +146,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === pathToFileURL(fileURLToPath(import.meta.url)).href) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}

@@ -2,6 +2,8 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { ProviderConfig } from '@signalglass/providers';
 
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 30_000;
+
 export interface UpstreamResponse {
   status: number;
   headers: Record<string, string | string[]>;
@@ -12,6 +14,7 @@ export async function forwardToUpstream(
   provider: ProviderConfig,
   apiKey: string | undefined,
   requestBody: unknown,
+  timeoutMs: number = DEFAULT_UPSTREAM_TIMEOUT_MS,
 ): Promise<UpstreamResponse> {
   const url = new URL(`${provider.baseUrl}/chat/completions`);
   const makeRequest = url.protocol === 'https:' ? httpsRequest : httpRequest;
@@ -60,7 +63,20 @@ export async function forwardToUpstream(
       },
     );
 
-    req.on('error', reject);
+    const timeoutId = setTimeout(() => {
+      req.destroy();
+      reject(new Error(`Upstream request timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    req.on('error', (error) => {
+      clearTimeout(timeoutId);
+      reject(error);
+    });
+
+    req.on('close', () => {
+      clearTimeout(timeoutId);
+    });
+
     req.write(body);
     req.end();
   });
