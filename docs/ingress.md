@@ -78,7 +78,9 @@ Full payload capture is opt-in per provider or per trace. See `docs/privacy.md`.
 
 ## Storage
 
-Captured traces are stored in SQLite by default. The storage schema is documented in `@signalglass/storage` (future package). Only the items listed above are written unless the capture policy is changed.
+Captured traces can be persisted via the `@signalglass/storage` package (SQLite backend). Storage is opt-in: pass `--storage <path>` to the ingress CLI command. When enabled, traces are sanitized (redacted) before storage. Only the items listed above are written unless the capture policy is changed.
+
+See `docs/privacy.md` for redaction rules and `specs/007-storage-and-privacy.md` for the storage specification.
 
 ## CLI commands
 

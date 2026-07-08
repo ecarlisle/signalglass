@@ -445,6 +445,99 @@ describe('ingress server', () => {
 
     upstream.close();
   });
+
+  it('passes assembled trace to onTrace callback and storage can persist it', async () => {
+    const upstreamResponse = {
+      id: 'chatcmpl-storage',
+      object: 'chat.completion',
+      model: 'gpt-4o',
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: 'Storage test response' },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: { prompt_tokens: 8, completion_tokens: 6, total_tokens: 14 },
+    };
+
+    const upstream = await mockUpstreamProvider(upstreamResponse);
+    const upstreamPort = getPort(upstream);
+
+    const config: IngressConfig = {
+      providers: [
+        {
+          id: 'openai',
+          label: 'OpenAI',
+          kind: 'openai-compatible',
+          baseUrl: `http://localhost:${upstreamPort}/v1`,
+          apiKeyEnv: ENV_VAR_NAME,
+          defaultModel: 'gpt-4o',
+          models: [{ id: 'gpt-4o' }],
+        },
+      ],
+    };
+
+    let capturedTrace: Trace | undefined;
+
+    await withEnv(ENV_VAR_NAME, TEST_API_KEY, async () => {
+      const server = createIngressServer({
+        config,
+        port: 0,
+        onTrace: async (trace) => {
+          capturedTrace = trace;
+        },
+      });
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+      const port = getPort(server);
+
+      const res = await httpRequest(port, '/v1/chat/completions', 'POST', {
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: 'You are a helpful assistant' },
+          { role: 'user', content: 'Test storage integration' },
+        ],
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers['x-signalglass-trace-id']).toBeDefined();
+
+      // Verify the trace was captured
+      expect(capturedTrace).toBeDefined();
+      expect(capturedTrace!.id).toBe(res.headers['x-signalglass-trace-id']);
+      expect(capturedTrace!.provider).toBe('openai');
+      expect(capturedTrace!.model).toBe('gpt-4o');
+      expect(capturedTrace!.events.length).toBeGreaterThan(0);
+
+      // Verify trace has expected event types
+      const eventTypes = capturedTrace!.events.map((e) => e.type);
+      expect(eventTypes).toContain('message');
+      expect(eventTypes).toContain('provider_request');
+      expect(eventTypes).toContain('provider_response');
+
+      // Verify storage can save and retrieve the trace
+      const { TraceStorage } = await import('@signalglass/storage');
+      const storagePath = join(tmpdir(), `signalglass-ingress-storage-test-${Date.now()}.db`);
+      const storage = new TraceStorage({ databasePath: storagePath });
+
+      try {
+        storage.saveTrace(capturedTrace!);
+        const retrieved = storage.getTrace(capturedTrace!.id);
+
+        expect(retrieved).not.toBeNull();
+        expect(retrieved!.id).toBe(capturedTrace!.id);
+        expect(retrieved!.provider).toBe('openai');
+        expect(retrieved!.events.length).toBe(capturedTrace!.events.length);
+      } finally {
+        storage.close();
+        await unlink(storagePath);
+      }
+
+      server.close();
+    });
+
+    upstream.close();
+  });
 });
 
 describe('loadConfig', () => {
@@ -487,5 +580,146 @@ describe('loadConfig', () => {
     await expect(loadConfig(path)).rejects.toThrow('valid "kind"');
 
     await unlink(path);
+  });
+});
+
+describe('ingress + storage integration', () => {
+  it('can hand off an assembled trace to storage through the onTrace seam', async () => {
+    const upstreamResponse = {
+      id: 'chatcmpl-integration',
+      object: 'chat.completion',
+      model: 'gpt-4o',
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: 'Integration test response' },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    };
+
+    const upstream = await mockUpstreamProvider(upstreamResponse);
+    const upstreamPort = getPort(upstream);
+
+    const config: IngressConfig = {
+      providers: [
+        {
+          id: 'openai',
+          label: 'OpenAI',
+          kind: 'openai-compatible',
+          baseUrl: `http://localhost:${upstreamPort}/v1`,
+          apiKeyEnv: ENV_VAR_NAME,
+          defaultModel: 'gpt-4o',
+          models: [{ id: 'gpt-4o' }],
+        },
+      ],
+    };
+
+    // Use the onTrace seam to capture the trace
+    let capturedTrace: Trace | undefined;
+    const onTrace = async (trace: Trace) => {
+      capturedTrace = trace;
+    };
+
+    await withEnv(ENV_VAR_NAME, TEST_API_KEY, async () => {
+      const server = createIngressServer({ config, port: 0, onTrace });
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+      const port = getPort(server);
+
+      const res = await httpRequest(port, '/v1/chat/completions', 'POST', {
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: 'You are a helpful assistant' },
+          { role: 'user', content: 'Hello, integration test!' },
+        ],
+      });
+
+      expect(res.status).toBe(200);
+      expect(capturedTrace).not.toBeNull();
+      expect(capturedTrace!.id).toBeDefined();
+      expect(capturedTrace!.events.length).toBeGreaterThan(0);
+      expect(capturedTrace!.mode).toBe('standard');
+      expect(capturedTrace!.capturePolicy).toBeDefined();
+      expect(capturedTrace!.capturePolicy.storeFullRawPayloads).toBe(false);
+
+      // Verify trace contains expected event types
+      const eventTypes = capturedTrace!.events.map((e) => e.type);
+      expect(eventTypes).toContain('instruction');
+      expect(eventTypes).toContain('message');
+      expect(eventTypes).toContain('provider_request');
+      expect(eventTypes).toContain('provider_response');
+
+      server.close();
+    });
+
+    upstream.close();
+  });
+
+  it('ensures traces passed to storage are sanitized', async () => {
+    const upstreamResponse = {
+      id: 'chatcmpl-sanitized',
+      object: 'chat.completion',
+      model: 'gpt-4o',
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: 'Sanitized response' },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    };
+
+    const upstream = await mockUpstreamProvider(upstreamResponse);
+    const upstreamPort = getPort(upstream);
+
+    const config: IngressConfig = {
+      providers: [
+        {
+          id: 'openai',
+          label: 'OpenAI',
+          kind: 'openai-compatible',
+          baseUrl: `http://localhost:${upstreamPort}/v1`,
+          apiKeyEnv: ENV_VAR_NAME,
+          defaultModel: 'gpt-4o',
+          models: [{ id: 'gpt-4o' }],
+        },
+      ],
+    };
+
+    let capturedTrace: Trace | undefined;
+    const onTrace = async (trace: Trace) => {
+      capturedTrace = trace;
+    };
+
+    await withEnv(ENV_VAR_NAME, TEST_API_KEY, async () => {
+      const server = createIngressServer({ config, port: 0, onTrace });
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+      const port = getPort(server);
+
+      await httpRequest(port, '/v1/chat/completions', 'POST', {
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'Test sanitization' }],
+      });
+
+      expect(capturedTrace).not.toBeNull();
+
+      // Verify the trace is sanitized for standard mode
+      expect(capturedTrace!.capturePolicy.storeFullRawPayloads).toBe(false);
+      expect(capturedTrace!.capturePolicy.storeSecrets).toBe(false);
+      expect(capturedTrace!.capturePolicy.storeApiKeys).toBe(false);
+
+      // Verify no sensitive data in metadata
+      if (capturedTrace!.metadata) {
+        const metadataStr = JSON.stringify(capturedTrace!.metadata);
+        expect(metadataStr).not.toContain('authorization');
+        expect(metadataStr).not.toContain('api_key');
+      }
+
+      server.close();
+    });
+
+    upstream.close();
   });
 });

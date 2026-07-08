@@ -3,8 +3,10 @@ import { parseArgs } from 'node:util';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseSignalglassJson } from '@signalglass/parsers';
 import { analyzeRun } from '@signalglass/core';
+import type { Trace } from '@signalglass/core';
 import { renderTerminal, renderJson, renderHtml } from '@signalglass/reports';
 import { loadConfig, startIngressServer } from '@signalglass/ingress';
+import { TraceStorage } from '@signalglass/storage';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 function printAnalyzeUsage() {
@@ -12,14 +14,14 @@ function printAnalyzeUsage() {
 }
 
 function printIngressUsage() {
-  console.error('Usage: signalglass ingress --config <file> [--port <port>]');
+  console.error('Usage: signalglass ingress --config <file> [--port <port>] [--storage <path>]');
 }
 
 function printUsage() {
   console.error('Usage: signalglass <command> [options]');
   console.error('Commands:');
   console.error('  analyze <file> [--report terminal|json|html] [--output <file>]');
-  console.error('  ingress --config <file> [--port <port>]');
+  console.error('  ingress --config <file> [--port <port>] [--storage <path>]');
 }
 
 function analyzeCommand(args: string[]) {
@@ -87,6 +89,7 @@ async function ingressCommand(args: string[]) {
     options: {
       config: { type: 'string' },
       port: { type: 'string' },
+      storage: { type: 'string' },
     },
   });
 
@@ -109,11 +112,54 @@ async function ingressCommand(args: string[]) {
 
   const config = await loadConfig(values.config);
 
-  const server = await startIngressServer({ config, port });
+  // Initialize storage if --storage option is provided
+  let storage: TraceStorage | undefined;
+  let onTrace: ((trace: Trace) => void | Promise<void>) | undefined;
+
+  if (values.storage) {
+    try {
+      storage = new TraceStorage({ databasePath: values.storage });
+      onTrace = async (trace: Trace) => {
+        try {
+          storage!.saveTrace(trace);
+        } catch (error) {
+          console.error('Error saving trace:', error);
+        }
+      };
+      console.log(`Storage enabled: ${values.storage}`);
+    } catch (error) {
+      console.error(`Error initializing storage: ${error instanceof Error ? error.message : error}`);
+      process.exit(1);
+    }
+  }
+
+  let server;
+  try {
+    server = await startIngressServer({ config, port, onTrace });
+  } catch (error) {
+    if (storage) {
+      storage.close();
+    }
+    throw error;
+  }
   const address = server.address();
   const listeningPort = address && typeof address === 'object' ? address.port : port;
 
   console.log(`Signalglass ingress listening on http://localhost:${listeningPort}/v1`);
+
+  // Handle graceful shutdown
+  const shutdown = () => {
+    console.log('\nShutting down...');
+    server.close(() => {
+      if (storage) {
+        storage.close();
+      }
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
 
 async function main() {
