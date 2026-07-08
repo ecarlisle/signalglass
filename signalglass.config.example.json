@@ -1,0 +1,21 @@
+{
+  "providers": [
+    {
+      "id": "example-provider",
+      "label": "Example Provider",
+      "kind": "openai-compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "YOUR_API_KEY_ENV_VAR",
+      "defaultModel": "gpt-4o",
+      "models": [
+        { "id": "gpt-4o" },
+        { "id": "gpt-4o-mini" }
+      ],
+      "capabilities": {
+        "streaming": false,
+        "tools": true,
+        "jsonMode": true
+      }
+    }
+  ]
+}

@@ -6,10 +6,12 @@ Pi supports custom OpenAI-compatible providers through `~/.pi/agent/models.json`
 
 ## 1. Start SignalGlass
 
+All commands should be run from the SignalGlass repo root.
+
 Configure the upstream provider as described in `docs/getting-started.md`, then:
 
 ```bash
-export OPENAI_API_KEY=sk-...
+export YOUR_API_KEY_ENV_VAR=sk-...
 
 pnpm --filter @signalglass/cli dev -- ingress \
   --config signalglass.config.json \
@@ -18,6 +20,8 @@ pnpm --filter @signalglass/cli dev -- ingress \
 ```
 
 The real upstream key stays in the SignalGlass process environment.
+
+Call `GET /v1/models` first and use a returned model `id` in your requests.
 
 ## 2. Configure Pi
 

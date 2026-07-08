@@ -30,10 +30,24 @@ Both modes share the same internal domain model. A live trace can be converted i
 
 ## Quick start
 
+All commands should be run from the SignalGlass repo root.
+
 ```bash
+# Install dependencies (see docs/getting-started.md if native builds are blocked)
 pnpm install
+
+# Build workspace
 pnpm build
+
+# Run tests
 pnpm test
+
+# Copy the example provider config and edit it
+cp signalglass.config.example.json signalglass.config.json
+# Then edit signalglass.config.json with your upstream provider
+# Set the API key environment variable referenced in the config
+
+# Run offline analysis
 pnpm --filter @signalglass/cli dev -- analyze samples/messy-agent-run.json
 ```
 

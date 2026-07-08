@@ -13,6 +13,9 @@ coverage/
 vite.config.js
 vite.config.d.ts
 
+# Signalglass config (user-specific, may reference local env vars)
+signalglass.config.json
+
 # Environment and secrets
 .env
 .env.*

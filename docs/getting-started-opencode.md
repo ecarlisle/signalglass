@@ -6,16 +6,20 @@ OpenCode supports custom providers through `opencode.json` using `@ai-sdk/openai
 
 ## 1. Start SignalGlass
 
+All commands should be run from the SignalGlass repo root.
+
 Configure the upstream provider as described in `docs/getting-started.md`, then:
 
 ```bash
-export OPENAI_API_KEY=sk-...
+export YOUR_API_KEY_ENV_VAR=sk-...
 
 pnpm --filter @signalglass/cli dev -- ingress \
   --config signalglass.config.json \
   --port 8080 \
   --storage .signalglass/traces.db
 ```
+
+Call `GET /v1/models` first and use a returned model `id` in your requests.
 
 ## 2. Configure OpenCode
 
@@ -79,7 +83,7 @@ pnpm --filter @signalglass/cli dev -- traces \
   --report terminal
 ```
 
-JSON and HTML are also available:
+JSON and HTML are also available (commands run from the SignalGlass repo root):
 
 ```bash
 pnpm --filter @signalglass/cli dev -- traces \
