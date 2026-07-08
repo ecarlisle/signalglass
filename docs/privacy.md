@@ -71,6 +71,18 @@ Before any content is stored, Signalglass applies redaction rules:
 
 The default retention period is 30 days. Users can configure shorter or longer periods. When retention expires, traces and events are deleted automatically.
 
+## Report output
+
+Trace reports and summary views follow the same privacy rules as storage:
+
+- Full raw payloads are never included in reports.
+- API keys, secrets, and authorization headers are never included in reports.
+- `storageKey` values are not exposed in standard-mode reports.
+- Redacted excerpts appear only when the capture policy allowed them and the stored trace contains them.
+- Reports include a privacy disclaimer stating what is and is not included.
+
+See `docs/report-contract.md` for the report privacy and redaction section.
+
 ## Compliance notes
 
 - Live ingress should be run in environments where the operator has permission to intercept agent/model traffic.
@@ -82,3 +94,4 @@ The default retention period is 30 days. Users can configure shorter or longer p
 - `docs/ingress.md`
 - `docs/provider-config.md`
 - `docs/trace-model.md`
+- `docs/report-contract.md`

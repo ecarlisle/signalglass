@@ -38,10 +38,10 @@ Provide a single directory of implementation specifications for Signalglass. Eac
 | [005](005-provider-adapters.md) | Provider adapters | Implemented (OpenAI-compatible), Draft (others) |
 | [006](006-ingress-openai-compatible.md) | OpenAI-compatible ingress | Implemented |
 | [007](007-storage-and-privacy.md) | Storage and privacy | Implemented |
-| [008](008-reports.md) | Reports | Implemented (offline), Draft (trace views) |
+| [008](008-reports.md) | Reports | Implemented (offline + trace reports), Draft (dashboard report views) |
 | [009](009-dashboard-views.md) | Dashboard views | Draft |
 | [010](010-insight-evaluation.md) | Insight evaluation | Draft |
-| [011](011-cli.md) | CLI | Implemented (analyze), Draft (ingress/traces) |
+| [011](011-cli.md) | CLI | Implemented (analyze, traces), Draft (ingress) |
 | [012](012-versioning-and-releases.md) | Versioning and releases | Accepted |
 
 ## Project framing
