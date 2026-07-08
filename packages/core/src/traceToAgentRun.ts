@@ -32,7 +32,23 @@ const SENSITIVE_METADATA_KEYS = new Set([
   'raw_request',
   'rawresponse',
   'raw_response',
+  'password',
+  'clientsecret',
+  'client_secret',
+  'cookie',
+  'setcookie',
+  'session',
+  'accesstoken',
+  'access_token',
+  'refreshtoken',
+  'refresh_token',
+  'idtoken',
+  'id_token',
 ]);
+
+function normalizeKey(key: string): string {
+  return key.toLowerCase().replace(/[-_]/g, '');
+}
 
 function isContentBearingEvent(event: TraceEvent): boolean {
   return CONTENT_BEARING_EVENT_TYPES.includes(event.type);
@@ -89,17 +105,24 @@ function deriveContent(event: TraceEvent): string {
 }
 
 function sanitizeTraceMetadata(
-  metadata: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  if (metadata == null) return undefined;
+  value: unknown,
+): unknown {
+  if (value == null) return value;
 
-  const safe: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(metadata)) {
-    const lower = key.toLowerCase();
-    if (SENSITIVE_METADATA_KEYS.has(lower)) continue;
-    safe[key] = value;
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeTraceMetadata(item));
   }
-  return safe;
+
+  if (typeof value === 'object') {
+    const safe: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      if (SENSITIVE_METADATA_KEYS.has(normalizeKey(key))) continue;
+      safe[key] = sanitizeTraceMetadata(nestedValue);
+    }
+    return safe;
+  }
+
+  return value;
 }
 
 function eventToContextBlock(event: TraceEvent, turnId: string): ContextBlock | null {
@@ -158,10 +181,10 @@ function eventToContextBlock(event: TraceEvent, turnId: string): ContextBlock | 
 /**
  * Determine whether an event signals the end of a request/response cycle.
  *
- * A new turn starts after the response has been returned to the client
- * (`egress_response`), after generated assistant output, or after an inference
- * usage event. This groups one logical inference cycle (input context,
- * provider request/response, generated output) into a single AgentRun turn.
+ * A new turn starts only after the response has been returned to the client
+ * (`egress_response`). Inference usage events and generated assistant
+ * messages that precede it stay in the same turn, grouping one logical
+ * inference cycle into a single AgentRun turn.
  */
 function isCycleBoundaryEvent(event: TraceEvent): boolean {
   // A complete request/response cycle is considered finished once the response

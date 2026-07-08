@@ -573,4 +573,70 @@ describe('traceToAgentRun', () => {
     expect(run.metadata!.apiKey).toBeUndefined();
     expect(run.metadata!.rawRequest).toBeUndefined();
   });
+
+  it('recursively sanitizes sensitive trace metadata in nested objects and arrays', () => {
+    const trace = makeTrace(
+      [
+        createTraceEvent({
+          traceId: 'trace-1',
+          type: 'message',
+          contentPhase: 'said',
+          sourceType: 'user_message',
+          actor: { role: 'user' },
+          tokens: 10,
+          payloadRef: {
+            id: 'payload-safe',
+            redacted: false,
+            excerpt: 'Hello',
+            size: 5,
+          },
+        }),
+      ],
+      {
+        safe: 'kept',
+        wrapper: {
+          authorization: 'Bearer secret',
+          nested: {
+            apiKey: 'secret',
+            safeNested: 'kept',
+          },
+        },
+        requests: [
+          {
+            headers: {
+              authorization: 'Bearer secret',
+            },
+            safeArrayValue: 'kept',
+          },
+        ],
+        tokens: [
+          { access_token: 'secret', name: 'kept-name' },
+          { refreshToken: 'secret', safeToken: 'kept-token' },
+        ],
+      },
+    );
+
+    const run = traceToAgentRun(trace);
+    const sanitized = run.metadata!.traceMetadata as Record<string, unknown>;
+
+    expect(sanitized.safe).toBe('kept');
+    expect(sanitized.wrapper).toEqual({
+      nested: {
+        safeNested: 'kept',
+      },
+    });
+    expect(sanitized.requests).toEqual([{ safeArrayValue: 'kept' }]);
+    expect(sanitized.tokens).toEqual([
+      { name: 'kept-name' },
+      { safeToken: 'kept-token' },
+    ]);
+
+    const sanitizedJson = JSON.stringify(sanitized);
+    expect(sanitizedJson).not.toContain('Bearer secret');
+    expect(sanitizedJson).not.toContain('secret-token');
+    expect(sanitizedJson).not.toContain('access_token');
+    expect(sanitizedJson).not.toContain('refreshToken');
+    expect(sanitizedJson).not.toContain('authorization');
+    expect(sanitizedJson).not.toContain('headers');
+  });
 });
