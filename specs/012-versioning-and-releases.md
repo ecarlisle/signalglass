@@ -6,7 +6,7 @@ Accepted
 
 ## Purpose
 
-Define the SemVer policy and public API surface for Signalglass.
+Define the SemVer policy and public API surface for SignalGlass.
 
 ## Scope
 

@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Minimal Vite + React dashboard for Signalglass sample reports.",
+  "description": "Minimal Vite + React dashboard for SignalGlass sample reports.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

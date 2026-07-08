@@ -165,7 +165,7 @@ describe('trace command integration', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     tracesCommand(['--storage', dbPath, 'show', 'trace-seeded-1']);
     expect(logSpy.mock.calls.join('\n')).toContain('trace-seeded-1');
-    expect(logSpy.mock.calls.join('\n')).toContain('Signalglass trace report');
+    expect(logSpy.mock.calls.join('\n')).toContain('SignalGlass trace report');
     logSpy.mockRestore();
   });
 

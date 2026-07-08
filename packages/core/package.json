@@ -2,7 +2,7 @@
   "name": "@signalglass/core",
   "version": "0.0.1",
   "type": "module",
-  "description": "Core domain models, token estimation, and analysis logic for Signalglass.",
+  "description": "Core domain models, token estimation, and analysis logic for SignalGlass.",
   "exports": {
     ".": {
       "import": "./dist/index.js",

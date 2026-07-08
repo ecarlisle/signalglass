@@ -1,14 +1,14 @@
-# Signalglass product principles
+# SignalGlass product principles
 
-Signalglass is observability for AI coding-agent runs. These principles guide every design and implementation decision.
+SignalGlass is observability for AI coding-agent runs. These principles guide every design and implementation decision.
 
 ## 1. Observability before optimization
 
-You cannot improve what you cannot see. The first job of Signalglass is to show developers what an agent actually sent to a model, not to rewrite that context automatically.
+You cannot improve what you cannot see. The first job of SignalGlass is to show developers what an agent actually sent to a model, not to rewrite that context automatically.
 
 ## 2. Signal, not magic
 
-Signalglass offers **signal**: cost, relevance, behavior, comparison, and education. It does not promise automatic fixes. Recommendations are starting points for human judgment, not prescriptions.
+SignalGlass offers **signal**: cost, relevance, behavior, comparison, and education. It does not promise automatic fixes. Recommendations are starting points for human judgment, not prescriptions.
 
 ## 3. Educate as it observes
 
@@ -21,11 +21,11 @@ Every report, smell, and recommendation should teach the user something about ho
 
 ## 4. Token estimates are approximate
 
-Until a real tokenizer is wired in, Signalglass uses a simple approximation (roughly one token per four characters). Reports must label estimates as approximate and avoid claiming exact model token counts.
+Until a real tokenizer is wired in, SignalGlass uses a simple approximation (roughly one token per four characters). Reports must label estimates as approximate and avoid claiming exact model token counts.
 
 ## 5. Heuristics must be honest
 
-Some detections are heuristics, not proofs. When Signalglass guesses (for example, that a file is relevant or late), it must say so clearly and avoid false certainty.
+Some detections are heuristics, not proofs. When SignalGlass guesses (for example, that a file is relevant or late), it must say so clearly and avoid false certainty.
 
 ## 6. Smells are educational, not just warnings
 
@@ -33,7 +33,7 @@ A context smell is an invitation to learn. Each smell should help the user under
 
 ## 7. Two modes, one model
 
-Signalglass supports both **Offline Run Analysis** and **Live Ingress Observability**. A live trace should be convertible into the same `AgentRun` model used for offline analysis so that smells, recommendations, and reports can be reused.
+SignalGlass supports both **Offline Run Analysis** and **Live Ingress Observability**. A live trace should be convertible into the same `AgentRun` model used for offline analysis so that smells, recommendations, and reports can be reused.
 
 ## 8. Privacy by default
 
@@ -45,10 +45,10 @@ OpenAI compatibility is a doorway, not the architecture. Provider-specific shape
 
 ## 10. Realized savings vs. opportunities
 
-Signalglass must keep these separate:
+SignalGlass must keep these separate:
 
-- **Savings** are what Signalglass or the user already fixed.
-- **Opportunities** are what Signalglass noticed but did not change.
+- **Savings** are what SignalGlass or the user already fixed.
+- **Opportunities** are what SignalGlass noticed but did not change.
 - **Recommendations** are what the user can choose to change.
 
 ## 11. The UI is a key product surface
@@ -57,4 +57,4 @@ The web dashboard is not an afterthought. It is the primary place where develope
 
 ## 12. Prefer boring, maintainable code
 
-Signalglass should remain readable and maintainable. Clever abstractions that obscure the domain model are worse than explicit, slightly verbose code.
+SignalGlass should remain readable and maintainable. Clever abstractions that obscure the domain model are worse than explicit, slightly verbose code.

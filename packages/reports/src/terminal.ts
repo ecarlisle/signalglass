@@ -4,7 +4,7 @@ import { sanitizeReportString } from './sanitize.js';
 export function renderTerminal(analysis: AnalysisResult): string {
   const lines: string[] = [];
 
-  lines.push(`Signalglass analysis: ${safe(analysis.runName)}`);
+  lines.push(`SignalGlass analysis: ${safe(analysis.runName)}`);
   lines.push(`  Run id:        ${safe(analysis.runId)}`);
   lines.push(`  Model:         ${safe(analysis.model ?? 'unknown')}`);
   lines.push(`  Provider:      ${safe(analysis.provider ?? 'unknown')}`);

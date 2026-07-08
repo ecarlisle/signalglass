@@ -1,6 +1,6 @@
-# Signalglass architecture
+# SignalGlass architecture
 
-Signalglass is a pnpm monorepo that supports two complementary modes: **Offline Run Analysis** and **Live Ingress Observability**. Both modes share the same internal domain model so that analysis, smells, recommendations, and reports can be reused.
+SignalGlass is a pnpm monorepo that supports two complementary modes: **Offline Run Analysis** and **Live Ingress Observability**. Both modes share the same internal domain model so that analysis, smells, recommendations, and reports can be reused.
 
 ## High-level data flow
 
@@ -89,7 +89,7 @@ Nothing in core should know about the CLI, parsers, ingress, providers, reports,
 Converts external run formats into the normalized `AgentRun`.
 
 Responsibilities:
-- Implement a generic JSON parser for Signalglass sample runs.
+- Implement a generic JSON parser for SignalGlass sample runs.
 - Provide a clear adapter interface for future parsers (OpenCode, etc.).
 - Validate and normalize input without inventing data.
 
@@ -97,11 +97,11 @@ Parsers depend only on `@signalglass/core`.
 
 ### `@signalglass/providers`
 
-Converts between provider-native request/response formats and the internal Signalglass trace model.
+Converts between provider-native request/response formats and the internal SignalGlass trace model.
 
 Responsibilities:
 - Define `ProviderConfig`, `ProviderKind`, and the provider adapter interface.
-- Implement adapters for `openai-compatible`, `anthropic`, `gemini`, `ollama`, and `custom` providers.
+- Implement the current `openai-compatible` adapter and preserve clear extension points for future adapters.
 - Resolve API keys from environment variable names.
 - Declare provider capabilities and model mappings.
 
@@ -152,7 +152,7 @@ Responsibilities:
 - Apply capture/redaction policies before storage.
 - Return a client-compatible response.
 
-`apps/ingress` depends on `@signalglass/providers`, `@signalglass/core`, and `@signalglass/storage`.
+`apps/ingress` depends on `@signalglass/providers` and `@signalglass/core`. The CLI optionally wires completed traces to `@signalglass/storage`.
 
 ### `apps/dashboard`
 

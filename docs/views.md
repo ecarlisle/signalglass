@@ -1,12 +1,12 @@
-# Signalglass visualization views
+# SignalGlass visualization views
 
-Signalglass is an observability, education, and optimization layer. The UI presents captured agent/model communication through several complementary views.
+SignalGlass is an observability and education layer. The planned UI presents captured agent/model communication through several complementary views.
 
 Some views are already named in `docs/ui-vision.md` (Run Summary, Context Timeline, Token Breakdown, Context Smells, Evidence Drawer, Recommendations, Run/Model Comparison). This document adds the live-ingress-specific views and explains how they relate to the core concepts.
 
 ## Trace View
 
-A chronological, event-level view of everything that happened during a live provider exchange.
+A future chronological, event-level dashboard view of a live provider exchange.
 
 What it shows:
 
@@ -20,7 +20,7 @@ Educational purpose: prove what happened at each step of the pipeline.
 
 ## Payload View
 
-A structured view of request and response payloads.
+A future structured view of request and response payloads.
 
 What it shows:
 
@@ -28,13 +28,13 @@ What it shows:
 - Internal normalized representations.
 - Diffs between `sent`, `transformed`, and `returned` content.
 
-Privacy note: Payload View is only populated when the capture policy allows full payloads. By default it shows redacted excerpts.
+Privacy note: Payload View should only expose full payloads when the capture policy allows them. By default SignalGlass stores redacted excerpts only.
 
-Educational purpose: help developers understand how provider formats map to Signalglass internal events.
+Educational purpose: help developers understand how provider formats map to SignalGlass internal events.
 
 ## Story View
 
-A narrative summary of a run or trace.
+A future narrative summary of a run or trace.
 
 What it shows:
 
@@ -48,11 +48,11 @@ Educational purpose: turn low-level events into a human-readable explanation.
 
 ## Savings Lens
 
-A view that separates what Signalglass already improved from what the user can still improve.
+A future view that separates realized savings from opportunities and recommendations.
 
 ### Realized savings
 
-Savings are what Signalglass fixed automatically or the user already applied:
+Savings are what SignalGlass fixed automatically or the user already applied:
 
 - Tokens removed by a transformation.
 - Duplicate context that was collapsed.
@@ -62,7 +62,7 @@ Realized savings are concrete and measurable.
 
 ### Opportunities
 
-Opportunities are what Signalglass noticed but did not change:
+Opportunities are what SignalGlass noticed but did not change:
 
 - Repeated instructions that could be cached.
 - Generated artifacts that could be excluded.
@@ -78,17 +78,17 @@ Recommendations are what the user can choose to change. Each recommendation link
 - What to inspect.
 - What to try.
 
-This preserves the distinction between observation and action.
+This preserves the distinction between observation and action. Current reports include recommendations; richer dashboard Savings Lens behavior remains future work.
 
 ## Content phase distinctions
 
-Across all views, Signalglass preserves the distinction between:
+Across all views, SignalGlass preserves the distinction between:
 
 - **said** — what was intended.
 - **sent** — what was placed on the wire.
 - **transformed** — what was modified by middleware.
 - **requested** — what was explicitly asked for.
-- **observed** — what Signalglass saw pass through.
+- **observed** — what SignalGlass saw pass through.
 - **generated** — what the model produced.
 - **returned** — what was delivered back to the agent.
 

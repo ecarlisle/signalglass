@@ -2,7 +2,7 @@
   "name": "@signalglass/ingress",
   "version": "0.0.1",
   "type": "module",
-  "description": "OpenAI-compatible ingress server for Signalglass live observability.",
+  "description": "OpenAI-compatible ingress server for SignalGlass live observability.",
   "exports": {
     ".": {
       "import": "./dist/index.js",

@@ -1,4 +1,4 @@
-# ADR 0002: Signalglass supports two complementary modes
+# ADR 0002: SignalGlass supports two complementary modes
 
 ## Status
 
@@ -6,18 +6,18 @@ Accepted
 
 ## Context
 
-Signalglass began as an offline run analyzer: users save an agent run to a JSON file and run `signalglass analyze` to inspect it. This is valuable for post-hoc review, education, and comparison, but it requires users to export or capture run data manually.
+SignalGlass began as an offline run analyzer: users save an agent run to a JSON file and run `signalglass analyze` to inspect it. This is valuable for post-hoc review, education, and comparison, but it requires users to export or capture run data manually.
 
 Many users also want observability at the point of ingress: a proxy or adapter that captures what an agent sends to a model and what comes back, as it happens. This enables real-time debugging, timeline reconstruction, and eventually live optimization opportunities.
 
-Rather than choosing one path, Signalglass should support both:
+Rather than choosing one path, SignalGlass should support both:
 
 1. **Offline Run Analysis** — analyze captured runs from JSON or parser inputs.
 2. **Live Ingress Observability** — act as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and optimization opportunities.
 
 ## Decision
 
-Signalglass will support two complementary modes.
+SignalGlass will support two complementary modes.
 
 - **Offline Run Analysis** remains the first mode and the foundation of the product.
 - **Live Ingress Observability** is added as a second mode. It starts with an OpenAI-compatible ingress doorway and may later support Anthropic, Gemini, Ollama, and custom adapters.

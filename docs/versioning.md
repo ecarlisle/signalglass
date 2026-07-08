@@ -1,10 +1,10 @@
-# Signalglass versioning policy
+# SignalGlass versioning policy
 
-Signalglass uses [Semantic Versioning](https://semver.org/) (SemVer).
+SignalGlass uses [Semantic Versioning](https://semver.org/) (SemVer).
 
 ## Pre-1.0 stance
 
-Until `v1.0.0`, Signalglass is considered early and exploratory. The public API surface is still stabilizing, and breaking changes may occur between `0.x.0` releases. Breaking changes will be noted in release notes and, where possible, deprecated in a prior minor release.
+Until `v1.0.0`, SignalGlass is considered early and exploratory. The public API surface is still stabilizing, and breaking changes may occur between `0.x.0` releases. Breaking changes will be noted in release notes and, where possible, deprecated in a prior minor release.
 
 ## Version format
 
@@ -30,4 +30,4 @@ Internal implementation details, heuristic thresholds, and exact report formatti
 
 ## Reaching 1.0
 
-Signalglass will move to `v1.0.0` once the report contract, CLI, schema, docs, and adapter API have proven stable through real-world use and the project is confident about backward compatibility.
+SignalGlass will move to `v1.0.0` once the report contract, CLI, schema, docs, and adapter API have proven stable through real-world use and the project is confident about backward compatibility.

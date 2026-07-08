@@ -7,7 +7,7 @@ import type {
 import { isKnownSourceType } from '@signalglass/core';
 
 /**
- * Parse a Signalglass sample run JSON object into a normalized AgentRun.
+ * Parse a SignalGlass sample run JSON object into a normalized AgentRun.
  */
 export function parseSignalglassJson(input: unknown): AgentRun {
   if (!input || typeof input !== 'object') {

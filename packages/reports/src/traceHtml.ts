@@ -66,7 +66,7 @@ export function renderTraceHtml(trace: Trace): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Signalglass Trace Report — ${escapeHtml(safe(trace.id, redactOptions))}</title>
+<title>SignalGlass Trace Report — ${escapeHtml(safe(trace.id, redactOptions))}</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
   h1 { border-bottom: 2px solid #ddd; padding-bottom: 0.5rem; }
@@ -79,7 +79,7 @@ export function renderTraceHtml(trace: Trace): string {
 </style>
 </head>
 <body>
-<h1>Signalglass Trace Report</h1>
+<h1>SignalGlass Trace Report</h1>
 <table>
   ${rows.join('\n      ')}
 </table>

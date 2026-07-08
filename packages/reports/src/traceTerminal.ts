@@ -15,7 +15,7 @@ export function renderTraceTerminal(trace: Trace): string {
   const events = trace.events ?? [];
   const tokenMetrics = computeTokenMetrics(events);
 
-  lines.push('Signalglass trace report');
+  lines.push('SignalGlass trace report');
   lines.push('');
   lines.push(`  Trace ID:    ${safe(trace.id, redactOptions)}`);
   lines.push(`  Status:      ${safe(trace.status, redactOptions)}`);

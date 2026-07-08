@@ -157,7 +157,7 @@ async function ingressCommand(args: string[]) {
   const address = server.address();
   const listeningPort = address && typeof address === 'object' ? address.port : port;
 
-  console.log(`Signalglass ingress listening on http://localhost:${listeningPort}/v1`);
+  console.log(`SignalGlass ingress listening on http://localhost:${listeningPort}/v1`);
 
   // Handle graceful shutdown
   const shutdown = () => {

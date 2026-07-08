@@ -6,7 +6,7 @@ Draft
 
 ## Purpose
 
-Define how Signalglass detects inefficiencies and produces smells, opportunities, and recommendations.
+Define how SignalGlass detects inefficiencies and produces smells, opportunities, and recommendations.
 
 ## Scope
 

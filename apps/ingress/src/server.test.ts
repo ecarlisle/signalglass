@@ -64,6 +64,20 @@ function mockUpstreamProviderWithText(text: string): Promise<Server> {
   });
 }
 
+function mockUpstreamProviderWithStatus(status: number, responseBody: unknown): Promise<Server> {
+  return new Promise((resolve) => {
+    const server = createServer((_req, res) => {
+      const payload = JSON.stringify(responseBody);
+      res.writeHead(status, {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(payload)),
+      });
+      res.end(payload);
+    });
+    server.listen(0, () => resolve(server));
+  });
+}
+
 function getPort(server: Server): number {
   const address = server.address();
   if (address && typeof address === 'object') return address.port;
@@ -409,6 +423,151 @@ describe('ingress server', () => {
     server.close();
   });
 
+  it('returns body limit errors without parsing later oversized content', async () => {
+    const config: IngressConfig = { providers: [] };
+    const server = createIngressServer({ config, port: 0, bodySizeLimitBytes: 16 });
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const port = getPort(server);
+
+    const http = await import('node:http');
+    const res = await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      const req = http.default.request(
+        {
+          hostname: 'localhost',
+          port,
+          path: '/v1/chat/completions',
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+        },
+        (response) => {
+          let data = '';
+          response.setEncoding('utf8');
+          response.on('data', (chunk) => {
+            data += chunk;
+          });
+          response.on('end', () => {
+            resolve({
+              status: response.statusCode ?? 0,
+              body: data ? JSON.parse(data) : undefined,
+            });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.write('{"model":"gpt-4o",');
+      req.write('"messages":');
+      req.write('this is intentionally invalid json after the limit');
+      req.end();
+    });
+
+    expect(res.status).toBe(413);
+    expect(JSON.stringify(res.body)).toContain('byte limit');
+
+    server.close();
+  });
+
+  it('records provider_error when upstream returns non-2xx', async () => {
+    const upstream = await mockUpstreamProviderWithStatus(503, {
+      error: { message: 'temporarily unavailable', type: 'api_error' },
+    });
+    const upstreamPort = getPort(upstream);
+
+    const config: IngressConfig = {
+      providers: [
+        {
+          id: 'openai',
+          label: 'OpenAI',
+          kind: 'openai-compatible',
+          baseUrl: `http://localhost:${upstreamPort}/v1`,
+          apiKeyEnv: ENV_VAR_NAME,
+          defaultModel: 'gpt-4o',
+          models: [{ id: 'gpt-4o' }],
+        },
+      ],
+    };
+
+    let capturedTrace: Trace | undefined;
+
+    await withEnv(ENV_VAR_NAME, TEST_API_KEY, async () => {
+      const server = createIngressServer({
+        config,
+        port: 0,
+        onTrace: (trace) => {
+          capturedTrace = trace;
+        },
+      });
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+      const port = getPort(server);
+
+      const res = await httpRequest(port, '/v1/chat/completions', 'POST', {
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'Hello' }],
+      });
+
+      expect(res.status).toBe(503);
+      expect(capturedTrace).toBeDefined();
+      expect(capturedTrace!.status).toBe('error');
+      const providerError = capturedTrace!.events.find((event) => event.type === 'provider_error');
+      expect(providerError).toBeDefined();
+      expect(providerError!.metadata).toMatchObject({
+        status: 503,
+        errorType: 'upstream_non_2xx',
+      });
+      expect(JSON.stringify(providerError)).not.toContain('test-api-key');
+
+      server.close();
+    });
+
+    upstream.close();
+  });
+
+  it('records provider_error when upstream forwarding fails', async () => {
+    const config: IngressConfig = {
+      providers: [
+        {
+          id: 'openai',
+          label: 'OpenAI',
+          kind: 'openai-compatible',
+          baseUrl: 'http://localhost:1/v1',
+          apiKeyEnv: ENV_VAR_NAME,
+          defaultModel: 'gpt-4o',
+          models: [{ id: 'gpt-4o' }],
+        },
+      ],
+    };
+
+    let capturedTrace: Trace | undefined;
+
+    await withEnv(ENV_VAR_NAME, TEST_API_KEY, async () => {
+      const server = createIngressServer({
+        config,
+        port: 0,
+        onTrace: (trace) => {
+          capturedTrace = trace;
+        },
+      });
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+      const port = getPort(server);
+
+      const res = await httpRequest(port, '/v1/chat/completions', 'POST', {
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'Hello' }],
+      });
+
+      expect(res.status).toBe(502);
+      expect(capturedTrace).toBeDefined();
+      expect(capturedTrace!.status).toBe('error');
+      const providerError = capturedTrace!.events.find((event) => event.type === 'provider_error');
+      expect(providerError).toBeDefined();
+      expect(providerError!.metadata).toMatchObject({
+        errorType: 'upstream_request_error',
+      });
+      expect(JSON.stringify(providerError)).not.toContain('test-api-key');
+
+      server.close();
+    });
+  });
+
   it('returns 502 when upstream returns a non-object body', async () => {
     const upstream = await mockUpstreamProviderWithText('not-json-object');
     const upstreamPort = getPort(upstream);
@@ -541,6 +700,12 @@ describe('ingress server', () => {
 });
 
 describe('loadConfig', () => {
+  async function writeConfig(config: unknown): Promise<string> {
+    const path = join(tmpdir(), `signalglass-ingress-config-${Date.now()}-${Math.random()}.json`);
+    await writeFile(path, JSON.stringify(config));
+    return path;
+  }
+
   it('validates provider entries', async () => {
     const path = join(tmpdir(), `signalglass-ingress-config-${Date.now()}.json`);
 
@@ -577,7 +742,132 @@ describe('loadConfig', () => {
       }),
     );
 
-    await expect(loadConfig(path)).rejects.toThrow('valid "kind"');
+    await expect(loadConfig(path)).rejects.toThrow('supported ingress "kind"');
+
+    await unlink(path);
+  });
+
+  it('accepts a valid provider config with nested models, capabilities, and headers', async () => {
+    const path = await writeConfig({
+      providers: [
+        {
+          id: 'openai',
+          label: 'OpenAI',
+          kind: 'openai-compatible',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKeyEnv: 'OPENAI_API_KEY',
+          defaultModel: 'gpt-4o',
+          models: [
+            {
+              id: 'gpt-4o',
+              label: 'GPT-4o',
+              aliases: ['gpt-4o-latest'],
+              capabilities: { tools: true, jsonMode: true },
+              limits: { contextWindow: 128000, maxOutputTokens: 4096 },
+              pricing: { inputPerMillion: 5, outputPerMillion: 15 },
+            },
+          ],
+          capabilities: { streaming: false, tools: true, vision: true },
+          headers: { 'openai-organization': 'org-example' },
+        },
+      ],
+    });
+
+    const config = await loadConfig(path);
+
+    expect(config.providers[0]).toMatchObject({
+      id: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModel: 'gpt-4o',
+      capabilities: { streaming: false, tools: true, vision: true },
+      headers: { 'openai-organization': 'org-example' },
+    });
+    expect(config.providers[0].models?.[0]).toMatchObject({
+      id: 'gpt-4o',
+      aliases: ['gpt-4o-latest'],
+      capabilities: { tools: true, jsonMode: true },
+    });
+
+    await unlink(path);
+  });
+
+  it('rejects malformed nested model and capability shapes', async () => {
+    const badModelsPath = await writeConfig({
+      providers: [
+        {
+          id: 'openai',
+          kind: 'openai-compatible',
+          baseUrl: 'https://api.openai.com/v1',
+          models: ['gpt-4o'],
+        },
+      ],
+    });
+
+    await expect(loadConfig(badModelsPath)).rejects.toThrow('model at index 0 must be an object');
+    await unlink(badModelsPath);
+
+    const badCapabilitiesPath = await writeConfig({
+      providers: [
+        {
+          id: 'openai',
+          kind: 'openai-compatible',
+          baseUrl: 'https://api.openai.com/v1',
+          capabilities: ['streaming'],
+        },
+      ],
+    });
+
+    await expect(loadConfig(badCapabilitiesPath)).rejects.toThrow('capabilities');
+    await unlink(badCapabilitiesPath);
+  });
+
+  it('rejects provider kinds that the ingress cannot forward', async () => {
+    const path = await writeConfig({
+      providers: [
+        {
+          id: 'anthropic',
+          kind: 'anthropic',
+          baseUrl: 'https://api.anthropic.com',
+        },
+      ],
+    });
+
+    await expect(loadConfig(path)).rejects.toThrow('supported ingress "kind"');
+
+    await unlink(path);
+  });
+
+  it('rejects credential-bearing provider base URLs', async () => {
+    const path = await writeConfig({
+      providers: [
+        {
+          id: 'openai',
+          kind: 'openai-compatible',
+          baseUrl: 'https://user:pass@example.com/v1',
+        },
+      ],
+    });
+
+    await expect(loadConfig(path)).rejects.toThrow('must not include credentials');
+
+    await unlink(path);
+  });
+
+  it('rejects sensitive configured provider headers', async () => {
+    const path = await writeConfig({
+      providers: [
+        {
+          id: 'openai',
+          kind: 'openai-compatible',
+          baseUrl: 'https://api.openai.com/v1',
+          headers: {
+            authorization: 'Bearer should-not-be-configured',
+          },
+        },
+      ],
+    });
+
+    await expect(loadConfig(path)).rejects.toThrow('sensitive header');
 
     await unlink(path);
   });

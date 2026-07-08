@@ -1,6 +1,6 @@
-# Signalglass roadmap
+# SignalGlass roadmap
 
-Signalglass follows SemVer and is currently pre-1.0. Minor versions represent milestones. Patch versions contain fixes and small additions within a milestone.
+SignalGlass follows SemVer and is currently pre-1.0. Minor versions represent milestones. Patch versions contain fixes and small additions within a milestone.
 
 The product supports two complementary modes:
 
@@ -9,6 +9,8 @@ The product supports two complementary modes:
 
 Both modes feed the same internal domain model. A live trace can be converted into an `AgentRun` so the existing analyzer can be reused.
 
+This roadmap is directional rather than a release ledger. Some ingress, local storage, and trace-report work originally placed in later milestones has already landed; dashboard views, broader adapters, comparison, budgets, and reduction previews remain future work.
+
 ## Milestones
 
 ### v0.1.0 — First Light
@@ -16,7 +18,7 @@ Both modes feed the same internal domain model. A live trace can be converted in
 Offline CLI analyzer for sample/generic run files.
 
 - Normalized run, turn, and context-block schema.
-- Generic JSON parser for Signalglass sample runs.
+- Generic JSON parser for SignalGlass sample runs.
 - Approximate token estimation.
 - Terminal and JSON reports.
 - Initial context-smell detectors.
@@ -55,7 +57,7 @@ Compare two or more runs side by side.
 Expand input formats and lay the groundwork for live ingress.
 
 - OpenCode run parser.
-- Map OpenCode messages, tool calls, and outputs to Signalglass normalized blocks.
+- Map OpenCode messages, tool calls, and outputs to SignalGlass normalized blocks.
 - Adapter interface formalized and documented.
 - Provider config schema and adapter interface for `openai-compatible`, `anthropic`, `gemini`, `ollama`, `custom`.
 - Tests against real OpenCode samples and OpenAI request/response fixtures.
