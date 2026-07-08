@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented (types), Accepted (behavior)
+Implemented
 
 ## Purpose
 
