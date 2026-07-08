@@ -40,8 +40,8 @@ function sanitizeEvent(event: TraceEvent, policy: CapturePolicy): TraceEvent {
     if (policy.storeFullRawPayloads && policy.mode === 'debug') {
       // Debug mode with explicit opt-in: keep full payload reference including storageKey
       sanitized.payloadRef = { ...event.payloadRef };
-    } else if (policy.storeShortRedactedExcerpts && event.payloadRef.excerpt) {
-      // Standard/minimal mode: only keep redacted excerpt
+    } else if (policy.storeShortRedactedExcerpts && event.payloadRef.excerpt && event.payloadRef.redacted) {
+      // Standard/minimal mode: only keep already-redacted excerpt
       sanitized.payloadRef = {
         id: event.payloadRef.id,
         redacted: true,
@@ -89,11 +89,25 @@ function sanitizeMetadata(
       continue;
     }
 
-    // Recursively sanitize nested objects
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      const nested = sanitizeMetadata(value as Record<string, unknown>, policy);
-      if (nested && Object.keys(nested).length > 0) {
-        sanitized[key] = nested;
+    // Recursively sanitize nested objects and arrays
+    if (value && typeof value === 'object') {
+      if (Array.isArray(value)) {
+        const sanitizedArray = value
+          .map((item: unknown) => {
+            if (item && typeof item === 'object') {
+              return sanitizeMetadata(item as Record<string, unknown>, policy);
+            }
+            return item;
+          })
+          .filter((item: unknown) => item !== undefined);
+        if (sanitizedArray.length > 0) {
+          sanitized[key] = sanitizedArray;
+        }
+      } else {
+        const nested = sanitizeMetadata(value as Record<string, unknown>, policy);
+        if (nested && Object.keys(nested).length > 0) {
+          sanitized[key] = nested;
+        }
       }
     } else {
       sanitized[key] = value;

@@ -30,7 +30,7 @@ Define how live ingress data is persisted and what is captured by default.
 ## Required types or contracts
 
 - `StorageMode`, `CapturePolicy`, `RedactionPolicy`, `PayloadReference` from `core`.
-- Storage API: `saveTrace(trace)`, `getTrace(id)`, `listTraces()`, `deleteTrace(id)`.
+- Storage API: `saveTrace(trace)`, `getTrace(id)`, `listTraces(limit?, offset?)`, `deleteTrace(id)`, `deleteExpiredTraces()`.
 
 ## Required behavior
 

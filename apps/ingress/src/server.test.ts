@@ -615,8 +615,8 @@ describe('ingress + storage integration', () => {
     };
 
     // Use the onTrace seam to capture the trace
-    let capturedTrace: any = null;
-    const onTrace = async (trace: any) => {
+    let capturedTrace: Trace | undefined;
+    const onTrace = async (trace: Trace) => {
       capturedTrace = trace;
     };
 
@@ -635,14 +635,14 @@ describe('ingress + storage integration', () => {
 
       expect(res.status).toBe(200);
       expect(capturedTrace).not.toBeNull();
-      expect(capturedTrace.id).toBeDefined();
-      expect(capturedTrace.events.length).toBeGreaterThan(0);
-      expect(capturedTrace.mode).toBe('standard');
-      expect(capturedTrace.capturePolicy).toBeDefined();
-      expect(capturedTrace.capturePolicy.storeFullRawPayloads).toBe(false);
+      expect(capturedTrace!.id).toBeDefined();
+      expect(capturedTrace!.events.length).toBeGreaterThan(0);
+      expect(capturedTrace!.mode).toBe('standard');
+      expect(capturedTrace!.capturePolicy).toBeDefined();
+      expect(capturedTrace!.capturePolicy.storeFullRawPayloads).toBe(false);
 
       // Verify trace contains expected event types
-      const eventTypes = capturedTrace.events.map((e: any) => e.type);
+      const eventTypes = capturedTrace!.events.map((e) => e.type);
       expect(eventTypes).toContain('instruction');
       expect(eventTypes).toContain('message');
       expect(eventTypes).toContain('provider_request');
@@ -686,8 +686,8 @@ describe('ingress + storage integration', () => {
       ],
     };
 
-    let capturedTrace: any = null;
-    const onTrace = async (trace: any) => {
+    let capturedTrace: Trace | undefined;
+    const onTrace = async (trace: Trace) => {
       capturedTrace = trace;
     };
 
@@ -704,13 +704,13 @@ describe('ingress + storage integration', () => {
       expect(capturedTrace).not.toBeNull();
 
       // Verify the trace is sanitized for standard mode
-      expect(capturedTrace.capturePolicy.storeFullRawPayloads).toBe(false);
-      expect(capturedTrace.capturePolicy.storeSecrets).toBe(false);
-      expect(capturedTrace.capturePolicy.storeApiKeys).toBe(false);
+      expect(capturedTrace!.capturePolicy.storeFullRawPayloads).toBe(false);
+      expect(capturedTrace!.capturePolicy.storeSecrets).toBe(false);
+      expect(capturedTrace!.capturePolicy.storeApiKeys).toBe(false);
 
       // Verify no sensitive data in metadata
-      if (capturedTrace.metadata) {
-        const metadataStr = JSON.stringify(capturedTrace.metadata);
+      if (capturedTrace!.metadata) {
+        const metadataStr = JSON.stringify(capturedTrace!.metadata);
         expect(metadataStr).not.toContain('authorization');
         expect(metadataStr).not.toContain('api_key');
       }

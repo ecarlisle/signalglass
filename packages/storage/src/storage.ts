@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { Trace, CapturePolicy } from '@signalglass/core';
 import { sanitizeTraceForStorage } from './redaction.js';
 
@@ -10,8 +12,17 @@ export class TraceStorage {
   private db: Database.Database;
 
   constructor(config: StorageConfig) {
+    this.ensureDirectoryExists(config.databasePath);
     this.db = new Database(config.databasePath);
+    this.db.pragma('foreign_keys = ON');
     this.initializeSchema();
+  }
+
+  private ensureDirectoryExists(databasePath: string): void {
+    const dir = dirname(databasePath);
+    if (dir) {
+      mkdirSync(dir, { recursive: true });
+    }
   }
 
   private initializeSchema(): void {
@@ -26,6 +37,7 @@ export class TraceStorage {
         task TEXT,
         mode TEXT NOT NULL,
         status TEXT NOT NULL,
+        capture_policy TEXT,
         metadata TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         expires_at TEXT
@@ -60,9 +72,9 @@ export class TraceStorage {
 
     const insertTrace = this.db.prepare(`
       INSERT INTO traces (
-        id, started_at, ended_at, provider, model, agent, task, mode, status, metadata, expires_at
+        id, started_at, ended_at, provider, model, agent, task, mode, status, capture_policy, metadata, expires_at
       ) VALUES (
-        @id, @startedAt, @endedAt, @provider, @model, @agent, @task, @mode, @status, @metadata, @expiresAt
+        @id, @startedAt, @endedAt, @provider, @model, @agent, @task, @mode, @status, @capturePolicy, @metadata, @expiresAt
       )
     `);
 
@@ -89,6 +101,7 @@ export class TraceStorage {
         task: sanitized.task || null,
         mode: sanitized.mode,
         status: sanitized.status,
+        capturePolicy: sanitized.capturePolicy ? JSON.stringify(sanitized.capturePolicy) : null,
         metadata: sanitized.metadata ? JSON.stringify(sanitized.metadata) : null,
         expiresAt: expiresAt || null,
       });
@@ -169,6 +182,9 @@ export class TraceStorage {
   }
 
   private reconstructTrace(row: any, events: any[]): Trace {
+    const storedPolicy = row.capture_policy ? JSON.parse(row.capture_policy) : null;
+    const capturePolicy: CapturePolicy = storedPolicy ?? this.defaultCapturePolicy(row.mode);
+
     return {
       id: row.id,
       startedAt: row.started_at,
@@ -179,24 +195,7 @@ export class TraceStorage {
       task: row.task || undefined,
       mode: row.mode,
       status: row.status,
-      capturePolicy: {
-        mode: row.mode,
-        storeTraceMetadata: true,
-        storeTimelineEventMetadata: true,
-        storeTokenMetrics: true,
-        storeRoutingDecisions: row.mode === 'standard' || row.mode === 'debug',
-        storeTransformationSummaries: row.mode === 'standard' || row.mode === 'debug',
-        storeShortRedactedExcerpts: row.mode === 'standard' || row.mode === 'debug',
-        storeFullRawPayloads: false,
-        storeSecrets: false,
-        storeApiKeys: false,
-        storeFullToolResults: false,
-        redaction: {
-          maxExcerptLength: 240,
-          secretPatterns: [],
-          stripHeaders: ['authorization', 'x-api-key'],
-        },
-      },
+      capturePolicy,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
       events: events.map(event => ({
         id: event.id,
@@ -214,6 +213,28 @@ export class TraceStorage {
         metadata: event.metadata ? JSON.parse(event.metadata) : undefined,
         payloadRef: event.payload_ref ? JSON.parse(event.payload_ref) : undefined,
       })),
+    };
+  }
+
+  private defaultCapturePolicy(mode: string): CapturePolicy {
+    const isStandardOrDebug = mode === 'standard' || mode === 'debug';
+    return {
+      mode: mode as CapturePolicy['mode'],
+      storeTraceMetadata: true,
+      storeTimelineEventMetadata: true,
+      storeTokenMetrics: true,
+      storeRoutingDecisions: isStandardOrDebug,
+      storeTransformationSummaries: isStandardOrDebug,
+      storeShortRedactedExcerpts: isStandardOrDebug,
+      storeFullRawPayloads: false,
+      storeSecrets: false,
+      storeApiKeys: false,
+      storeFullToolResults: false,
+      redaction: {
+        maxExcerptLength: 240,
+        secretPatterns: [],
+        stripHeaders: ['authorization', 'x-api-key'],
+      },
     };
   }
 
