@@ -36,7 +36,7 @@ Provide a single directory of implementation specifications for Signalglass. Eac
 | [003](003-offline-analysis.md) | Offline Run Analysis | Implemented |
 | [004](004-trace-model.md) | Trace and timeline model | Implemented |
 | [005](005-provider-adapters.md) | Provider adapters | Implemented (OpenAI-compatible), Draft (others) |
-| [006](006-ingress-openai-compatible.md) | OpenAI-compatible ingress | Accepted |
+| [006](006-ingress-openai-compatible.md) | OpenAI-compatible ingress | Implemented |
 | [007](007-storage-and-privacy.md) | Storage and privacy | Draft |
 | [008](008-reports.md) | Reports | Implemented (offline), Draft (trace views) |
 | [009](009-dashboard-views.md) | Dashboard views | Draft |

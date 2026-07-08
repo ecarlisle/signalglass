@@ -40,11 +40,33 @@ importers:
         specifier: ^5.3.0
         version: 5.4.21(@types/node@20.19.43)
 
+  apps/ingress:
+    dependencies:
+      '@signalglass/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@signalglass/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.43
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@20.19.43)
+
   packages/cli:
     dependencies:
       '@signalglass/core':
         specifier: workspace:*
         version: link:../core
+      '@signalglass/ingress':
+        specifier: workspace:*
+        version: link:../../apps/ingress
       '@signalglass/parsers':
         specifier: workspace:*
         version: link:../parsers
