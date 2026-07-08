@@ -1,5 +1,7 @@
 # Review a Signalglass spec implementation
 
+Recommended model: Qwen3.7 Max
+
 You are reviewing the implementation of a single spec. Do not modify files.
 
 ## Input

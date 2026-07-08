@@ -1,5 +1,7 @@
 # Final approval for a Signalglass spec PR
 
+Recommended model: Qwen3.7 Max
+
 You are the final Approver for a spec pull request. This step is read-only. Do not edit files, commit, push, approve in GitHub, or merge.
 
 ## Input

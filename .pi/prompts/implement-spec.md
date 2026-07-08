@@ -1,5 +1,7 @@
 # Implement one Signalglass spec
 
+Recommended model: Kimi K2.7 Code
+
 You are implementing a single spec for Signalglass. Do not implement adjacent specs unless explicitly requested.
 
 ## Input

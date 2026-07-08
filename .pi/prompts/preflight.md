@@ -1,5 +1,7 @@
 # Preflight check before implementing a Signalglass spec
 
+Recommended model: GLM-5.2 or Qwen3.7 Max
+
 Run this before starting implementation work. Do not modify files unless cleanup is required.
 
 ## Input

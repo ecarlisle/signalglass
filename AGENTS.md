@@ -74,6 +74,18 @@ The Approver inspects the PR branch, description, review comments, and validatio
 
 The human remains responsible for the actual merge. See `.pi/prompts/approve-pr.md` for the prompt template.
 
+## Model routing
+
+Use these defaults unless there is a reason to override:
+
+- **Implementer:** Kimi K2.7 Code
+- **Reviewer:** Qwen3.7 Max
+- **Approver:** Qwen3.7 Max
+- **Preflight/light checks:** GLM-5.2 or Qwen3.7 Max
+- **Heavy fallback/debugging:** DeepSeek V4 Flash
+
+Pi does not currently enforce per-prompt model routing. Before running a workflow prompt, manually select the model listed in that prompt's `Recommended model:` header. See the **Model routing** section in [`docs/contributing.md`](docs/contributing.md) for the short reference.
+
 ## Product stance
 
 - Keep the project **observability-first** and educational.
