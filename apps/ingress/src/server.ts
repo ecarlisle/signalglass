@@ -236,14 +236,16 @@ async function handleChatCompletion(
       errorEvent,
     ]);
     await emitTrace(onTrace, trace);
-    const errorBody =
-      typeof upstream.body === 'object' && upstream.body !== null
-        ? upstream.body
-        : { error: { message: 'Upstream request failed', type: 'api_error' } };
     sendJson(
       res,
       upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502,
-      errorBody,
+      {
+        error: {
+          message: 'Upstream request failed',
+          type: 'api_error',
+          upstreamStatus: upstream.status,
+        },
+      },
       { 'x-signalglass-trace-id': traceId },
     );
     return;

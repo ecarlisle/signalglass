@@ -19,7 +19,7 @@ GET  /v1/models
 POST /v1/chat/completions
 ```
 
-`POST /v1/chat/completions` forwards a non-streaming OpenAI-compatible chat completion request to the selected upstream provider and returns the upstream response to the client.
+`POST /v1/chat/completions` forwards a non-streaming OpenAI-compatible chat completion request to the selected upstream provider. On success the upstream response is returned to the client. On failure a normalized SignalGlass error envelope is returned instead of the raw upstream error body.
 
 ## Starting the ingress
 

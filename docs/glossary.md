@@ -37,7 +37,7 @@ The second SignalGlass mode. SignalGlass acts as an OpenAI-compatible ingress/pr
 A live-captured session representing a complete provider exchange. A trace can be converted into an `AgentRun` for offline-style analysis.
 
 ## TraceEvent
-A single event in a trace. Current event types include `message`, `instruction`, `context`, `provider_request`, `provider_response`, `provider_error`, `inference`, and `egress_response`.
+A single event in a trace. Current event types include `message`, `instruction`, `context`, `transformation`, `tool_call`, `tool_result`, `provider_request`, `provider_response`, `provider_error`, `inference`, and `egress_response`.
 
 ## Content phase
 A label describing the role of content in an exchange: said, sent, transformed, requested, observed, generated, or returned.

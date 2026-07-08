@@ -466,7 +466,7 @@ describe('ingress server', () => {
     server.close();
   });
 
-  it('records provider_error when upstream returns non-2xx', async () => {
+  it('records provider_error and returns normalized error when upstream returns non-2xx', async () => {
     const upstream = await mockUpstreamProviderWithStatus(503, {
       error: { message: 'temporarily unavailable', type: 'api_error' },
     });
@@ -505,6 +505,15 @@ describe('ingress server', () => {
       });
 
       expect(res.status).toBe(503);
+      // Response should be a normalized SignalGlass error envelope, not the raw upstream body
+      expect(res.body).toEqual({
+        error: {
+          message: 'Upstream request failed',
+          type: 'api_error',
+          upstreamStatus: 503,
+        },
+      });
+      expect(res.headers['x-signalglass-trace-id']).toBeDefined();
       expect(capturedTrace).toBeDefined();
       expect(capturedTrace!.status).toBe('error');
       const providerError = capturedTrace!.events.find((event) => event.type === 'provider_error');
@@ -514,6 +523,85 @@ describe('ingress server', () => {
         errorType: 'upstream_non_2xx',
       });
       expect(JSON.stringify(providerError)).not.toContain('test-api-key');
+
+      server.close();
+    });
+
+    upstream.close();
+  });
+
+  it('does not leak secrets from upstream error body to client or trace', async () => {
+    const upstream = await mockUpstreamProviderWithStatus(502, {
+      error: {
+        message: 'invalid api key',
+        type: 'authentication_error',
+        details: 'sk-test-secret-value-12345',
+        headers: { Authorization: 'Bearer secret-token-abc' },
+      },
+    });
+    const upstreamPort = getPort(upstream);
+
+    const config: IngressConfig = {
+      providers: [
+        {
+          id: 'openai',
+          label: 'OpenAI',
+          kind: 'openai-compatible',
+          baseUrl: `http://localhost:${upstreamPort}/v1`,
+          apiKeyEnv: ENV_VAR_NAME,
+          defaultModel: 'gpt-4o',
+          models: [{ id: 'gpt-4o' }],
+        },
+      ],
+    };
+
+    let capturedTrace: Trace | undefined;
+
+    await withEnv(ENV_VAR_NAME, TEST_API_KEY, async () => {
+      const server = createIngressServer({
+        config,
+        port: 0,
+        onTrace: (trace) => {
+          capturedTrace = trace;
+        },
+      });
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+      const port = getPort(server);
+
+      const res = await httpRequest(port, '/v1/chat/completions', 'POST', {
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'Hello' }],
+      });
+
+      // Client response must not contain secrets from upstream error body
+      const resBody = JSON.stringify(res.body);
+      expect(resBody).not.toContain('sk-test-secret-value-12345');
+      expect(resBody).not.toContain('secret-token-abc');
+      expect(resBody).not.toContain('Bearer');
+
+      // Response is a normalized SignalGlass error envelope
+      expect(res.body).toEqual({
+        error: {
+          message: 'Upstream request failed',
+          type: 'api_error',
+          upstreamStatus: 502,
+        },
+      });
+      expect(res.headers['x-signalglass-trace-id']).toBeDefined();
+
+      // Captured trace must not contain secrets from upstream error body
+      expect(capturedTrace).toBeDefined();
+      const traceStr = JSON.stringify(capturedTrace);
+      expect(traceStr).not.toContain('sk-test-secret-value-12345');
+      expect(traceStr).not.toContain('secret-token-abc');
+
+      // A provider_error event is still emitted
+      const providerError = capturedTrace!.events.find((event) => event.type === 'provider_error');
+      expect(providerError).toBeDefined();
+      expect(providerError!.metadata).toMatchObject({
+        status: 502,
+        errorType: 'upstream_non_2xx',
+      });
 
       server.close();
     });

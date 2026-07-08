@@ -130,7 +130,7 @@ interface PayloadReference {
 }
 ```
 
-Standard mode stores only sanitized, redacted, bounded excerpts. Full raw payload capture is debug-only and opt-in, and storage still strips/redacts credential-like fields before persistence.
+Standard mode keeps only sanitized, redacted, bounded excerpts when excerpts are available and the capture policy allows it. When excerpts are disabled, absent, or the caller's `redacted` flag is set to a value the storage layer does not trust, the `payloadRef` may be dropped entirely. Full raw payload capture is debug-only and opt-in, and storage still strips/redacts credential-like fields before persistence.
 
 ## Token usage
 

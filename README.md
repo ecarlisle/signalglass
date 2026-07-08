@@ -45,7 +45,7 @@ For live ingress setup, storage, trace reports, Pi, and OpenCode examples, see:
 
 ## Repository structure
 
-```
+```text
 signalglass/
 ├── apps/
 │   ├── dashboard/          # Vite + React report viewer (future Observatory UI)
