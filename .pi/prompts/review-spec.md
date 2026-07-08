@@ -18,7 +18,11 @@ Target spec path: `{{specPath}}`
 For the implementation of the target spec, verify:
 
 - [ ] All acceptance criteria in the spec are satisfied.
-- [ ] Required tests are present and passing.
+- [ ] Each acceptance criterion has test coverage.
+- [ ] Required tests from the spec are present.
+- [ ] Fixture or contract tests exist for public JSON shapes, adapter outputs, report contracts, CLI outputs, trace schemas, provider config schemas, storage schemas, or redaction behavior when applicable.
+- [ ] Existing tests were not weakened, removed, or skipped.
+- [ ] Spec status was marked **Implemented** only after tests and build passed.
 - [ ] No scope creep into adjacent specs.
 - [ ] No OpenAI or provider-specific shapes leaked into `@signalglass/core`.
 - [ ] No ingress/network code in `@signalglass/core`.

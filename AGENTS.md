@@ -92,10 +92,35 @@ Never commit, log, or store:
 
 API keys must be referenced by environment variable name and resolved at runtime only.
 
+## Test expectations
+
+Every spec implementation must include tests that map to the target spec's acceptance criteria. A spec may not be marked **Implemented** unless:
+
+- Its required tests exist.
+- Its acceptance criteria are covered by tests.
+- `pnpm test` passes.
+- `pnpm build` passes.
+
+Use Vitest. Prefer unit tests for domain logic and smoke tests for report generation.
+
+When a spec introduces or changes any of the following, add fixture or contract tests for the serialized shape or output:
+
+- Public JSON shapes.
+- Adapter output.
+- Report contracts.
+- CLI output.
+- Trace schemas.
+- Provider config schemas.
+- Storage schemas.
+- Redaction behavior.
+
+Add regression tests for bugs fixed during implementation.
+
+Do not weaken or remove existing tests unless the spec explicitly requires a contract change. If a test must be changed because a contract changed, explain that in the PR body.
+
 ## Test/build/commit expectations
 
-- Add or update tests with behavior changes.
-- Use Vitest. Prefer unit tests for domain logic and smoke tests for report generation.
+- Follow the **Test expectations** section above.
 - Run `pnpm test` before committing implementation work.
 - Run `pnpm build` before committing implementation work.
 - Both must pass.

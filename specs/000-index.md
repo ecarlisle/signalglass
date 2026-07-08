@@ -18,8 +18,10 @@ Provide a single directory of implementation specifications for Signalglass. Eac
 ## Spec implementation rules
 
 - Only **Accepted** specs should be implemented.
-- A spec may be marked **Implemented** only when its acceptance criteria are satisfied.
-- Required tests must pass before a spec is marked **Implemented**.
+- A spec may be marked **Implemented** only when its acceptance criteria are satisfied, its required tests exist, and both `pnpm test` and `pnpm build` pass.
+- Every spec that requires implementation should define the expected tests and map them to its acceptance criteria.
+- Acceptance criteria should be testable whenever possible.
+- Specs that introduce or change contracts (public JSON shapes, adapter outputs, report contracts, CLI output, trace schemas, provider config schemas, storage schemas, or redaction behavior) should require fixture or contract tests.
 - `pnpm test` and `pnpm build` must pass before committing implementation work.
 - Runtime code changes should reference the spec they implement.
 - Read `AGENTS.md` and this index before implementing any spec.

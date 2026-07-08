@@ -45,11 +45,25 @@ If the target spec is not **Accepted**, stop and report that it must be accepted
 13. Avoid unrelated refactors.
 14. If the spec is ambiguous, prefer the smallest implementation that satisfies the acceptance criteria.
 
+## Testing rule
+
+Before coding, read the target spec's **Tests** section (or equivalent) if it exists.
+
+- Add or update all tests required by the spec.
+- Map tests to the spec's acceptance criteria.
+- Add regression tests for bugs fixed during implementation.
+- Add fixture or contract tests for public JSON shapes, adapter outputs, report contracts, CLI outputs, trace schemas, provider config schemas, storage schemas, or redaction behavior introduced or changed by the spec.
+- Do not mark the spec as **Implemented** unless the required tests exist and pass.
+- Run `pnpm test`.
+- Run `pnpm build`.
+- Include the test and build results in the PR body.
+- Mention any acceptance criteria that are not covered by tests and explain why.
+
 ## Verification
 
 1. Run `pnpm test`.
 2. Run `pnpm build`.
-3. If both pass and all acceptance criteria are satisfied, update the spec status to **Implemented**.
+3. If both pass, all acceptance criteria are satisfied, and the required tests exist and pass, update the spec status to **Implemented**.
 4. Commit with a message like:
 
    ```text
