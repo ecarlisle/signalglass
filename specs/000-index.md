@@ -8,6 +8,23 @@ Accepted
 
 Provide a single directory of implementation specifications for Signalglass. Each spec defines what a part of the system must contain, how it must behave, and how to verify it.
 
+## Spec status definitions
+
+- **Draft** — proposed but not ready for implementation.
+- **Accepted** — ready to implement.
+- **Implemented** — implemented and passing tests/build.
+- **Superseded** — replaced by another spec.
+
+## Spec implementation rules
+
+- Only **Accepted** specs should be implemented.
+- A spec may be marked **Implemented** only when its acceptance criteria are satisfied.
+- Required tests must pass before a spec is marked **Implemented**.
+- `pnpm test` and `pnpm build` must pass before committing implementation work.
+- Runtime code changes should reference the spec they implement.
+- Read `AGENTS.md` and this index before implementing any spec.
+- Read the target spec and all docs it references before coding.
+
 ## Specs
 
 | Spec | Title | Status |
@@ -36,6 +53,7 @@ The existing offline analyzer is preserved. Live ingress is added beside it, not
 
 ## References
 
+- `AGENTS.md`
 - `docs/architecture.md`
 - `docs/roadmap.md`
 - `docs/decisions/0002-two-modes.md`

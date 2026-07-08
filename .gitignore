@@ -1,5 +1,6 @@
 node_modules/
 dist/
+build/
 *.log
 .DS_Store
 .vscode/
@@ -11,3 +12,15 @@ coverage/
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Signalglass local data and captures
+.signalglass/
+data/
+*.sqlite
+*.sqlite3
+*.db
