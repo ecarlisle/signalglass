@@ -174,7 +174,7 @@ async function ingressCommand(args: string[]) {
   process.on('SIGTERM', shutdown);
 }
 
-function tracesCommand(args: string[]) {
+export function tracesCommand(args: string[]) {
   const { positionals, values } = parseArgs({
     args,
     allowPositionals: true,
@@ -189,11 +189,13 @@ function tracesCommand(args: string[]) {
     console.error('Error: --storage <path> is required for trace commands');
     printTracesUsage();
     process.exit(1);
+    return;
   }
 
   if (!existsSync(values.storage)) {
     console.error(`Error: storage database not found: ${values.storage}`);
     process.exit(1);
+    return;
   }
 
   const subcommand = positionals[0];
@@ -202,6 +204,7 @@ function tracesCommand(args: string[]) {
     console.error('Error: missing trace subcommand (list|show)');
     printTracesUsage();
     process.exit(1);
+    return;
   }
 
   let storage: TraceStorage;
@@ -210,6 +213,7 @@ function tracesCommand(args: string[]) {
   } catch (error) {
     console.error(`Error opening storage: ${error instanceof Error ? error.message : error}`);
     process.exit(1);
+    return;
   }
 
   switch (subcommand) {
@@ -228,6 +232,7 @@ function tracesCommand(args: string[]) {
         default:
           console.error(`Unknown report type: ${reportType}`);
           process.exit(1);
+          return;
       }
       writeOutput(output, values.output);
       break;
@@ -239,12 +244,14 @@ function tracesCommand(args: string[]) {
         storage.close();
         printTracesUsage();
         process.exit(1);
+        return;
       }
       const trace = storage.getTrace(traceId);
       storage.close();
       if (!trace) {
         console.error(`Trace not found: ${traceId}`);
         process.exit(1);
+        return;
       }
       const reportType = values.report ?? 'terminal';
       let output = '';
@@ -261,6 +268,7 @@ function tracesCommand(args: string[]) {
         default:
           console.error(`Unknown report type: ${reportType}`);
           process.exit(1);
+          return;
       }
       writeOutput(output, values.output);
       break;
@@ -270,6 +278,7 @@ function tracesCommand(args: string[]) {
       storage.close();
       printTracesUsage();
       process.exit(1);
+      return;
   }
 }
 

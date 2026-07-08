@@ -1,11 +1,47 @@
 import type { Trace } from '@signalglass/core';
+import {
+  computeTokenMetrics,
+  groupEventsByType,
+  collectRedactedExcerpts,
+} from './traceMetrics.js';
 
-/**
- * Render a compact summary of multiple traces suitable for terminal output.
- *
- * The summary shows basic trace metadata without event payloads to keep
- * the output concise and privacy-safe.
- */
+export interface ListSummaryRow {
+  id: string;
+  status: string;
+  provider: string;
+  model: string;
+  events: number;
+  routingDecisions: string[];
+  excerptCount: number;
+  inputTokens: string;
+  outputTokens: string;
+}
+
+export function buildListSummary(trace: Trace): ListSummaryRow {
+  const events = trace.events ?? [];
+  const tokenMetrics = computeTokenMetrics(events);
+  const excerpts = collectRedactedExcerpts(events);
+
+  const routingDecisions: string[] = [];
+  for (const e of events) {
+    if (e.routingDecision) {
+      routingDecisions.push(e.routingDecision);
+    }
+  }
+
+  return {
+    id: trace.id,
+    status: trace.status,
+    provider: trace.provider ?? 'unknown',
+    model: trace.model ?? 'unknown',
+    events: events.length,
+    routingDecisions,
+    excerptCount: excerpts.length,
+    inputTokens: tokenMetrics.totalInputTokens != null ? String(tokenMetrics.totalInputTokens) : '—',
+    outputTokens: tokenMetrics.totalOutputTokens != null ? String(tokenMetrics.totalOutputTokens) : '—',
+  };
+}
+
 export function renderTraceListSummary(traces: Trace[]): string {
   if (traces.length === 0) {
     return 'No traces found.';
@@ -16,8 +52,6 @@ export function renderTraceListSummary(traces: Trace[]): string {
 
   lines.push(`Signalglass traces (${traces.length})`);
   lines.push('');
-
-  // Header
   lines.push(formatRow(['ID', 'Status', 'Provider', 'Model', 'Events', 'Started'], widths));
   lines.push(formatRow(widths.map((w) => '─'.repeat(w)), widths));
 
@@ -38,22 +72,10 @@ export function renderTraceListSummary(traces: Trace[]): string {
   return lines.join('\n');
 }
 
-/**
- * Render a JSON array of trace summaries.
- *
- * Each entry contains basic trace metadata without event payloads.
- * Sensitive fields such as secrets, API keys, and Authorization headers
- * are never included.
- */
 export function renderTraceListJson(traces: Trace[]): string {
   const summaries = traces.map((trace) => {
     const events = trace.events ?? [];
-    const totalInput = events
-      .filter((e) => e.tokens != null && e.contentPhase != null && ['sent', 'requested', 'observed'].includes(e.contentPhase))
-      .reduce((sum, e) => sum + (e.tokens ?? 0), 0);
-    const totalOutput = events
-      .filter((e) => e.tokens != null && e.contentPhase != null && ['generated', 'returned'].includes(e.contentPhase))
-      .reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+    const tokenMetrics = computeTokenMetrics(events);
 
     return {
       id: trace.id,
@@ -66,11 +88,7 @@ export function renderTraceListJson(traces: Trace[]): string {
       startedAt: trace.startedAt,
       endedAt: trace.endedAt ?? null,
       eventCount: events.length,
-      tokenMetrics: {
-        totalInputTokens: totalInput > 0 ? totalInput : null,
-        totalOutputTokens: totalOutput > 0 ? totalOutput : null,
-        approximate: true,
-      },
+      tokenMetrics,
     };
   });
 
@@ -83,5 +101,5 @@ function formatRow(columns: string[], widths: number[]): string {
 
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen - 1) + '…';
+  return text.slice(0, maxLen - 1) + '\u2026';
 }
