@@ -9,6 +9,7 @@ export default defineConfig({
     alias: {
       '@signalglass/core': path.resolve(__dirname, 'packages/core/src/index.ts'),
       '@signalglass/parsers': path.resolve(__dirname, 'packages/parsers/src/index.ts'),
+      '@signalglass/providers': path.resolve(__dirname, 'packages/providers/src/index.ts'),
       '@signalglass/reports': path.resolve(__dirname, 'packages/reports/src/index.ts'),
     },
   },

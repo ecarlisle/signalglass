@@ -47,7 +47,7 @@ signalglass/
 │   ├── cli/                # CLI entrypoint
 │   ├── core/               # Domain models, token estimation, analysis, smells, trace model
 │   ├── parsers/            # Offline format parsers (Signalglass JSON + OpenCode placeholder)
-│   ├── providers/          # Provider adapters (planned: openai, anthropic, gemini, ollama, custom)
+│   ├── providers/          # Provider configs and adapters (openai-compatible, anthropic placeholder, gemini/ollama/custom stubs)
 │   ├── reports/            # Terminal, JSON, and static HTML report formatters
 │   └── storage/            # SQLite persistence for traces/events (planned)
 ├── samples/                # Example agent-run files

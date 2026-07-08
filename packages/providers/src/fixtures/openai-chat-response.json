@@ -1,0 +1,20 @@
+{
+  "id": "chatcmpl-test-123",
+  "object": "chat.completion",
+  "model": "gpt-4o",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "I fixed the type mismatch in src/build.ts. The build should now pass."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 28,
+    "total_tokens": 148
+  }
+}

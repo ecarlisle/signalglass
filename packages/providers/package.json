@@ -1,0 +1,24 @@
+{
+  "name": "@signalglass/providers",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Provider configs and adapters for Signalglass live ingress.",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@signalglass/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.4",
+    "vitest": "^1.6.0"
+  }
+}

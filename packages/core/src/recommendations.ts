@@ -17,6 +17,18 @@ export interface Recommendation {
    */
   trySuggestion: string;
   smellIds: string[];
+  /**
+   * Estimated token savings if the recommendation is applied.
+   */
+  potentialSavings?: number;
+  /**
+   * How automated this recommendation is.
+   */
+  automationStatus?: 'manual' | 'preview' | 'assisted';
+  /**
+   * Trace event ids that support this recommendation in live-mode captures.
+   */
+  traceEventIds?: string[];
 }
 
 const RECOMMENDATION_MAP: Record<string, Recommendation> = {

@@ -1,0 +1,32 @@
+{
+  "model": "gpt-4o",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful coding assistant. Keep answers concise."
+    },
+    {
+      "role": "user",
+      "content": "Fix the failing TypeScript build in this repo."
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "run_command",
+        "description": "Run a shell command and return the output.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The shell command to run."
+            }
+          },
+          "required": ["command"]
+        }
+      }
+    }
+  ]
+}

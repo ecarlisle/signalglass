@@ -1,5 +1,6 @@
 import type { AgentRun, ContextBlock } from './types.js';
 import type { AnalysisResult } from './analysis.js';
+import type { ContentPhase, SavingsOpportunity } from './traces.js';
 import { estimateTokens } from './tokenEstimator.js';
 import {
   REPEATED_LOG_SOURCE_TYPES,
@@ -35,6 +36,18 @@ export interface ContextSmell {
    * Heuristic smells should be labeled as such in reports and the UI.
    */
   isHeuristic?: boolean;
+  /**
+   * The content phase this smell relates to, if known.
+   */
+  contentPhase?: ContentPhase;
+  /**
+   * Trace event ids that support this smell in live-mode captures.
+   */
+  traceEventIds?: string[];
+  /**
+   * Estimated savings opportunity associated with this smell.
+   */
+  savingsOpportunity?: SavingsOpportunity;
 }
 
 type PartialAnalysis = Omit<AnalysisResult, 'smells' | 'recommendations' | 'generatedAt'>;
