@@ -63,10 +63,13 @@ Define how Signalglass renders analysis results and stored trace data into human
 - Reports do not include:
   - Full raw payloads.
   - API keys or Authorization headers.
+  - Bearer tokens, cookie headers, proxy authorization headers, `.env` assignments, or credential-like `storageKey` values.
   - Secrets or credentials.
-  - `storageKey` values in standard mode.
+  - `storageKey` values.
 - Redacted excerpts appear only when present and allowed in the stored trace data.
 - Privacy disclaimers are included in all report formats.
+- Report-bound free-text strings are sanitized before terminal, JSON, HTML, and list output; HTML escaping remains required after sanitization.
+- Trace token metrics prefer provider-reported `promptTokens` and `completionTokens`; `totalTokens` may be reported as inference usage but is not counted as output.
 
 ## Acceptance criteria
 
@@ -83,8 +86,10 @@ Define how Signalglass renders analysis results and stored trace data into human
 - [x] `renderTraceJson(trace)` returns JSON with `trace.id`, `trace.status`, `trace.provider`, `trace.model`, `eventCount`, `eventTypeBreakdown`, and `tokenMetrics`.
 - [x] `renderTraceHtml(trace)` contains `<html>` and key trace metadata.
 - [x] Report output does not include sensitive metadata values (API keys, auth headers).
-- [x] Standard-mode report does not include `storageKey` values.
+- [x] Report output redacts sensitive free-text values, including routing decisions, transformation summaries, excerpts, provider/model/agent/task fields, API keys, bearer tokens, cookies, proxy authorization strings, `.env` assignments, and `storageKey` values.
+- [x] Reports do not include `storageKey` values.
 - [x] Redacted excerpts appear only when present and allowed in stored trace data.
+- [x] Trace token metrics count prompt/input and completion/output separately without treating total tokens as output.
 - [x] Summary/list report includes multiple traces without dumping event payloads.
 - [x] Existing offline analyze reports still pass unchanged.
 
@@ -95,7 +100,9 @@ Define how Signalglass renders analysis results and stored trace data into human
   - Trace JSON report includes expected fields.
   - Trace HTML report is valid.
   - Reports exclude sensitive metadata.
-  - Reports exclude storageKey in standard mode.
+  - Reports redact sensitive report-bound strings across terminal, JSON, HTML, and list output.
+  - Reports exclude storageKey values.
+  - Trace token metrics prefer prompt/completion usage and avoid double-counting inference events.
   - Redacted excerpts appear only when present.
   - Summary/list reports include multiple traces.
   - Existing offline reports still pass.

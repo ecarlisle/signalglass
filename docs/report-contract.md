@@ -1,8 +1,8 @@
-# Signalglass report contract
+# SignalGlass report contract
 
-Every Signalglass report — whether terminal, JSON, or static HTML — must contain the following information. Formatting may vary by output type, but the data and meaning must be present.
+Every SignalGlass offline analysis report — whether terminal, JSON, or static HTML — must contain the following information. Formatting may vary by output type, but the data and meaning must be present.
 
-Reports may be produced from an offline `AgentRun` or from a live `Trace`. Both sources produce the same core contract. Live-specific reports (Trace View, Payload View) add optional sections on top of this contract.
+Reports may be produced from an offline `AgentRun` or from a live `Trace`. Live trace reports use a smaller trace-specific contract with trace metadata, event breakdowns, token metrics, redacted excerpts, and privacy disclaimers. Live-specific dashboard views remain future work.
 
 ## 1. Run metadata
 
@@ -99,6 +99,14 @@ When a report is produced from a live trace, it should include:
 - Routing decisions (which provider and model were selected).
 - Transformation summaries.
 
+Trace report token accounting follows this contract:
+
+- Provider-reported `promptTokens` count toward input totals when present.
+- Provider-reported `completionTokens` count toward output totals when present.
+- Provider-reported `totalTokens` may be shown as inference usage, but must not be treated as output tokens.
+- Inference events are not double-counted into phase-based input/output totals.
+- If provider usage is absent, `said`, `sent`, `requested`, and `observed` event tokens are treated as input estimates, while `generated` and `returned` event tokens are treated as output estimates.
+
 ## 12. Payload references
 
 Payload View and trace reports may reference stored payloads. By default, reports must not inline full raw payloads. They may include:
@@ -149,8 +157,10 @@ Reports must state:
 
 - Whether token counts are approximate.
 - Whether full payloads, tool results, or secrets were stored.
-- That API keys are never stored in reports or traces.
+- That API keys, bearer tokens, authorization headers, cookies, proxy authorization headers, `.env` assignments, and credential-like `storageKey` values are redacted from report-bound strings.
 - When excerpts are redacted.
+
+Redaction is applied before terminal, JSON, HTML, and trace list report output. HTML reports must still escape HTML after redaction; redaction is not a substitute for escaping.
 
 ## Output formats
 

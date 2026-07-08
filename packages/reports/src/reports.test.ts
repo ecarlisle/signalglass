@@ -217,6 +217,58 @@ describe('trace report formatters', () => {
     expect(metrics.inferenceTokens).toBe(50);
   });
 
+  it('prefers provider prompt/completion usage over phase token fallbacks', () => {
+    const metrics = computeTokenMetrics([
+      {
+        id: 'evt-user',
+        traceId: 'trace-abc',
+        timestamp: '2025-01-01T00:00:00.000Z',
+        type: 'message',
+        contentPhase: 'said',
+        tokens: 999,
+      },
+      {
+        id: 'evt-output',
+        traceId: 'trace-abc',
+        timestamp: '2025-01-01T00:00:01.000Z',
+        type: 'message',
+        contentPhase: 'generated',
+        tokens: 999,
+      },
+      {
+        id: 'evt-inference',
+        traceId: 'trace-abc',
+        timestamp: '2025-01-01T00:00:02.000Z',
+        type: 'inference',
+        tokens: 148,
+        metadata: {
+          promptTokens: 120,
+          completionTokens: 28,
+          totalTokens: 148,
+        },
+      },
+    ]);
+
+    expect(metrics.totalInputTokens).toBe(120);
+    expect(metrics.totalOutputTokens).toBe(28);
+    expect(metrics.inferenceTokens).toBe(148);
+  });
+
+  it('counts said events as input when prompt usage is not available', () => {
+    const metrics = computeTokenMetrics([
+      {
+        id: 'evt-user',
+        traceId: 'trace-abc',
+        timestamp: '2025-01-01T00:00:00.000Z',
+        type: 'message',
+        contentPhase: 'said',
+        tokens: 12,
+      },
+    ]);
+
+    expect(metrics.totalInputTokens).toBe(12);
+  });
+
   it('renders an HTML trace report', () => {
     const output = renderTraceHtml(sampleTrace);
     expect(output).toContain('<html');
@@ -238,9 +290,13 @@ describe('trace report formatters', () => {
     expect(html).not.toContain('storeFullRawPayloads');
   });
 
-  it('does not include API keys or Authorization headers surfaced in routing decisions or metadata', () => {
+  it('redacts secrets from report-bound routing decisions, transformations, excerpts, and trace fields', () => {
     const traceWithSensitiveFields: Trace = {
       ...sampleTrace,
+      provider: 'provider sk-test-secret-key-in-provider',
+      model: 'model Authorization: Bearer model-token',
+      agent: 'agent COOKIE=session=abc123',
+      task: 'task OPENAI_API_KEY=sk-test-env-secret',
       events: [
         ...sampleTrace.events,
         {
@@ -250,18 +306,44 @@ describe('trace report formatters', () => {
           type: 'provider_request',
           contentPhase: 'sent',
           routingDecision: 'sk-test-secret-key-in-route',
+          transformationSummary: 'Authorization: Bearer secret-route-token',
+          payloadRef: makePayloadRef({
+            redacted: true,
+            excerpt: 'Cookie: session=secret-cookie\npassword=hunter2\nstorageKey: raw-secret-key',
+          }),
         },
       ],
     };
     const terminal = renderTraceTerminal(traceWithSensitiveFields);
-    // routingDecision is surfaced in the report, so a fake secret in it should appear
-    expect(terminal).toContain('sk-test-secret-key-in-route');
-    // The real guarantee is that metadata fields are not leaked, and that
-    // payload excerpts do not contain secrets (verified by excerpt tests above)
+    expect(terminal).not.toContain('sk-test-secret-key-in-provider');
+    expect(terminal).not.toContain('sk-test-secret-key-in-route');
+    expect(terminal).not.toContain('model-token');
+    expect(terminal).not.toContain('abc123');
+    expect(terminal).not.toContain('sk-test-env-secret');
+    expect(terminal).not.toContain('secret-route-token');
+    expect(terminal).not.toContain('secret-cookie');
+    expect(terminal).not.toContain('hunter2');
+    expect(terminal).not.toContain('raw-secret-key');
+    expect(terminal).toContain('[REDACTED');
+
     const json = renderTraceJson(traceWithSensitiveFields);
     const parsed = JSON.parse(json);
     expect(parsed.routingDecisions).toBeDefined();
-    expect(parsed.routingDecisions).toContain('sk-test-secret-key-in-route');
+    expect(JSON.stringify(parsed)).not.toContain('sk-test-secret-key-in-provider');
+    expect(JSON.stringify(parsed)).not.toContain('sk-test-secret-key-in-route');
+    expect(JSON.stringify(parsed)).not.toContain('secret-route-token');
+    expect(JSON.stringify(parsed)).not.toContain('raw-secret-key');
+
+    const html = renderTraceHtml(traceWithSensitiveFields);
+    expect(html).not.toContain('sk-test-secret-key-in-provider');
+    expect(html).not.toContain('sk-test-secret-key-in-route');
+    expect(html).not.toContain('model-token');
+    expect(html).not.toContain('secret-cookie');
+
+    const list = renderTraceListSummary([traceWithSensitiveFields]);
+    expect(list).not.toContain('sk-test-secret-key-in-provider');
+    expect(list).not.toContain('model-token');
+
     // Verify that metadata from the trace itself is never inlined in reports
     expect(parsed.trace).not.toHaveProperty('metadata');
   });
@@ -367,6 +449,80 @@ describe('trace report formatters', () => {
     const json = renderTraceJson(traceWithNonRedacted);
     const parsed = JSON.parse(json);
     expect(parsed.excerpts).toBeUndefined();
+  });
+
+  it('applies custom secret patterns from trace capture policy to all report outputs', () => {
+    const traceWithCustomPattern: Trace = {
+      ...sampleTrace,
+      id: 'id-internal-secret-88',
+      capturePolicy: {
+        ...sampleTrace.capturePolicy,
+        redaction: { maxExcerptLength: 240, secretPatterns: ['internal-secret-[0-9]+'], stripHeaders: ['authorization', 'x-api-key'] },
+      },
+      task: 'internal-secret-123-task',
+      events: [
+        ...sampleTrace.events,
+        {
+          id: 'evt-custom-route',
+          traceId: 'id-internal-secret-88',
+          timestamp: '2025-01-01T00:00:05.000Z',
+          type: 'provider_request',
+          contentPhase: 'sent',
+          routingDecision: 'route: internal-secret-99',
+          transformationSummary: 'transformed internal-secret-42',
+          payloadRef: {
+            id: 'payload-custom',
+            redacted: true,
+            excerpt: 'excerpt internal-secret-77',
+          },
+        },
+      ],
+    };
+
+    // Terminal detail report
+    const terminal = renderTraceTerminal(traceWithCustomPattern);
+    expect(terminal).not.toContain('internal-secret-123-task');
+    expect(terminal).not.toContain('internal-secret-99');
+    expect(terminal).not.toContain('internal-secret-42');
+    expect(terminal).not.toContain('internal-secret-77');
+    expect(terminal).not.toContain('id-internal-secret-88');
+    expect(terminal).toContain('[REDACTED]');
+
+    // JSON detail report
+    const jsonOutput = renderTraceJson(traceWithCustomPattern);
+    expect(jsonOutput).not.toContain('internal-secret-123-task');
+    expect(jsonOutput).not.toContain('internal-secret-99');
+    expect(jsonOutput).not.toContain('internal-secret-42');
+    expect(jsonOutput).not.toContain('internal-secret-77');
+    expect(jsonOutput).not.toContain('id-internal-secret-88');
+    expect(jsonOutput).toContain('[REDACTED]');
+
+    // HTML detail report
+    const html = renderTraceHtml(traceWithCustomPattern);
+    expect(html).not.toContain('internal-secret-123-task');
+    expect(html).not.toContain('internal-secret-99');
+    expect(html).not.toContain('internal-secret-42');
+    expect(html).not.toContain('internal-secret-77');
+    expect(html).not.toContain('id-internal-secret-88');
+    expect(html).toContain('[REDACTED]');
+
+    // Trace list terminal (includes id, status, provider, model)
+    const listTerminal = renderTraceListSummary([traceWithCustomPattern]);
+    expect(listTerminal).not.toContain('internal-secret-123-task');
+    expect(listTerminal).not.toContain('internal-secret-99');
+    expect(listTerminal).not.toContain('internal-secret-42');
+    expect(listTerminal).not.toContain('internal-secret-77');
+    expect(listTerminal).not.toContain('id-internal-secret-88');
+    expect(listTerminal).toContain('[REDACTED]');
+
+    // Trace list JSON (includes task, id, model, provider)
+    const listJson = renderTraceListJson([traceWithCustomPattern]);
+    expect(listJson).not.toContain('internal-secret-123-task');
+    expect(listJson).not.toContain('internal-secret-99');
+    expect(listJson).not.toContain('internal-secret-42');
+    expect(listJson).not.toContain('internal-secret-77');
+    expect(listJson).not.toContain('id-internal-secret-88');
+    expect(listJson).toContain('[REDACTED]');
   });
 });
 

@@ -1,4 +1,9 @@
-import type { Trace, TraceEvent, CapturePolicy } from '@signalglass/core';
+import type { Trace, TraceEvent, CapturePolicy, PayloadReference } from '@signalglass/core';
+import {
+  isCredentialLikeText,
+  redactAndTruncateSensitiveText,
+  redactSensitiveText,
+} from '@signalglass/core';
 
 const SENSITIVE_HEADERS = [
   'authorization',
@@ -7,6 +12,8 @@ const SENSITIVE_HEADERS = [
   'set-cookie',
   'proxy-authorization',
 ];
+
+const DEFAULT_MAX_EXCERPT_LENGTH = 240;
 
 const SENSITIVE_PATTERNS = [
   /api[_-]?key/i,
@@ -29,6 +36,15 @@ export function sanitizeTraceForStorage(trace: Trace): Trace {
 
 function sanitizeEvent(event: TraceEvent, policy: CapturePolicy): TraceEvent {
   const sanitized: TraceEvent = { ...event };
+  const opts = redactionOptions(policy);
+
+  // Sanitize top-level string fields that may contain secrets
+  if (sanitized.routingDecision) {
+    sanitized.routingDecision = redactSensitiveText(sanitized.routingDecision, opts);
+  }
+  if (sanitized.transformationSummary) {
+    sanitized.transformationSummary = redactSensitiveText(sanitized.transformationSummary, opts);
+  }
 
   // Always strip sensitive data from metadata
   if (event.metadata) {
@@ -38,15 +54,17 @@ function sanitizeEvent(event: TraceEvent, policy: CapturePolicy): TraceEvent {
   // Handle payload references based on capture policy
   if (event.payloadRef) {
     if (policy.storeFullRawPayloads && policy.mode === 'debug') {
-      // Debug mode with explicit opt-in: keep full payload reference including storageKey
-      sanitized.payloadRef = { ...event.payloadRef };
-    } else if (policy.storeShortRedactedExcerpts && event.payloadRef.excerpt && event.payloadRef.redacted) {
-      // Standard/minimal mode: only keep already-redacted excerpt
-      sanitized.payloadRef = {
-        id: event.payloadRef.id,
-        redacted: true,
-        excerpt: event.payloadRef.excerpt,
-      };
+      // Debug mode with explicit opt-in may keep payload references, but only
+      // after sensitive fields and excerpts have been sanitized.
+      sanitized.payloadRef = sanitizeDebugPayloadRef(event.payloadRef, policy);
+    } else if (
+      policy.storeShortRedactedExcerpts &&
+      event.payloadRef.excerpt
+    ) {
+      // Standard/minimal mode: keep only a sanitized, bounded excerpt.
+      // We never trust the caller-provided redacted flag as proof of safety;
+      // sanitizeExcerptOnlyPayloadRef re-sanitizes and forces redacted: true.
+      sanitized.payloadRef = sanitizeExcerptOnlyPayloadRef(event.payloadRef, policy);
     } else {
       // Remove payload reference entirely
       delete sanitized.payloadRef;
@@ -54,6 +72,53 @@ function sanitizeEvent(event: TraceEvent, policy: CapturePolicy): TraceEvent {
   }
 
   return sanitized;
+}
+
+function sanitizeDebugPayloadRef(
+  payloadRef: PayloadReference,
+  policy: CapturePolicy,
+): PayloadReference {
+  const sanitized: PayloadReference = {
+    ...payloadRef,
+  };
+
+  if (payloadRef.excerpt != null) {
+    sanitized.excerpt = sanitizeExcerpt(payloadRef.excerpt, policy);
+  }
+
+  if (
+    payloadRef.storageKey != null &&
+    isCredentialLikeText(payloadRef.storageKey, redactionOptions(policy))
+  ) {
+    delete sanitized.storageKey;
+  }
+
+  return sanitized;
+}
+
+function sanitizeExcerptOnlyPayloadRef(
+  payloadRef: PayloadReference,
+  policy: CapturePolicy,
+): PayloadReference {
+  return {
+    id: payloadRef.id,
+    redacted: true,
+    excerpt: sanitizeExcerpt(payloadRef.excerpt ?? '', policy),
+  };
+}
+
+function sanitizeExcerpt(excerpt: string, policy: CapturePolicy): string {
+  return redactAndTruncateSensitiveText(
+    excerpt,
+    policy.redaction?.maxExcerptLength ?? DEFAULT_MAX_EXCERPT_LENGTH,
+    redactionOptions(policy),
+  );
+}
+
+function redactionOptions(policy: CapturePolicy): { secretPatterns?: string[] } {
+  return {
+    secretPatterns: policy.redaction?.secretPatterns ?? [],
+  };
 }
 
 function sanitizeMetadata(
@@ -65,12 +130,16 @@ function sanitizeMetadata(
   }
 
   const sanitized: Record<string, unknown> = {};
+  const stripHeaders = new Set([
+    ...SENSITIVE_HEADERS,
+    ...(policy.redaction?.stripHeaders ?? []).map((header) => header.toLowerCase()),
+  ]);
 
   for (const [key, value] of Object.entries(metadata)) {
     const lowerKey = key.toLowerCase();
 
     // Always strip sensitive headers
-    if (SENSITIVE_HEADERS.includes(lowerKey)) {
+    if (stripHeaders.has(lowerKey)) {
       continue;
     }
 
@@ -97,6 +166,9 @@ function sanitizeMetadata(
             if (item && typeof item === 'object') {
               return sanitizeMetadata(item as Record<string, unknown>, policy);
             }
+            if (typeof item === 'string') {
+              return redactSensitiveText(item, redactionOptions(policy));
+            }
             return item;
           })
           .filter((item: unknown) => item !== undefined);
@@ -110,7 +182,10 @@ function sanitizeMetadata(
         }
       }
     } else {
-      sanitized[key] = value;
+      sanitized[key] =
+        typeof value === 'string'
+          ? redactSensitiveText(value, redactionOptions(policy))
+          : value;
     }
   }
 
@@ -122,7 +197,7 @@ function isApiKeyLike(key: string, value: unknown): boolean {
   if (lowerKey.includes('api') && lowerKey.includes('key')) {
     return true;
   }
-  if (typeof value === 'string' && value.startsWith('sk-')) {
+  if (typeof value === 'string' && isCredentialLikeText(value)) {
     return true;
   }
   return false;
@@ -131,6 +206,9 @@ function isApiKeyLike(key: string, value: unknown): boolean {
 function isSecretLike(key: string, value: unknown): boolean {
   const lowerKey = key.toLowerCase();
   if (lowerKey.includes('secret') || lowerKey.includes('password')) {
+    return true;
+  }
+  if (typeof value === 'string' && isCredentialLikeText(value)) {
     return true;
   }
   return false;
