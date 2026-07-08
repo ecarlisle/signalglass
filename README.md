@@ -1,10 +1,10 @@
-# Signalglass
+# SignalGlass
 
 Observability for AI coding-agent runs.
 
-Signalglass helps developers inspect what context AI coding agents send to models, where tokens are spent, what gets repeated, what appears wasteful, and how different models or agent runs behave on the same task.
+SignalGlass helps developers inspect what context AI coding agents send to models, where tokens are spent, what gets repeated, what appears wasteful, and how different models or agent runs behave on the same task.
 
-Signalglass educates as it observes. Its core offering is **signal**, not automatic optimization.
+SignalGlass is an observability and education tool. Token savings matter, but the larger goal is to make agent behavior legible. Its core offering is **signal**, not automatic optimization.
 
 ## Two complementary modes
 
@@ -16,7 +16,7 @@ Both modes share the same internal domain model. A live trace can be converted i
 ## What it is
 
 - An analyzer and reporting tool for saved agent-run data.
-- A live ingress observability layer (starting with OpenAI-compatible proxy support).
+- A live ingress observability layer with OpenAI-compatible proxy support.
 - A way to answer: **“What did the agent send to the model, and what can we learn from it?”**
 - A source of SIGNAL: cost, relevance, behavior, comparison, and education.
 - Every finding should explain what happened, why it matters, what evidence supports it, and what to inspect or try next.
@@ -24,8 +24,9 @@ Both modes share the same internal domain model. A live trace can be converted i
 ## What it is not (yet)
 
 - An automatic optimizer that rewrites context for you.
-- A provider-specific integration beyond adapters.
+- A first-class integration for every agent harness.
 - A system that stores full raw payloads or API keys by default.
+- A production gateway with auth, encryption at rest, or remote storage.
 
 ## Quick start
 
@@ -36,20 +37,26 @@ pnpm test
 pnpm --filter @signalglass/cli dev -- analyze samples/messy-agent-run.json
 ```
 
+For live ingress setup, storage, trace reports, Pi, and OpenCode examples, see:
+
+- [General local setup](docs/getting-started.md)
+- [Pi local setup](docs/getting-started-pi.md)
+- [OpenCode local setup](docs/getting-started-opencode.md)
+
 ## Repository structure
 
-```
+```text
 signalglass/
 ├── apps/
 │   ├── dashboard/          # Vite + React report viewer (future Observatory UI)
-│   └── ingress/            # OpenAI-compatible ingress server (planned)
+│   └── ingress/            # OpenAI-compatible ingress server
 ├── packages/
 │   ├── cli/                # CLI entrypoint
 │   ├── core/               # Domain models, token estimation, analysis, smells, trace model
-│   ├── parsers/            # Offline format parsers (Signalglass JSON + OpenCode placeholder)
+│   ├── parsers/            # Offline format parsers (SignalGlass JSON + OpenCode placeholder)
 │   ├── providers/          # Provider configs and adapters (openai-compatible, anthropic placeholder, gemini/ollama/custom stubs)
 │   ├── reports/            # Terminal, JSON, and static HTML report formatters
-│   └── storage/            # SQLite persistence for traces/events (planned)
+│   └── storage/            # SQLite persistence for traces/events
 ├── samples/                # Example agent-run files
 ├── docs/                   # Principles, architecture, roadmap, report contract, glossary, ADRs
 ├── README.md
@@ -68,15 +75,21 @@ pnpm --filter @signalglass/cli dev -- analyze samples/messy-agent-run.json --rep
 # Static HTML report
 pnpm --filter @signalglass/cli dev -- analyze samples/messy-agent-run.json --report html --output report.html
 
-# Live ingress (planned)
-signalglass ingress --config signalglass.config.json --port 8080
+# Live ingress with optional SQLite trace storage
+pnpm --filter @signalglass/cli dev -- ingress --config signalglass.config.json --port 8080 --storage .signalglass/traces.db
+
+# List stored traces
+pnpm --filter @signalglass/cli dev -- traces --storage .signalglass/traces.db list
+
+# Show one stored trace
+pnpm --filter @signalglass/cli dev -- traces --storage .signalglass/traces.db show <trace-id> --report terminal
 ```
 
-See `docs/ingress.md`, `docs/provider-config.md`, and `docs/privacy.md` for details on live ingress.
+See `docs/ingress.md`, `docs/provider-config.md`, and `docs/privacy.md` for details on live ingress and privacy-safe storage.
 
 ## Token counts are approximate
 
-Signalglass currently uses a simple character-based approximation (roughly one token per four characters). It is designed so that a real tokenizer can be plugged in later.
+SignalGlass currently uses a simple character-based approximation (roughly one token per four characters). It is designed so that a real tokenizer can be plugged in later.
 
 ## License
 

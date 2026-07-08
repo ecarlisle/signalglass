@@ -6,11 +6,11 @@ Implemented
 
 ## Purpose
 
-Define how Signalglass analyzes captured agent runs from files, dumps, and parser inputs.
+Define how SignalGlass analyzes captured agent runs from files, dumps, and parser inputs.
 
 ## Scope
 
-- Generic JSON parser for Signalglass sample runs.
+- Generic JSON parser for SignalGlass sample runs.
 - OpenCode parser placeholder.
 - CLI `analyze` command.
 - Terminal, JSON, and HTML report outputs.

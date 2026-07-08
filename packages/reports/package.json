@@ -2,7 +2,7 @@
   "name": "@signalglass/reports",
   "version": "0.0.1",
   "type": "module",
-  "description": "Terminal, JSON, and static HTML report formatters for Signalglass.",
+  "description": "Terminal, JSON, and static HTML report formatters for SignalGlass.",
   "exports": {
     ".": {
       "import": "./dist/index.js",

@@ -7,7 +7,7 @@ export function renderHtml(analysis: AnalysisResult): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Signalglass – ${escapeHtml(safe(analysis.runName))}</title>
+  <title>SignalGlass – ${escapeHtml(safe(analysis.runName))}</title>
   <style>
     :root { --bg: #fafafa; --card: #fff; --text: #222; --muted: #666; --border: #e0e0e0; }
     body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 2rem; background: var(--bg); color: var(--text); }
@@ -33,7 +33,7 @@ export function renderHtml(analysis: AnalysisResult): string {
 </head>
 <body>
   <div class="container">
-    <h1>Signalglass report</h1>
+    <h1>SignalGlass report</h1>
     <p>
       ${escapeHtml(safe(analysis.runName))} ·
       ${escapeHtml(safe(analysis.model ?? 'unknown model'))} ·

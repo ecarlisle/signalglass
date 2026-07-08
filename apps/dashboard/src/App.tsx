@@ -62,7 +62,7 @@ export default function App() {
 
   return (
     <div style={{ maxWidth: 960, margin: '0 auto', padding: 24, fontFamily: 'system-ui, sans-serif' }}>
-      <h1>Signalglass Dashboard</h1>
+      <h1>SignalGlass Dashboard</h1>
       <p>
         {a.runName} · {a.model ?? 'unknown model'} · {a.provider ?? 'unknown provider'}
       </p>

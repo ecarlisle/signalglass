@@ -1,10 +1,10 @@
-# Signalglass UI vision
+# SignalGlass UI vision
 
-The Signalglass web UI is an **interactive educational report**. It helps developers explore what an agent sent to a model, understand why it matters, and compare runs.
+The SignalGlass web UI is an **interactive educational report**. It helps developers explore what an agent sent to a model, understand why it matters, and compare runs.
 
 This document describes the planned sections. The current dashboard is intentionally minimal; it exists to validate the data model and leave a clear path for these concepts.
 
-Signalglass supports two modes: **Offline Run Analysis** and **Live Ingress Observability**. The dashboard will eventually visualize both.
+SignalGlass supports two modes: **Offline Run Analysis** and **Live Ingress Observability**. The dashboard will eventually visualize both.
 
 ## Planned sections
 
@@ -109,7 +109,7 @@ Intended content:
 - Diffs between `sent`, `transformed`, and `returned` content.
 - Redacted excerpts by default; full payloads only when the capture policy allows.
 
-Educational purpose: help developers understand how provider formats map to Signalglass events.
+Educational purpose: help developers understand how provider formats map to SignalGlass events.
 
 ## Story View
 
@@ -128,7 +128,7 @@ Educational purpose: turn low-level events into a human-readable explanation.
 A view that separates realized savings from opportunities.
 
 Intended content:
-- **Realized savings** — tokens already saved by Signalglass or the user.
+- **Realized savings** — tokens already saved by SignalGlass or the user.
 - **Opportunities** — potentially correctable patterns with estimated token savings.
 - **Recommendations** — actions the user can choose to take.
 

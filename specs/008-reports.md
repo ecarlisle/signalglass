@@ -6,7 +6,7 @@ Implemented (offline + trace reports), Draft (dashboard report views)
 
 ## Purpose
 
-Define how Signalglass renders analysis results and stored trace data into human- and machine-readable outputs.
+Define how SignalGlass renders analysis results and stored trace data into human- and machine-readable outputs.
 
 ## Scope
 

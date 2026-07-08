@@ -1,4 +1,4 @@
-# Signalglass glossary
+# SignalGlass glossary
 
 ## Agent run
 A single end-to-end session in which an AI coding agent interacts with a model to complete a task. A run contains one or more turns.
@@ -16,7 +16,7 @@ A classification describing where a context block came from, such as `system_ins
 A heuristic indicator that something in the context window may be wasteful, noisy, or poorly structured. Smells are observations, not proof of a bug.
 
 ## Token budget
-A configurable threshold for token usage. Signalglass can flag when a run, turn, source type, or single block exceeds a budget.
+A configurable threshold for token usage. SignalGlass can flag when a run, turn, source type, or single block exceeds a budget.
 
 ## Repeated context
 Content that appears more than once across turns. Repeated context inflates token usage without adding new information.
@@ -28,22 +28,22 @@ Text produced by an external tool invoked by the agent, such as a build log, tes
 Useful information extracted from an agent run. Signal categories include cost, relevance, behavior, comparison, and education.
 
 ## Offline Run Analysis
-The first Signalglass mode. Users analyze captured agent runs from JSON or parser inputs.
+The first SignalGlass mode. Users analyze captured agent runs from JSON or parser inputs.
 
 ## Live Ingress Observability
-The second Signalglass mode. Signalglass acts as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and optimization opportunities as they happen.
+The second SignalGlass mode. SignalGlass acts as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and privacy boundaries as they happen.
 
 ## Trace
 A live-captured session representing a complete provider exchange. A trace can be converted into an `AgentRun` for offline-style analysis.
 
 ## TraceEvent
-A single event in a trace, such as `request_received`, `provider_request_sent`, or `provider_response_complete`.
+A single event in a trace. Current event types include `message`, `instruction`, `context`, `transformation`, `tool_call`, `tool_result`, `provider_request`, `provider_response`, `provider_error`, `inference`, and `egress_response`.
 
 ## Content phase
 A label describing the role of content in an exchange: said, sent, transformed, requested, observed, generated, or returned.
 
 ## Provider adapter
-A module that translates between a provider-native request/response format and the internal Signalglass trace model.
+A module that translates between a provider-native request/response format and the internal SignalGlass trace model.
 
 ## ProviderKind
 The type of provider adapter: `openai-compatible`, `anthropic`, `gemini`, `ollama`, or `custom`.
@@ -52,10 +52,10 @@ The type of provider adapter: `openai-compatible`, `anthropic`, `gemini`, `ollam
 A potentially correctable pattern with an estimated token savings and confidence. Distinct from realized savings and recommendations.
 
 ## Realized savings
-Tokens already saved by Signalglass or the user, as opposed to opportunities that remain available.
+Tokens already saved by SignalGlass or the user, as opposed to opportunities that remain available.
 
 ## Evidence drawer
 A planned UI surface that shows the raw blocks, turns, and token counts behind a specific finding. It helps users verify claims and learn from source data.
 
 ## Heuristic
-A rule-of-thumb detection that is useful but not certain. Signalglass labels heuristics clearly and avoids presenting them as facts.
+A rule-of-thumb detection that is useful but not certain. SignalGlass labels heuristics clearly and avoids presenting them as facts.

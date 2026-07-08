@@ -6,7 +6,7 @@ Draft
 
 ## Purpose
 
-Define the interactive educational report viewer for Signalglass.
+Define the interactive educational report viewer for SignalGlass.
 
 ## Scope
 

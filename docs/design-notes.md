@@ -1,4 +1,4 @@
-# Signalglass design notes
+# SignalGlass design notes
 
 This document captures planning notes and product intent before the next implementation pass. It is an appendix, not the canonical specification. For authoritative design, see:
 
@@ -15,15 +15,15 @@ This document captures planning notes and product intent before the next impleme
 
 ---
 
-## Signalglass identity
+## SignalGlass identity
 
-Signalglass is not just a proxy. It is an observability, education, and optimization layer for AI-agent communication.
+SignalGlass is not just a proxy. It is an observability, education, and optimization layer for AI-agent communication.
 
 It should help users see the invisible lifecycle of LLM interactions: prompts, context assembly, instructions, tool definitions, provider routing, model calls, token usage, transformations, tool calls, provider responses, and final responses.
 
 ## Two product modes
 
-Signalglass supports two complementary modes:
+SignalGlass supports two complementary modes:
 
 1. **Offline Run Analysis** — analyze captured agent runs from files, dumps, parser inputs, and samples.
 2. **Live Ingress Observability** — act as an OpenAI-compatible ingress/proxy that captures trace/timeline events and forwards requests to configured upstream providers.
@@ -38,7 +38,7 @@ OpenAI compatibility must not become the internal data model.
 
 ## Provider strategy
 
-Signalglass should support multiple providers and multiple models.
+SignalGlass should support multiple providers and multiple models.
 
 Provider compatibility should be explicit through adapter kinds, not inferred from URLs:
 
@@ -78,26 +78,26 @@ Future UI views:
 
 ## Savings language
 
-Signalglass should separate:
+SignalGlass should separate:
 
-- **Savings** — what Signalglass fixed.
-- **Opportunities** — what Signalglass noticed.
+- **Savings** — what SignalGlass fixed.
+- **Opportunities** — what SignalGlass noticed.
 - **Recommendations** — what the user can choose to change.
 
 Do not count potential opportunities as realized savings.
 
 Good:
 
-> Signalglass saved 1,240 tokens through deduplication.  
+> SignalGlass saved 1,240 tokens through deduplication.
 > Potential opportunity: the system prompt may be reducible by 2,000 tokens.
 
 Bad:
 
-> Signalglass saved 3,240 tokens.
+> SignalGlass saved 3,240 tokens.
 
 ## Inefficiency pattern detection
 
-Signalglass should eventually detect correctable patterns such as:
+SignalGlass should eventually detect correctable patterns such as:
 
 - large system prompt
 - overlapping instruction layers
@@ -173,7 +173,7 @@ Agent-based review should be gated, optional, and not required for the core prod
 
 ## Storage principle
 
-Signalglass should collect enough metadata to explain savings and opportunities without requiring raw payload storage.
+SignalGlass should collect enough metadata to explain savings and opportunities without requiring raw payload storage.
 
 Default behavior should store metadata, metrics, timeline events, routing decisions, transformation summaries, and short redacted excerpts.
 
@@ -181,14 +181,14 @@ Full raw payload storage should be opt-in and treated as debug mode.
 
 ## Implementation guidance
 
-For upcoming code passes:
+For ongoing code passes:
 
 1. Preserve existing offline analyzer types and behavior.
-2. Add live-mode trace types beside the current run-analysis model.
+2. Keep live-mode trace types beside the current run-analysis model.
 3. Keep provider-specific logic out of `@signalglass/core`.
-4. Add provider config and provider adapters in a separate package.
-5. Add ingress later as its own app/package.
-6. Keep storage and raw payload capture policy explicit from the beginning.
+4. Keep provider config and provider adapters in their separate package.
+5. Keep ingress isolated in `apps/ingress`.
+6. Keep storage and raw payload capture policy explicit.
 7. Avoid duplicating `ContextSmell` and `Recommendation`; evolve them with optional fields instead.
 
 ---

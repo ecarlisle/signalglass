@@ -47,7 +47,7 @@ export function renderTraceListSummary(traces: Trace[]): string {
   const lines: string[] = [];
   const widths = [20, 8, 16, 20, 6, 24];
 
-  lines.push(`Signalglass traces (${traces.length})`);
+  lines.push(`SignalGlass traces (${traces.length})`);
   lines.push('');
   lines.push(formatRow(['ID', 'Status', 'Provider', 'Model', 'Events', 'Started'], widths));
   lines.push(formatRow(widths.map((w) => '─'.repeat(w)), widths));

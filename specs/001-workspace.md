@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Implemented
 
 ## Purpose
 
@@ -32,13 +32,13 @@ Define the pnpm monorepo structure so the project can be built, tested, and exte
 | Path | Responsibility |
 |---|---|
 | `packages/core` | Domain model, token estimation, analysis, smells, recommendations, trace types. |
-| `packages/parsers` | Offline format parsers (Signalglass JSON, OpenCode, future formats). |
+| `packages/parsers` | Offline format parsers (SignalGlass JSON, OpenCode, future formats). |
 | `packages/providers` | Provider configs and adapters. |
 | `packages/reports` | Terminal, JSON, and static HTML report formatters. |
-| `packages/storage` | SQLite persistence for traces and events (future). |
+| `packages/storage` | SQLite persistence for traces and events. |
 | `packages/cli` | Command-line entrypoint. |
 | `apps/dashboard` | Interactive educational report viewer (future Observatory UI). |
-| `apps/ingress` | OpenAI-compatible ingress server (future). |
+| `apps/ingress` | OpenAI-compatible ingress server. |
 
 ## Required behavior
 
@@ -50,10 +50,10 @@ Define the pnpm monorepo structure so the project can be built, tested, and exte
 
 ## Acceptance criteria
 
-- [ ] `pnpm install` succeeds.
-- [ ] `pnpm build` succeeds for all packages.
-- [ ] `pnpm test` succeeds for all packages.
-- [ ] No circular dependencies between `core` and other packages.
+- [x] `pnpm install` succeeds.
+- [x] `pnpm build` succeeds for all packages.
+- [x] `pnpm test` succeeds for all packages.
+- [x] No circular dependencies between `core` and other packages.
 
 ## Tests
 

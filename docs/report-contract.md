@@ -88,14 +88,15 @@ Reports must make it possible to trace every smell and recommendation back to ra
 
 ## 10. Estimation disclaimers
 
-Reports must clearly state that token counts are approximate. Signalglass does not claim to match any model tokenizer until a real tokenizer is wired in.
+Reports must clearly state that token counts are approximate. SignalGlass does not claim to match any model tokenizer until a real tokenizer is wired in.
 
 ## 11. Trace and timeline events (live mode)
 
 When a report is produced from a live trace, it should include:
 
-- `traceId`, `startedAt`, `providerId`, `model`.
-- A list of `TraceEvent` objects with `kind`, `timestamp`, `contentPhase`, `sourceType`, and `excerpt`.
+- `traceId`, `startedAt`, `provider`, `model`, `status`, and `mode`.
+- Event counts and breakdowns by `TraceEvent.type` and `contentPhase`.
+- Redacted excerpts only when present in stored trace data.
 - Routing decisions (which provider and model were selected).
 - Transformation summaries.
 
@@ -119,7 +120,7 @@ Payload View and trace reports may reference stored payloads. By default, report
 
 Reports that include the Savings Lens must separate:
 
-- **Realized savings** — tokens already saved by Signalglass or the user.
+- **Realized savings** — tokens already saved by SignalGlass or the user.
 - **Opportunities** — potentially correctable patterns with estimated savings and confidence.
 - **Recommendations** — actions the user can choose to take.
 

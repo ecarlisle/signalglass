@@ -2,7 +2,7 @@
   "name": "@signalglass/cli",
   "version": "0.0.1",
   "type": "module",
-  "description": "CLI entrypoint for Signalglass.",
+  "description": "CLI entrypoint for SignalGlass.",
   "bin": {
     "signalglass": "./dist/cli.js"
   },

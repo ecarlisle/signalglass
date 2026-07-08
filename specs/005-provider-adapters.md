@@ -6,7 +6,7 @@ Implemented (OpenAI-compatible), Draft (Anthropic/Gemini/Ollama/Custom)
 
 ## Purpose
 
-Define the boundary between provider-native protocols and the internal Signalglass trace model.
+Define the boundary between provider-native protocols and the internal SignalGlass trace model.
 
 ## Scope
 
@@ -84,11 +84,11 @@ interface ProviderAdapter {
 
 ## Acceptance criteria
 
-- [ ] `openaiAdapter.normalizeRequest(fixture)` returns the expected event types and phases.
-- [ ] `openaiAdapter.normalizeResponse(fixture)` returns usage metadata and generated content.
-- [ ] Adapter output contains no `api_key`, `authorization`, or secret values.
-- [ ] `createProviderConfig` provides sensible defaults.
-- [ ] `resolveProviderApiKey` reads from the named environment variable.
+- [x] `openaiAdapter.normalizeRequest(fixture)` returns the expected event types and phases.
+- [x] `openaiAdapter.normalizeResponse(fixture)` returns usage metadata and generated content.
+- [x] Adapter output contains no `api_key`, `authorization`, or secret values.
+- [x] `createProviderConfig` provides sensible defaults.
+- [x] `resolveProviderApiKey` reads from the named environment variable.
 
 ## Tests
 

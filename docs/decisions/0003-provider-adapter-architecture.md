@@ -10,13 +10,13 @@ Live ingress must forward agent requests to upstream providers such as OpenAI, A
 
 A naive approach would embed provider-specific protocol details throughout the ingress server and internal model. That would make OpenAI compatibility the de facto internal architecture and would make future providers expensive to add.
 
-Instead, Signalglass needs a clean boundary: an internal trace/timeline model on one side, and provider-specific adapters on the other.
+Instead, SignalGlass needs a clean boundary: an internal trace/timeline model on one side, and provider-specific adapters on the other.
 
 ## Decision
 
-Signalglass will use a **provider adapter** layer.
+SignalGlass will use a **provider adapter** layer.
 
-- Provider adapters are responsible for translating between provider-native request/response formats and Signalglass internal trace events.
+- Provider adapters are responsible for translating between provider-native request/response formats and SignalGlass internal trace events.
 - The internal data model (`Trace`, `TraceEvent`, `AgentRun`, `ContextBlock`, etc.) must remain provider-agnostic.
 - OpenAI compatibility is the first adapter, but it is not the internal model.
 - Anthropic, Gemini, Ollama, and custom adapters will follow the same interface.

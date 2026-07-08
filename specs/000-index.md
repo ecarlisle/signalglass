@@ -6,7 +6,7 @@ Accepted
 
 ## Purpose
 
-Provide a single directory of implementation specifications for Signalglass. Each spec defines what a part of the system must contain, how it must behave, and how to verify it.
+Provide a single directory of implementation specifications for SignalGlass. Each spec defines what a part of the system must contain, how it must behave, and how to verify it.
 
 ## Spec status definitions
 
@@ -31,7 +31,7 @@ Provide a single directory of implementation specifications for Signalglass. Eac
 
 | Spec | Title | Status |
 |---|---|---|
-| [001](001-workspace.md) | Workspace and package layout | Accepted |
+| [001](001-workspace.md) | Workspace and package layout | Implemented |
 | [002](002-core-domain.md) | Core domain model | Implemented |
 | [003](003-offline-analysis.md) | Offline Run Analysis | Implemented |
 | [004](004-trace-model.md) | Trace and timeline model | Implemented |
@@ -41,12 +41,12 @@ Provide a single directory of implementation specifications for Signalglass. Eac
 | [008](008-reports.md) | Reports | Implemented (offline + trace reports), Draft (dashboard report views) |
 | [009](009-dashboard-views.md) | Dashboard views | Draft |
 | [010](010-insight-evaluation.md) | Insight evaluation | Draft |
-| [011](011-cli.md) | CLI | Implemented (analyze, traces), Draft (ingress) |
+| [011](011-cli.md) | CLI | Implemented (analyze, ingress, traces) |
 | [012](012-versioning-and-releases.md) | Versioning and releases | Accepted |
 
 ## Project framing
 
-Signalglass has two complementary modes:
+SignalGlass has two complementary modes:
 
 1. **Offline Run Analysis** — analyze captured agent runs from JSON, parser inputs, and samples.
 2. **Live Ingress Observability** — act as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and optimization opportunities.

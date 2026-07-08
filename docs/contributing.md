@@ -1,10 +1,10 @@
-# Contributing to Signalglass
+# Contributing to SignalGlass
 
-Thank you for contributing to Signalglass. This document covers the basics of getting started; the detailed rules for working in this repo are in [`AGENTS.md`](../AGENTS.md).
+Thank you for contributing to SignalGlass. This document covers the basics of getting started; the detailed rules for working in this repo are in [`AGENTS.md`](../AGENTS.md).
 
 ## Spec-driven workflow
 
-Signalglass is built from implementation specs in the `specs/` directory. Before changing code:
+SignalGlass is built from implementation specs in the `specs/` directory. Before changing code:
 
 1. Read [`AGENTS.md`](../AGENTS.md).
 2. Read [`specs/000-index.md`](../specs/000-index.md).

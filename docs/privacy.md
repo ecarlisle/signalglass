@@ -4,7 +4,7 @@ SignalGlass is an observability layer, not a data lake. It captures only what is
 
 ## Default capture policy
 
-By default, Signalglass stores:
+By default, SignalGlass stores:
 
 - Trace metadata (id, timestamps, provider, model, agent, task, status).
 - Timeline event metadata (event kind, content phase, source type, timestamps).
@@ -60,7 +60,7 @@ Provider config references API keys by environment variable name:
 "apiKeyEnv": "OPENAI_API_KEY"
 ```
 
-Signalglass reads the key at runtime and uses it only to forward requests upstream. Keys are never:
+SignalGlass reads the key at runtime and uses it only to forward requests upstream. Keys are never:
 
 - written to config files,
 - stored in the database,
@@ -98,7 +98,7 @@ See `docs/report-contract.md` for the report privacy and redaction section.
 
 - Live ingress should be run in environments where the operator has permission to intercept agent/model traffic.
 - Enterprises may require additional controls: encryption at rest, access controls, audit logging, and shorter retention.
-- Signalglass does not claim compliance with any specific regulation by default. Operators are responsible for configuring capture policies appropriately.
+- SignalGlass does not claim compliance with any specific regulation by default. Operators are responsible for configuring capture policies appropriately.
 
 ## Related documents
 

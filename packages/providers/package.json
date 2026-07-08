@@ -2,7 +2,7 @@
   "name": "@signalglass/providers",
   "version": "0.0.1",
   "type": "module",
-  "description": "Provider configs and adapters for Signalglass live ingress.",
+  "description": "Provider configs and adapters for SignalGlass live ingress.",
   "exports": {
     ".": {
       "import": "./dist/index.js",

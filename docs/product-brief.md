@@ -1,16 +1,16 @@
-# Signalglass product brief
+# SignalGlass product brief
 
-## What Signalglass is
+## What SignalGlass is
 
-Signalglass is observability for AI coding-agent runs.
+SignalGlass is observability for AI coding-agent runs.
 
 It helps developers inspect what context AI coding agents send to models, where tokens are spent, what gets repeated, what appears wasteful, and how different models or agent runs behave on the same task.
 
-The primary question Signalglass answers is:
+The primary question SignalGlass answers is:
 
 > **“What did the agent send to the model, and what can we learn from it?”**
 
-Signalglass educates as it observes. Every finding should help the user understand how agent context works.
+SignalGlass educates as it observes. Every finding should help the user understand how agent context works.
 
 ## Two complementary modes
 
@@ -19,7 +19,7 @@ Signalglass educates as it observes. Every finding should help the user understa
 
 Both modes share the same internal model. A live trace can be converted into an `AgentRun` so the existing analyzer can be reused.
 
-## What Signalglass is not
+## What SignalGlass is not
 
 - It is not an automatic optimizer that rewrites context for you.
 - It is not a provider-specific integration beyond adapters.
@@ -36,11 +36,11 @@ You cannot optimize what you cannot see. Before compressing or rewriting context
 - What was repeated or noisy
 - Whether important context arrived late
 
-Signalglass starts as an x-ray, not a scalpel.
+SignalGlass starts as an x-ray, not a scalpel.
 
 ## What SIGNAL means
 
-Signalglass offers SIGNAL in five categories:
+SignalGlass offers SIGNAL in five categories:
 
 1. **Cost signal** — where tokens were spent (totals, per turn, per source type, largest blocks, repeated content).
 2. **Relevance signal** — what context appeared important, missing, late, noisy, or excessive.
@@ -55,7 +55,7 @@ Every major finding should eventually answer:
 - **What evidence supports it?** — the blocks, turns, or ratios behind the claim.
 - **What could the user inspect or try next?** — concrete, non-magical next steps.
 
-## Token conservation opportunities Signalglass identifies
+## Token conservation opportunities SignalGlass identifies
 
 1. Deduplication
 2. Tool output trimming
@@ -68,4 +68,4 @@ Every major finding should eventually answer:
 9. Summary substitution
 10. Replay and comparison
 
-In the first scaffold, Signalglass detects and reports these opportunities. It does not automatically apply them.
+In the first scaffold, SignalGlass detects and reports these opportunities. It does not automatically apply them.

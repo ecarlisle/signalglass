@@ -1,7 +1,7 @@
 {
   "name": "@signalglass/storage",
   "version": "0.1.0",
-  "description": "SQLite storage and capture policy enforcement for Signalglass",
+  "description": "SQLite storage and capture policy enforcement for SignalGlass",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

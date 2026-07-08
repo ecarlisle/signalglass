@@ -2,6 +2,8 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { openaiAdapter, resolveProviderApiKey, type ProviderConfig } from '@signalglass/providers';
 import {
   createDefaultCapturePolicy,
+  createTraceEvent,
+  redactAndTruncateSensitiveText,
   type Trace,
   type TraceEvent,
 } from '@signalglass/core';
@@ -11,6 +13,7 @@ import { forwardToUpstream } from './forward.js';
 
 const DEFAULT_PORT = 8080;
 export const DEFAULT_BODY_SIZE_LIMIT_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_ERROR_SUMMARY_LENGTH = 240;
 
 function generateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -27,16 +30,25 @@ async function readJsonBody(
   return new Promise((resolve, reject) => {
     let body = '';
     let size = 0;
+    let limitExceeded = false;
     req.setEncoding('utf8');
     req.on('data', (chunk: string) => {
       size += Buffer.byteLength(chunk, 'utf8');
       if (size > limitBytes) {
-        reject(new Error(`Request body exceeds ${limitBytes} byte limit`));
+        if (!limitExceeded) {
+          limitExceeded = true;
+          body = '';
+          reject(new Error(`Request body exceeds ${limitBytes} byte limit`));
+        }
+        req.resume();
         return;
       }
-      body += chunk;
+      if (!limitExceeded) {
+        body += chunk;
+      }
     });
     req.on('end', () => {
+      if (limitExceeded) return;
       try {
         resolve(body ? JSON.parse(body) : undefined);
       } catch (error) {
@@ -47,11 +59,17 @@ async function readJsonBody(
   });
 }
 
-function sendJson(res: ServerResponse, status: number, payload: unknown): void {
+function sendJson(
+  res: ServerResponse,
+  status: number,
+  payload: unknown,
+  extraHeaders: Record<string, string> = {},
+): void {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
     'content-type': 'application/json',
     'content-length': String(Buffer.byteLength(body)),
+    ...extraHeaders,
   });
   res.end(body);
 }
@@ -76,6 +94,64 @@ export interface IngressServerOptions {
   port?: number;
   bodySizeLimitBytes?: number;
   onTrace?: (trace: Trace) => void | Promise<void>;
+}
+
+function sanitizeErrorSummary(value: string): string {
+  return redactAndTruncateSensitiveText(value, MAX_ERROR_SUMMARY_LENGTH);
+}
+
+function makeProviderErrorEvent(
+  traceId: string,
+  provider: ProviderConfig,
+  model: string | undefined,
+  message: string,
+  metadata: Record<string, unknown> = {},
+): TraceEvent {
+  return createTraceEvent({
+    traceId,
+    type: 'provider_error',
+    contentPhase: 'observed',
+    actor: { role: 'provider' },
+    model,
+    provider: provider.id,
+    metadata: {
+      ...metadata,
+      message: sanitizeErrorSummary(message),
+    },
+  });
+}
+
+function assembleTrace(
+  traceId: string,
+  startedAt: string,
+  provider: ProviderConfig,
+  model: string | undefined,
+  status: Trace['status'],
+  events: TraceEvent[],
+): Trace {
+  return {
+    id: traceId,
+    startedAt,
+    endedAt: new Date().toISOString(),
+    provider: provider.id,
+    model: model ?? provider.defaultModel,
+    mode: 'standard',
+    capturePolicy: createDefaultCapturePolicy('standard'),
+    status,
+    events,
+    metadata: {
+      baseUrl: provider.baseUrl,
+    },
+  };
+}
+
+async function emitTrace(
+  onTrace: IngressServerOptions['onTrace'],
+  trace: Trace,
+): Promise<void> {
+  if (onTrace) {
+    await Promise.resolve(onTrace(trace));
+  }
 }
 
 async function handleChatCompletion(
@@ -122,24 +198,81 @@ async function handleChatCompletion(
 
   const requestEvents = setTraceId(openaiAdapter.normalizeRequest(requestBody, provider), traceId);
 
-  const upstream = await forwardToUpstream(provider, apiKey, requestBody);
+  let upstream;
+  try {
+    upstream = await forwardToUpstream(provider, apiKey, requestBody);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Upstream request failed';
+    const errorEvent = makeProviderErrorEvent(traceId, provider, model, message, {
+      errorType: 'upstream_request_error',
+    });
+    const trace = assembleTrace(traceId, startedAt, provider, model, 'error', [
+      ...requestEvents,
+      errorEvent,
+    ]);
+    await emitTrace(onTrace, trace);
+    sendJson(res, 502, {
+      error: {
+        message: 'Upstream request failed',
+        type: 'api_error',
+      },
+    }, { 'x-signalglass-trace-id': traceId });
+    return;
+  }
 
   if (upstream.status < 200 || upstream.status >= 300) {
-    const errorBody =
-      typeof upstream.body === 'object' && upstream.body !== null
-        ? upstream.body
-        : { error: { message: 'Upstream request failed', type: 'api_error' } };
-    sendJson(res, upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502, errorBody);
+    const errorEvent = makeProviderErrorEvent(
+      traceId,
+      provider,
+      model,
+      `Upstream returned HTTP ${upstream.status}`,
+      {
+        status: upstream.status,
+        errorType: 'upstream_non_2xx',
+      },
+    );
+    const trace = assembleTrace(traceId, startedAt, provider, model, 'error', [
+      ...requestEvents,
+      errorEvent,
+    ]);
+    await emitTrace(onTrace, trace);
+    sendJson(
+      res,
+      upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502,
+      {
+        error: {
+          message: 'Upstream request failed',
+          type: 'api_error',
+          upstreamStatus: upstream.status,
+        },
+      },
+      { 'x-signalglass-trace-id': traceId },
+    );
     return;
   }
 
   if (typeof upstream.body !== 'object' || upstream.body === null) {
+    const errorEvent = makeProviderErrorEvent(
+      traceId,
+      provider,
+      model,
+      'Upstream returned an invalid response body for /v1/chat/completions',
+      {
+        status: upstream.status,
+        errorType: 'upstream_invalid_body',
+      },
+    );
+    const trace = assembleTrace(traceId, startedAt, provider, model, 'error', [
+      ...requestEvents,
+      errorEvent,
+    ]);
+    await emitTrace(onTrace, trace);
     sendJson(res, 502, {
       error: {
         message: 'Upstream returned an invalid response body for /v1/chat/completions',
         type: 'api_error',
       },
-    });
+    }, { 'x-signalglass-trace-id': traceId });
     return;
   }
 
@@ -147,26 +280,9 @@ async function handleChatCompletion(
 
   const allEvents = [...requestEvents, ...responseEvents];
 
-  const trace: Trace = {
-    id: traceId,
-    startedAt,
-    endedAt: new Date().toISOString(),
-    provider: provider.id,
-    model: model ?? provider.defaultModel,
-    mode: 'standard',
-    capturePolicy: createDefaultCapturePolicy('standard'),
-    status: 'success',
-    events: allEvents,
-    metadata: {
-      baseUrl: provider.baseUrl,
-    },
-  };
+  const trace = assembleTrace(traceId, startedAt, provider, model, 'success', allEvents);
 
-  // The trace is assembled but not persisted; storage is Spec 007.
-  // The optional onTrace seam lets callers observe the trace without persistence.
-  if (onTrace) {
-    await Promise.resolve(onTrace(trace));
-  }
+  await emitTrace(onTrace, trace);
 
   const clientResponse = upstream.body;
   const body = JSON.stringify(clientResponse);

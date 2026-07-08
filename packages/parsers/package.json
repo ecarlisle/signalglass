@@ -2,7 +2,7 @@
   "name": "@signalglass/parsers",
   "version": "0.0.1",
   "type": "module",
-  "description": "Parsers that convert external run formats into Signalglass normalized runs.",
+  "description": "Parsers that convert external run formats into SignalGlass normalized runs.",
   "exports": {
     ".": {
       "import": "./dist/index.js",
