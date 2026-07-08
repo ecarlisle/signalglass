@@ -1,4 +1,4 @@
-import type { Trace } from '@signalglass/core';
+import type { RedactSensitiveTextOptions, Trace } from '@signalglass/core';
 import {
   computeTokenMetrics,
   collectRoutingDecisions,
@@ -19,17 +19,18 @@ export interface ListSummaryRow {
 }
 
 export function buildListSummary(trace: Trace): ListSummaryRow {
+  const redactOptions = redactionOptions(trace);
   const events = trace.events ?? [];
   const tokenMetrics = computeTokenMetrics(events);
-  const excerpts = collectRedactedExcerpts(events);
+  const excerpts = collectRedactedExcerpts(events, redactOptions);
 
-  const routingDecisions = collectRoutingDecisions(events);
+  const routingDecisions = collectRoutingDecisions(events, redactOptions);
 
   return {
-    id: safe(trace.id),
-    status: safe(trace.status),
-    provider: safe(trace.provider ?? 'unknown'),
-    model: safe(trace.model ?? 'unknown'),
+    id: safe(trace.id, redactOptions),
+    status: safe(trace.status, redactOptions),
+    provider: safe(trace.provider ?? 'unknown', redactOptions),
+    model: safe(trace.model ?? 'unknown', redactOptions),
     events: events.length,
     routingDecisions,
     excerptCount: excerpts.length,
@@ -52,12 +53,13 @@ export function renderTraceListSummary(traces: Trace[]): string {
   lines.push(formatRow(widths.map((w) => '─'.repeat(w)), widths));
 
   for (const trace of traces) {
-    const id = truncate(safe(trace.id), widths[0]);
-    const status = safe(trace.status);
-    const provider = truncate(safe(trace.provider ?? '—'), widths[2]);
-    const model = truncate(safe(trace.model ?? '—'), widths[3]);
+    const redactOptions = redactionOptions(trace);
+    const id = truncate(safe(trace.id, redactOptions), widths[0]);
+    const status = safe(trace.status, redactOptions);
+    const provider = truncate(safe(trace.provider ?? '—', redactOptions), widths[2]);
+    const model = truncate(safe(trace.model ?? '—', redactOptions), widths[3]);
     const events = String(trace.events?.length ?? 0);
-    const started = truncate(safe(trace.startedAt), widths[5]);
+    const started = truncate(safe(trace.startedAt, redactOptions), widths[5]);
 
     lines.push(formatRow([id, status, provider, model, events, started], widths));
   }
@@ -70,19 +72,20 @@ export function renderTraceListSummary(traces: Trace[]): string {
 
 export function renderTraceListJson(traces: Trace[]): string {
   const summaries = traces.map((trace) => {
+    const redactOptions = redactionOptions(trace);
     const events = trace.events ?? [];
     const tokenMetrics = computeTokenMetrics(events);
 
     return {
-      id: safe(trace.id),
-      status: safe(trace.status),
-      provider: trace.provider ? safe(trace.provider) : null,
-      model: trace.model ? safe(trace.model) : null,
-      agent: trace.agent ? safe(trace.agent) : null,
-      task: trace.task ? safe(trace.task) : null,
-      mode: safe(trace.mode),
-      startedAt: safe(trace.startedAt),
-      endedAt: trace.endedAt ? safe(trace.endedAt) : null,
+      id: safe(trace.id, redactOptions),
+      status: safe(trace.status, redactOptions),
+      provider: trace.provider ? safe(trace.provider, redactOptions) : null,
+      model: trace.model ? safe(trace.model, redactOptions) : null,
+      agent: trace.agent ? safe(trace.agent, redactOptions) : null,
+      task: trace.task ? safe(trace.task, redactOptions) : null,
+      mode: safe(trace.mode, redactOptions),
+      startedAt: safe(trace.startedAt, redactOptions),
+      endedAt: trace.endedAt ? safe(trace.endedAt, redactOptions) : null,
       eventCount: events.length,
       tokenMetrics,
     };
@@ -100,6 +103,12 @@ function truncate(text: string, maxLen: number): string {
   return text.slice(0, maxLen - 1) + '\u2026';
 }
 
-function safe(text: string): string {
-  return sanitizeReportString(text);
+function safe(text: string, options?: RedactSensitiveTextOptions): string {
+  return sanitizeReportString(text, options);
+}
+
+function redactionOptions(trace: Trace): RedactSensitiveTextOptions | undefined {
+  return trace.capturePolicy?.redaction?.secretPatterns
+    ? { secretPatterns: trace.capturePolicy.redaction.secretPatterns }
+    : undefined;
 }

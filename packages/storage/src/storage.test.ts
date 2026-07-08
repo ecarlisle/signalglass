@@ -391,6 +391,50 @@ describe('TraceStorage', () => {
       expect(storedExcerpt.length).toBeLessThanOrEqual(20);
     });
 
+    it('should apply custom secret patterns to event-level string fields before storage', () => {
+      const trace = createTestTrace({
+        mode: 'standard',
+        capturePolicy: createDefaultPolicy({
+          mode: 'standard',
+          storeRoutingDecisions: true,
+          storeTransformationSummaries: true,
+          storeShortRedactedExcerpts: true,
+          redaction: {
+            maxExcerptLength: 240,
+            secretPatterns: ['internal-secret-[0-9]+'],
+            stripHeaders: ['authorization', 'x-api-key'],
+          },
+        }),
+        events: [
+          {
+            id: 'event-1',
+            traceId: 'test-trace-1',
+            timestamp: '2024-01-01T00:00:00Z',
+            type: 'message',
+            contentPhase: 'said',
+            routingDecision: 'route: internal-secret-99',
+            transformationSummary: 'transformed internal-secret-42',
+            payloadRef: {
+              id: 'payload-1',
+              excerpt: 'excerpt with internal-secret-77',
+              redacted: true,
+            },
+          },
+        ],
+      });
+
+      storage.saveTrace(trace);
+      const retrieved = storage.getTrace('test-trace-1');
+      const event = retrieved!.events[0];
+
+      expect(event.routingDecision).not.toContain('internal-secret-99');
+      expect(event.transformationSummary).not.toContain('internal-secret-42');
+      expect(event.payloadRef!.excerpt).not.toContain('internal-secret-77');
+      expect(event.routingDecision).toContain('[REDACTED]');
+      expect(event.transformationSummary).toContain('[REDACTED]');
+      expect(event.payloadRef!.excerpt).toContain('[REDACTED]');
+    });
+
     it('should drop unredacted excerpts in standard mode', () => {
       const trace = createTestTrace({
         mode: 'standard',

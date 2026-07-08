@@ -34,6 +34,15 @@ export function sanitizeTraceForStorage(trace: Trace): Trace {
 
 function sanitizeEvent(event: TraceEvent, policy: CapturePolicy): TraceEvent {
   const sanitized: TraceEvent = { ...event };
+  const opts = redactionOptions(policy);
+
+  // Sanitize top-level string fields that may contain secrets
+  if (sanitized.routingDecision) {
+    sanitized.routingDecision = redactSensitiveText(sanitized.routingDecision, opts);
+  }
+  if (sanitized.transformationSummary) {
+    sanitized.transformationSummary = redactSensitiveText(sanitized.transformationSummary, opts);
+  }
 
   // Always strip sensitive data from metadata
   if (event.metadata) {

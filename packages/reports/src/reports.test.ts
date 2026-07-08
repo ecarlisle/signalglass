@@ -447,6 +447,80 @@ describe('trace report formatters', () => {
     const parsed = JSON.parse(json);
     expect(parsed.excerpts).toBeUndefined();
   });
+
+  it('applies custom secret patterns from trace capture policy to all report outputs', () => {
+    const traceWithCustomPattern: Trace = {
+      ...sampleTrace,
+      id: 'id-internal-secret-88',
+      capturePolicy: {
+        ...sampleTrace.capturePolicy,
+        redaction: { maxExcerptLength: 240, secretPatterns: ['internal-secret-[0-9]+'], stripHeaders: ['authorization', 'x-api-key'] },
+      },
+      task: 'internal-secret-123-task',
+      events: [
+        ...sampleTrace.events,
+        {
+          id: 'evt-custom-route',
+          traceId: 'id-internal-secret-88',
+          timestamp: '2025-01-01T00:00:05.000Z',
+          type: 'provider_request',
+          contentPhase: 'sent',
+          routingDecision: 'route: internal-secret-99',
+          transformationSummary: 'transformed internal-secret-42',
+          payloadRef: {
+            id: 'payload-custom',
+            redacted: true,
+            excerpt: 'excerpt internal-secret-77',
+          },
+        },
+      ],
+    };
+
+    // Terminal detail report
+    const terminal = renderTraceTerminal(traceWithCustomPattern);
+    expect(terminal).not.toContain('internal-secret-123-task');
+    expect(terminal).not.toContain('internal-secret-99');
+    expect(terminal).not.toContain('internal-secret-42');
+    expect(terminal).not.toContain('internal-secret-77');
+    expect(terminal).not.toContain('id-internal-secret-88');
+    expect(terminal).toContain('[REDACTED]');
+
+    // JSON detail report
+    const jsonOutput = renderTraceJson(traceWithCustomPattern);
+    expect(jsonOutput).not.toContain('internal-secret-123-task');
+    expect(jsonOutput).not.toContain('internal-secret-99');
+    expect(jsonOutput).not.toContain('internal-secret-42');
+    expect(jsonOutput).not.toContain('internal-secret-77');
+    expect(jsonOutput).not.toContain('id-internal-secret-88');
+    expect(jsonOutput).toContain('[REDACTED]');
+
+    // HTML detail report
+    const html = renderTraceHtml(traceWithCustomPattern);
+    expect(html).not.toContain('internal-secret-123-task');
+    expect(html).not.toContain('internal-secret-99');
+    expect(html).not.toContain('internal-secret-42');
+    expect(html).not.toContain('internal-secret-77');
+    expect(html).not.toContain('id-internal-secret-88');
+    expect(html).toContain('[REDACTED]');
+
+    // Trace list terminal (includes id, status, provider, model)
+    const listTerminal = renderTraceListSummary([traceWithCustomPattern]);
+    expect(listTerminal).not.toContain('internal-secret-123-task');
+    expect(listTerminal).not.toContain('internal-secret-99');
+    expect(listTerminal).not.toContain('internal-secret-42');
+    expect(listTerminal).not.toContain('internal-secret-77');
+    expect(listTerminal).not.toContain('id-internal-secret-88');
+    expect(listTerminal).toContain('[REDACTED]');
+
+    // Trace list JSON (includes task, id, model, provider)
+    const listJson = renderTraceListJson([traceWithCustomPattern]);
+    expect(listJson).not.toContain('internal-secret-123-task');
+    expect(listJson).not.toContain('internal-secret-99');
+    expect(listJson).not.toContain('internal-secret-42');
+    expect(listJson).not.toContain('internal-secret-77');
+    expect(listJson).not.toContain('id-internal-secret-88');
+    expect(listJson).toContain('[REDACTED]');
+  });
 });
 
 describe('trace list summary', () => {

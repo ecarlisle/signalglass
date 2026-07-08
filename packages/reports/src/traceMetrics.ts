@@ -1,4 +1,4 @@
-import type { TraceEvent } from '@signalglass/core';
+import type { TraceEvent, RedactSensitiveTextOptions } from '@signalglass/core';
 import { sanitizeReportString } from './sanitize.js';
 
 export interface TokenMetrics {
@@ -105,33 +105,42 @@ export function groupEventsByContentPhase(events: TraceEvent[]): ContentPhaseGro
     .sort((a, b) => b.count - a.count);
 }
 
-export function collectRoutingDecisions(events: TraceEvent[]): string[] {
+export function collectRoutingDecisions(
+  events: TraceEvent[],
+  options?: RedactSensitiveTextOptions,
+): string[] {
   const decisions: string[] = [];
   for (const e of events) {
     if (e.routingDecision) {
-      decisions.push(sanitizeReportString(e.routingDecision));
+      decisions.push(sanitizeReportString(e.routingDecision, options));
     }
   }
   return decisions;
 }
 
-export function collectTransformationSummaries(events: TraceEvent[]): string[] {
+export function collectTransformationSummaries(
+  events: TraceEvent[],
+  options?: RedactSensitiveTextOptions,
+): string[] {
   const summaries: string[] = [];
   for (const e of events) {
     if (e.transformationSummary) {
-      summaries.push(sanitizeReportString(e.transformationSummary));
+      summaries.push(sanitizeReportString(e.transformationSummary, options));
     }
   }
   return summaries;
 }
 
-export function collectRedactedExcerpts(events: TraceEvent[]): ExcerptEntry[] {
+export function collectRedactedExcerpts(
+  events: TraceEvent[],
+  options?: RedactSensitiveTextOptions,
+): ExcerptEntry[] {
   const excerpts: ExcerptEntry[] = [];
   for (const e of events) {
     if (e.payloadRef?.excerpt && e.payloadRef.redacted) {
       excerpts.push({
-        eventType: sanitizeReportString(e.type),
-        text: sanitizeReportString(e.payloadRef.excerpt),
+        eventType: sanitizeReportString(e.type, options),
+        text: sanitizeReportString(e.payloadRef.excerpt, options),
       });
     }
   }

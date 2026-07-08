@@ -1,4 +1,4 @@
-import type { Trace } from '@signalglass/core';
+import type { RedactSensitiveTextOptions, Trace } from '@signalglass/core';
 import {
   computeTokenMetrics,
   groupEventsByType,
@@ -10,26 +10,27 @@ import {
 import { sanitizeReportString } from './sanitize.js';
 
 export function renderTraceTerminal(trace: Trace): string {
+  const redactOptions = redactionOptions(trace);
   const lines: string[] = [];
   const events = trace.events ?? [];
   const tokenMetrics = computeTokenMetrics(events);
 
   lines.push('Signalglass trace report');
   lines.push('');
-  lines.push(`  Trace ID:    ${safe(trace.id)}`);
-  lines.push(`  Status:      ${safe(trace.status)}`);
-  lines.push(`  Provider:    ${safe(trace.provider ?? 'unknown')}`);
-  lines.push(`  Model:       ${safe(trace.model ?? 'unknown')}`);
-  lines.push(`  Mode:        ${safe(trace.mode)}`);
-  lines.push(`  Started:     ${safe(trace.startedAt)}`);
+  lines.push(`  Trace ID:    ${safe(trace.id, redactOptions)}`);
+  lines.push(`  Status:      ${safe(trace.status, redactOptions)}`);
+  lines.push(`  Provider:    ${safe(trace.provider ?? 'unknown', redactOptions)}`);
+  lines.push(`  Model:       ${safe(trace.model ?? 'unknown', redactOptions)}`);
+  lines.push(`  Mode:        ${safe(trace.mode, redactOptions)}`);
+  lines.push(`  Started:     ${safe(trace.startedAt, redactOptions)}`);
   if (trace.endedAt) {
-    lines.push(`  Ended:       ${safe(trace.endedAt)}`);
+    lines.push(`  Ended:       ${safe(trace.endedAt, redactOptions)}`);
   }
   if (trace.agent) {
-    lines.push(`  Agent:       ${safe(trace.agent)}`);
+    lines.push(`  Agent:       ${safe(trace.agent, redactOptions)}`);
   }
   if (trace.task) {
-    lines.push(`  Task:        ${safe(trace.task)}`);
+    lines.push(`  Task:        ${safe(trace.task, redactOptions)}`);
   }
 
   lines.push(`  Events:      ${events.length}`);
@@ -65,7 +66,7 @@ export function renderTraceTerminal(trace: Trace): string {
   }
 
   // Routing decisions
-  const routingDecisions = collectRoutingDecisions(events);
+  const routingDecisions = collectRoutingDecisions(events, redactOptions);
   if (routingDecisions.length > 0) {
     lines.push('');
     lines.push('Routing decisions');
@@ -75,7 +76,7 @@ export function renderTraceTerminal(trace: Trace): string {
   }
 
   // Transformation summaries
-  const transformations = collectTransformationSummaries(events);
+  const transformations = collectTransformationSummaries(events, redactOptions);
   if (transformations.length > 0) {
     lines.push('');
     lines.push('Transformation summaries');
@@ -85,7 +86,7 @@ export function renderTraceTerminal(trace: Trace): string {
   }
 
   // Redacted excerpts (only when present)
-  const excerpts = collectRedactedExcerpts(events);
+  const excerpts = collectRedactedExcerpts(events, redactOptions);
   if (excerpts.length > 0) {
     lines.push('');
     lines.push('Content excerpts (redacted)');
@@ -106,6 +107,12 @@ function pad(text: string, width: number): string {
   return text.length >= width ? text : text + ' '.repeat(width - text.length);
 }
 
-function safe(text: string): string {
-  return sanitizeReportString(text);
+function safe(text: string, options?: RedactSensitiveTextOptions): string {
+  return sanitizeReportString(text, options);
+}
+
+function redactionOptions(trace: Trace): RedactSensitiveTextOptions | undefined {
+  return trace.capturePolicy?.redaction?.secretPatterns
+    ? { secretPatterns: trace.capturePolicy.redaction.secretPatterns }
+    : undefined;
 }

@@ -1,4 +1,4 @@
-import type { Trace } from '@signalglass/core';
+import type { RedactSensitiveTextOptions, Trace } from '@signalglass/core';
 import {
   computeTokenMetrics,
   groupEventsByType,
@@ -10,24 +10,25 @@ import {
 import { sanitizeReportString } from './sanitize.js';
 
 export function renderTraceHtml(trace: Trace): string {
+  const redactOptions = redactionOptions(trace);
   const events = trace.events ?? [];
   const tokenMetrics = computeTokenMetrics(events);
   const typeGroups = groupEventsByType(events);
   const phaseGroups = groupEventsByContentPhase(events);
-  const routingDecisions = collectRoutingDecisions(events);
-  const transformations = collectTransformationSummaries(events);
-  const excerpts = collectRedactedExcerpts(events);
+  const routingDecisions = collectRoutingDecisions(events, redactOptions);
+  const transformations = collectTransformationSummaries(events, redactOptions);
+  const excerpts = collectRedactedExcerpts(events, redactOptions);
 
   const rows = [
-    renderRow('Trace ID', safe(trace.id)),
-    renderRow('Status', safe(trace.status)),
-    renderRow('Provider', safe(trace.provider ?? 'unknown')),
-    renderRow('Model', safe(trace.model ?? 'unknown')),
-    renderRow('Mode', safe(trace.mode)),
-    renderRow('Started', safe(trace.startedAt)),
-    renderRow('Ended', trace.endedAt ? safe(trace.endedAt) : '—'),
-    renderRow('Agent', trace.agent ? safe(trace.agent) : '—'),
-    renderRow('Task', trace.task ? safe(trace.task) : '—'),
+    renderRow('Trace ID', safe(trace.id, redactOptions)),
+    renderRow('Status', safe(trace.status, redactOptions)),
+    renderRow('Provider', safe(trace.provider ?? 'unknown', redactOptions)),
+    renderRow('Model', safe(trace.model ?? 'unknown', redactOptions)),
+    renderRow('Mode', safe(trace.mode, redactOptions)),
+    renderRow('Started', safe(trace.startedAt, redactOptions)),
+    renderRow('Ended', trace.endedAt ? safe(trace.endedAt, redactOptions) : '—'),
+    renderRow('Agent', trace.agent ? safe(trace.agent, redactOptions) : '—'),
+    renderRow('Task', trace.task ? safe(trace.task, redactOptions) : '—'),
     renderRow('Events', String(events.length)),
   ];
 
@@ -65,7 +66,7 @@ export function renderTraceHtml(trace: Trace): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Signalglass Trace Report — ${escapeHtml(safe(trace.id))}</title>
+<title>Signalglass Trace Report — ${escapeHtml(safe(trace.id, redactOptions))}</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
   h1 { border-bottom: 2px solid #ddd; padding-bottom: 0.5rem; }
@@ -133,8 +134,8 @@ function renderRow(label: string, value: string): string {
   return `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`;
 }
 
-function safe(text: string): string {
-  return sanitizeReportString(text);
+function safe(text: string, options?: RedactSensitiveTextOptions): string {
+  return sanitizeReportString(text, options);
 }
 
 function escapeHtml(text: string): string {
@@ -144,4 +145,10 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function redactionOptions(trace: Trace): RedactSensitiveTextOptions | undefined {
+  return trace.capturePolicy?.redaction?.secretPatterns
+    ? { secretPatterns: trace.capturePolicy.redaction.secretPatterns }
+    : undefined;
 }
