@@ -465,7 +465,7 @@ describe('loadConfig', () => {
     await unlink(path);
   });
 
-  it('rejects an empty providers array', async () => {
+  it('accepts an empty providers array', async () => {
     const path = join(tmpdir(), `signalglass-ingress-config-${Date.now()}.json`);
     await writeFile(path, JSON.stringify({ providers: [] }));
 
