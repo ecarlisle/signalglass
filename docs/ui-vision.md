@@ -4,6 +4,8 @@ The Signalglass web UI is an **interactive educational report**. It helps develo
 
 This document describes the planned sections. The current dashboard is intentionally minimal; it exists to validate the data model and leave a clear path for these concepts.
 
+Signalglass supports two modes: **Offline Run Analysis** and **Live Ingress Observability**. The dashboard will eventually visualize both.
+
 ## Planned sections
 
 ### Run Summary
@@ -86,6 +88,65 @@ Intended content:
 - Highlight meaningful differences
 
 Educational purpose: answer questions like “Which model solved this task with less noise?” and “Did the cheaper model miss important context?”
+
+## Trace View
+
+An event-level timeline of a live provider exchange.
+
+Intended content:
+- Request received, normalized, routed, and sent upstream.
+- Response chunks and final response.
+- Tool calls, tool results, transformations, and errors.
+
+Educational purpose: prove what happened at each step of the ingress pipeline.
+
+## Payload View
+
+A structured inspection of request and response payloads.
+
+Intended content:
+- Provider-native shapes vs. internal normalized shapes.
+- Diffs between `sent`, `transformed`, and `returned` content.
+- Redacted excerpts by default; full payloads only when the capture policy allows.
+
+Educational purpose: help developers understand how provider formats map to Signalglass events.
+
+## Story View
+
+A narrative summary of a run or trace.
+
+Intended content:
+- What the agent asked for.
+- What the model returned.
+- What context dominated the run.
+- Which smells and recommendations apply and why.
+
+Educational purpose: turn low-level events into a human-readable explanation.
+
+## Savings Lens
+
+A view that separates realized savings from opportunities.
+
+Intended content:
+- **Realized savings** — tokens already saved by Signalglass or the user.
+- **Opportunities** — potentially correctable patterns with estimated token savings.
+- **Recommendations** — actions the user can choose to take.
+
+Educational purpose: bridge observation and action while keeping the human in control.
+
+## Content phase labeling
+
+Across all views, the UI should label content by phase when relevant:
+
+- said
+- sent
+- transformed
+- requested
+- observed
+- generated
+- returned
+
+This helps users understand where context changed and why.
 
 ## Design notes
 

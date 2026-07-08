@@ -19,10 +19,12 @@ Until `v1.0.0`, Signalglass is considered early and exploratory. The public API 
 
 The following are considered public and will be kept stable once documented:
 
-- The CLI command structure (`signalglass analyze ...`).
+- The CLI command structure (`signalglass analyze ...`, `signalglass ingress ...`).
 - The report contract (fields present in JSON and HTML reports).
 - The normalized `AgentRun` schema and source-type enum.
+- The `Trace` and `TraceEvent` schema.
 - The parser adapter interface (input → normalized run).
+- The provider adapter interface and `ProviderConfig` schema.
 
 Internal implementation details, heuristic thresholds, and exact report formatting may change more freely.
 

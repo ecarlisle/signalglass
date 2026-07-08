@@ -20,7 +20,7 @@ Each option has trade-offs. A proxy gives the most data but couples the product 
 
 Signalglass will begin as an **observability and reporting tool**.
 
-Specifically:
+Specifically for the initial scaffold:
 
 - Signalglass will **not** start as a proxy.
 - Signalglass will **not** start as an automatic compressor.
@@ -30,6 +30,10 @@ Specifically:
 The first goal is to answer: **“What did the agent send to the model, and what can we learn from it?”**
 
 Optimization features, if added later, will be built on top of this observability foundation and will keep the human in the loop.
+
+## Amendment
+
+ADR 0002 added a second mode: **Live Ingress Observability**. The proxy is still observability-first and does not automatically rewrite context. The initial decision to avoid provider-specific gateways is preserved through the provider adapter architecture in ADR 0003.
 
 ## Consequences
 

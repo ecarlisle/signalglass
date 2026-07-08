@@ -27,6 +27,33 @@ Text produced by an external tool invoked by the agent, such as a build log, tes
 ## Signal
 Useful information extracted from an agent run. Signal categories include cost, relevance, behavior, comparison, and education.
 
+## Offline Run Analysis
+The first Signalglass mode. Users analyze captured agent runs from JSON or parser inputs.
+
+## Live Ingress Observability
+The second Signalglass mode. Signalglass acts as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and optimization opportunities as they happen.
+
+## Trace
+A live-captured session representing a complete provider exchange. A trace can be converted into an `AgentRun` for offline-style analysis.
+
+## TraceEvent
+A single event in a trace, such as `request_received`, `provider_request_sent`, or `provider_response_complete`.
+
+## Content phase
+A label describing the role of content in an exchange: said, sent, transformed, requested, observed, generated, or returned.
+
+## Provider adapter
+A module that translates between a provider-native request/response format and the internal Signalglass trace model.
+
+## ProviderKind
+The type of provider adapter: `openai-compatible`, `anthropic`, `gemini`, `ollama`, or `custom`.
+
+## Savings opportunity
+A potentially correctable pattern with an estimated token savings and confidence. Distinct from realized savings and recommendations.
+
+## Realized savings
+Tokens already saved by Signalglass or the user, as opposed to opportunities that remain available.
+
 ## Evidence drawer
 A planned UI surface that shows the raw blocks, turns, and token counts behind a specific finding. It helps users verify claims and learn from source data.
 

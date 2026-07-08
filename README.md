@@ -6,18 +6,26 @@ Signalglass helps developers inspect what context AI coding agents send to model
 
 Signalglass educates as it observes. Its core offering is **signal**, not automatic optimization.
 
+## Two complementary modes
+
+1. **Offline Run Analysis** — analyze captured agent runs from JSON or parser inputs.
+2. **Live Ingress Observability** — act as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and optimization opportunities.
+
+Both modes share the same internal domain model. A live trace can be converted into an `AgentRun` so the existing analyzer, smells, recommendations, and reports can be reused.
+
 ## What it is
 
 - An analyzer and reporting tool for saved agent-run data.
+- A live ingress observability layer (starting with OpenAI-compatible proxy support).
 - A way to answer: **“What did the agent send to the model, and what can we learn from it?”**
 - A source of SIGNAL: cost, relevance, behavior, comparison, and education.
 - Every finding should explain what happened, why it matters, what evidence supports it, and what to inspect or try next.
 
 ## What it is not (yet)
 
-- A proxy between your agent and a model provider.
 - An automatic optimizer that rewrites context for you.
-- A provider-specific integration.
+- A provider-specific integration beyond adapters.
+- A system that stores full raw payloads or API keys by default.
 
 ## Quick start
 
@@ -33,12 +41,15 @@ pnpm --filter @signalglass/cli dev -- analyze samples/messy-agent-run.json
 ```
 signalglass/
 ├── apps/
-│   └── dashboard/          # Vite + React report viewer
+│   ├── dashboard/          # Vite + React report viewer (future Observatory UI)
+│   └── ingress/            # OpenAI-compatible ingress server (planned)
 ├── packages/
 │   ├── cli/                # CLI entrypoint
-│   ├── core/               # Domain models, token estimation, analysis, smells
-│   ├── parsers/            # Input format parsers (Signalglass JSON + OpenCode placeholder)
-│   └── reports/            # Terminal, JSON, and static HTML report formatters
+│   ├── core/               # Domain models, token estimation, analysis, smells, trace model
+│   ├── parsers/            # Offline format parsers (Signalglass JSON + OpenCode placeholder)
+│   ├── providers/          # Provider adapters (planned: openai, anthropic, gemini, ollama, custom)
+│   ├── reports/            # Terminal, JSON, and static HTML report formatters
+│   └── storage/            # SQLite persistence for traces/events (planned)
 ├── samples/                # Example agent-run files
 ├── docs/                   # Principles, architecture, roadmap, report contract, glossary, ADRs
 ├── README.md
@@ -56,7 +67,12 @@ pnpm --filter @signalglass/cli dev -- analyze samples/messy-agent-run.json --rep
 
 # Static HTML report
 pnpm --filter @signalglass/cli dev -- analyze samples/messy-agent-run.json --report html --output report.html
+
+# Live ingress (planned)
+signalglass ingress --config signalglass.config.json --port 8080
 ```
+
+See `docs/ingress.md`, `docs/provider-config.md`, and `docs/privacy.md` for details on live ingress.
 
 ## Token counts are approximate
 

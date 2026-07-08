@@ -2,6 +2,8 @@
 
 Every Signalglass report — whether terminal, JSON, or static HTML — must contain the following information. Formatting may vary by output type, but the data and meaning must be present.
 
+Reports may be produced from an offline `AgentRun` or from a live `Trace`. Both sources produce the same core contract. Live-specific reports (Trace View, Payload View) add optional sections on top of this contract.
+
 ## 1. Run metadata
 
 - `runId` — stable identifier for the run.
@@ -88,8 +90,74 @@ Reports must make it possible to trace every smell and recommendation back to ra
 
 Reports must clearly state that token counts are approximate. Signalglass does not claim to match any model tokenizer until a real tokenizer is wired in.
 
+## 11. Trace and timeline events (live mode)
+
+When a report is produced from a live trace, it should include:
+
+- `traceId`, `startedAt`, `providerId`, `model`.
+- A list of `TraceEvent` objects with `kind`, `timestamp`, `contentPhase`, `sourceType`, and `excerpt`.
+- Routing decisions (which provider and model were selected).
+- Transformation summaries.
+
+## 12. Payload references
+
+Payload View and trace reports may reference stored payloads. By default, reports must not inline full raw payloads. They may include:
+
+- `payloadRef` — a reference to a stored payload, if the capture policy allows it.
+- `excerpt` — a short redacted excerpt.
+- A clear note when content has been redacted.
+
+## 13. Savings and opportunities
+
+Reports that include the Savings Lens must separate:
+
+- **Realized savings** — tokens already saved by Signalglass or the user.
+- **Opportunities** — potentially correctable patterns with estimated savings and confidence.
+- **Recommendations** — actions the user can choose to take.
+
+Future additions to `ContextSmell` and `Recommendation` may include:
+
+```ts
+// ContextSmell
+contentPhase?: ContentPhase;
+traceEventIds?: string[];
+savingsOpportunity?: SavingsOpportunity;
+
+// Recommendation
+potentialSavings?: number;
+automationStatus?: "manual" | "preview" | "assisted";
+traceEventIds?: string[];
+```
+
+## 14. Content phases
+
+Reports should preserve the distinction between:
+
+- `said`
+- `sent`
+- `transformed`
+- `requested`
+- `observed`
+- `generated`
+- `returned`
+
+When a report presents content, it should label which phase it represents.
+
+## 15. Privacy and redaction disclaimers
+
+Reports must state:
+
+- Whether token counts are approximate.
+- Whether full payloads, tool results, or secrets were stored.
+- That API keys are never stored in reports or traces.
+- When excerpts are redacted.
+
 ## Output formats
 
 - **Terminal** — human-readable, compact, suitable for quick inspection.
 - **JSON** — full normalized analysis result, suitable for tooling and storage.
 - **HTML** — static, self-contained, educational report suitable for sharing.
+- **Trace View** — interactive event timeline (future dashboard view).
+- **Payload View** — structured request/response inspection (future dashboard view).
+- **Story View** — narrative summary (future dashboard view).
+- **Savings Lens** — realized savings vs. opportunities (future dashboard view).

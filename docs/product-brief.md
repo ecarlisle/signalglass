@@ -12,13 +12,20 @@ The primary question Signalglass answers is:
 
 Signalglass educates as it observes. Every finding should help the user understand how agent context works.
 
+## Two complementary modes
+
+1. **Offline Run Analysis** — analyze captured agent runs from JSON or parser inputs.
+2. **Live Ingress Observability** — act as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and optimization opportunities.
+
+Both modes share the same internal model. A live trace can be converted into an `AgentRun` so the existing analyzer can be reused.
+
 ## What Signalglass is not
 
-- It is not a proxy that sits between an agent and a model provider.
 - It is not an automatic optimizer that rewrites context for you.
-- It is not a provider-specific integration.
+- It is not a provider-specific integration beyond adapters.
+- It is not a system that stores full raw payloads or API keys by default.
 
-The first milestone is an analyzer and reporting tool, not an optimizer. Optimization recommendations are advisory. The human decides what to change.
+The first milestone is an analyzer and reporting tool. Live ingress is added as a second mode, still observability-first. Optimization recommendations are advisory. The human decides what to change.
 
 ## Why observability comes before optimization
 
