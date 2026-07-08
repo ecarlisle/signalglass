@@ -38,7 +38,7 @@ The getting-started flow assumes `signalglass.config.json` exists, but a fresh c
 
 **Fix applied:**
 
-- Added `allowBuilds` for `better-sqlite3` and `esbuild` in `pnpm-workspace.yaml`.
+- Added `onlyBuiltDependencies` for `better-sqlite3` and `esbuild` in `pnpm-workspace.yaml`.
 - Added troubleshooting steps in `docs/getting-started.md` covering `pnpm approve-builds` and `pnpm rebuild`.
 
 ### 3. Commands should be run from the repo root

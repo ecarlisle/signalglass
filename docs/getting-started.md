@@ -245,9 +245,9 @@ pnpm rebuild better-sqlite3 esbuild
 Alternatively, add the packages to `pnpm-workspace.yaml`:
 
 ```yaml
-allowBuilds:
-  better-sqlite3: true
-  esbuild: true
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
 ```
 
 Do not blindly approve dependency scripts in an untrusted checkout. Review the lockfile and dependency source first.
