@@ -34,7 +34,7 @@ Provide a single directory of implementation specifications for Signalglass. Eac
 | [001](001-workspace.md) | Workspace and package layout | Accepted |
 | [002](002-core-domain.md) | Core domain model | Implemented |
 | [003](003-offline-analysis.md) | Offline Run Analysis | Implemented |
-| [004](004-trace-model.md) | Trace and timeline model | Implemented (types), Accepted (behavior) |
+| [004](004-trace-model.md) | Trace and timeline model | Implemented |
 | [005](005-provider-adapters.md) | Provider adapters | Implemented (OpenAI-compatible), Draft (others) |
 | [006](006-ingress-openai-compatible.md) | OpenAI-compatible ingress | Accepted |
 | [007](007-storage-and-privacy.md) | Storage and privacy | Draft |
