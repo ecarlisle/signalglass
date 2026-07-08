@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { parseSignalglassJson } from '@signalglass/parsers';
 import { analyzeRun } from '@signalglass/core';
 import type { Trace } from '@signalglass/core';
-import { renderTerminal, renderJson, renderHtml } from '@signalglass/reports';
+import { renderTerminal, renderJson, renderHtml, renderTraceTerminal, renderTraceJson, renderTraceHtml, renderTraceListSummary, renderTraceListJson } from '@signalglass/reports';
 import { loadConfig, startIngressServer } from '@signalglass/ingress';
 import { TraceStorage } from '@signalglass/storage';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,11 +17,19 @@ function printIngressUsage() {
   console.error('Usage: signalglass ingress --config <file> [--port <port>] [--storage <path>]');
 }
 
+function printTracesUsage() {
+  console.error('Usage: signalglass traces --storage <path> <command> [options]');
+  console.error('Commands:');
+  console.error('  list                                     List all stored traces');
+  console.error('  show <trace-id> [--report terminal|json|html] [--output <file>]');
+}
+
 function printUsage() {
   console.error('Usage: signalglass <command> [options]');
   console.error('Commands:');
   console.error('  analyze <file> [--report terminal|json|html] [--output <file>]');
   console.error('  ingress --config <file> [--port <port>] [--storage <path>]');
+  console.error('  traces --storage <path> list|show <trace-id>');
 }
 
 function analyzeCommand(args: string[]) {
@@ -162,6 +170,104 @@ async function ingressCommand(args: string[]) {
   process.on('SIGTERM', shutdown);
 }
 
+function tracesCommand(args: string[]) {
+  const { positionals, values } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      storage: { type: 'string' },
+      report: { type: 'string', default: 'terminal' },
+      output: { type: 'string', short: 'o' },
+    },
+  });
+
+  if (!values.storage) {
+    console.error('Error: --storage <path> is required for trace commands');
+    printTracesUsage();
+    process.exit(1);
+  }
+
+  const subcommand = positionals[0];
+
+  if (!subcommand) {
+    console.error('Error: missing trace subcommand (list|show)');
+    printTracesUsage();
+    process.exit(1);
+  }
+
+  let storage: TraceStorage;
+  try {
+    storage = new TraceStorage({ databasePath: values.storage });
+  } catch (error) {
+    console.error(`Error opening storage: ${error instanceof Error ? error.message : error}`);
+    process.exit(1);
+  }
+
+  switch (subcommand) {
+    case 'list': {
+      const traces = storage.listTraces();
+      const reportType = values.report ?? 'terminal';
+      let output = '';
+      switch (reportType) {
+        case 'json':
+          output = renderTraceListJson(traces);
+          break;
+        case 'terminal':
+        default:
+          output = renderTraceListSummary(traces);
+          break;
+      }
+      if (values.output) {
+        writeFileSync(values.output, output);
+        console.log(`Report written to ${values.output}`);
+      } else {
+        console.log(output);
+      }
+      storage.close();
+      break;
+    }
+    case 'show': {
+      const traceId = positionals[1];
+      if (!traceId) {
+        console.error('Error: missing trace-id argument');
+        printTracesUsage();
+        process.exit(1);
+      }
+      const trace = storage.getTrace(traceId);
+      storage.close();
+      if (!trace) {
+        console.error(`Trace not found: ${traceId}`);
+        process.exit(1);
+      }
+      const reportType = values.report ?? 'terminal';
+      let output = '';
+      switch (reportType) {
+        case 'json':
+          output = renderTraceJson(trace);
+          break;
+        case 'html':
+          output = renderTraceHtml(trace);
+          break;
+        case 'terminal':
+        default:
+          output = renderTraceTerminal(trace);
+          break;
+      }
+      if (values.output) {
+        writeFileSync(values.output, output);
+        console.log(`Report written to ${values.output}`);
+      } else {
+        console.log(output);
+      }
+      break;
+    }
+    default:
+      console.error(`Unknown trace subcommand: ${subcommand}`);
+      printTracesUsage();
+      process.exit(1);
+  }
+}
+
 async function main() {
   let args = process.argv.slice(2);
   // pnpm sometimes passes a leading `--` separator through to the script.
@@ -185,6 +291,9 @@ async function main() {
       break;
     case 'ingress':
       await ingressCommand(commandArgs);
+      break;
+    case 'traces':
+      tracesCommand(commandArgs);
       break;
     default:
       printUsage();

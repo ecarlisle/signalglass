@@ -84,13 +84,15 @@ See `docs/privacy.md` for redaction rules and `specs/007-storage-and-privacy.md`
 
 ## CLI commands
 
-Future CLI commands for live ingress:
+```bash
+signalglass ingress --config signalglass.config.json [--port <port>] [--storage <path>]
+signalglass traces --storage <path> list
+signalglass traces --storage <path> show <trace-id> [--report terminal|json|html] [--output <file>]
+```
+
+Future CLI commands:
 
 ```bash
-signalglass ingress --config signalglass.config.json
-signalglass traces list
-signalglass traces show <trace-id>
-signalglass traces report <trace-id> --report html
 signalglass traces export <trace-id> --output run.json
 ```
 

@@ -2,38 +2,50 @@
 
 ## Status
 
-Implemented (offline), Draft (trace views)
+Implemented (offline + trace reports), Draft (dashboard report views)
 
 ## Purpose
 
-Define how Signalglass renders analysis results into human- and machine-readable outputs.
+Define how Signalglass renders analysis results and stored trace data into human- and machine-readable outputs.
 
 ## Scope
 
-- Terminal report.
-- JSON report.
-- Static HTML report.
+- Terminal report for offline analysis (`AnalysisResult`).
+- JSON report for offline analysis.
+- Static HTML report for offline analysis.
+- Terminal report for stored traces (`Trace`).
+- JSON report for stored traces.
+- HTML report for stored traces.
+- Summary/list report for stored traces.
 - Report contract compliance.
 
 ## Non-goals
 
 - Interactive dashboard rendering (see Spec 009).
 - Real-time report updates.
+- Streaming report output.
 
 ## Required files or modules
 
 - `packages/reports/src/terminal.ts`
 - `packages/reports/src/json.ts`
 - `packages/reports/src/html.ts`
+- `packages/reports/src/traceTerminal.ts`
+- `packages/reports/src/traceJson.ts`
+- `packages/reports/src/traceHtml.ts`
+- `packages/reports/src/traceListSummary.ts`
 - `packages/reports/src/reports.test.ts`
 
 ## Required types or contracts
 
 - `AnalysisResult` from `packages/core`.
+- `Trace` from `packages/core`.
 - `ContextSmell`, `Recommendation` from `packages/core`.
 - Report contract defined in `docs/report-contract.md`.
 
 ## Required behavior
+
+### Offline analysis reports
 
 - Terminal report is compact and human-readable.
 - JSON report is the full `AnalysisResult` serialized.
@@ -41,20 +53,72 @@ Define how Signalglass renders analysis results into human- and machine-readable
 - All reports include run metadata, token totals, source-type breakdown, turn breakdown, largest blocks, repeated context, smells, and recommendations.
 - All reports label token counts as approximate.
 - Heuristic smells are labeled as heuristics.
-- Future trace reports may add Trace View, Payload View, Story View, and Savings Lens sections.
+
+### Trace reports
+
+- Terminal trace report renders key trace metadata without raw payloads.
+- JSON trace report includes structured fields with token metrics, event type breakdown, and content phase breakdown.
+- HTML trace report is self-contained and static.
+- Summary/list report shows multiple traces without dumping event payloads.
+- Reports do not include:
+  - Full raw payloads.
+  - API keys or Authorization headers.
+  - Secrets or credentials.
+  - `storageKey` values in standard mode.
+- Redacted excerpts appear only when present and allowed in the stored trace data.
+- Privacy disclaimers are included in all report formats.
 
 ## Acceptance criteria
 
-- [ ] `renderTerminal(analysis)` contains the run name and input tokens.
-- [ ] `renderJson(analysis)` round-trips to the same `AnalysisResult` shape.
-- [ ] `renderHtml(analysis)` contains `<html>` and all required sections.
-- [ ] Reports do not claim exact token counts.
+### Offline analysis (existing)
+
+- [x] `renderTerminal(analysis)` contains the run name and input tokens.
+- [x] `renderJson(analysis)` round-trips to the same `AnalysisResult` shape.
+- [x] `renderHtml(analysis)` contains `<html>` and all required sections.
+- [x] Reports do not claim exact token counts.
+
+### Trace reports (new)
+
+- [x] `renderTraceTerminal(trace)` contains trace ID, status, provider, model, event count, timestamps, and token metrics.
+- [x] `renderTraceJson(trace)` returns JSON with `trace.id`, `trace.status`, `trace.provider`, `trace.model`, `eventCount`, `eventTypeBreakdown`, and `tokenMetrics`.
+- [x] `renderTraceHtml(trace)` contains `<html>` and key trace metadata.
+- [x] Report output does not include sensitive metadata values (API keys, auth headers).
+- [x] Standard-mode report does not include `storageKey` values.
+- [x] Redacted excerpts appear only when present and allowed in stored trace data.
+- [x] Summary/list report includes multiple traces without dumping event payloads.
+- [x] Existing offline analyze reports still pass unchanged.
 
 ## Tests
 
 - `packages/reports/src/reports.test.ts`
+  - Trace terminal report renders key metadata.
+  - Trace JSON report includes expected fields.
+  - Trace HTML report is valid.
+  - Reports exclude sensitive metadata.
+  - Reports exclude storageKey in standard mode.
+  - Redacted excerpts appear only when present.
+  - Summary/list reports include multiple traces.
+  - Existing offline reports still pass.
+- `packages/cli/src/cli.test.ts`
+  - Storage initialization.
+  - Trace list on empty storage.
+
+## CLI integration
+
+```bash
+signalglass traces --storage <path> list
+signalglass traces --storage <path> show <trace-id> [--report terminal|json|html] [--output <file>]
+```
+
+- `--storage <path>` is required for trace commands.
+- No default storage path is introduced.
+- Clear usage errors are printed.
+- Existing `analyze` and `ingress` commands are not affected.
 
 ## References
 
 - `docs/report-contract.md`
 - `specs/002-core-domain.md`
+- `specs/007-storage-and-privacy.md`
+- `docs/trace-model.md`
+- `docs/privacy.md`
