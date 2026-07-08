@@ -40,7 +40,7 @@ signalglass/
 │   ├── parsers/            # Input format parsers (Signalglass JSON + OpenCode placeholder)
 │   └── reports/            # Terminal, JSON, and static HTML report formatters
 ├── samples/                # Example agent-run files
-├── docs/                   # Product brief, principles, UI vision, MVP plan, glossary
+├── docs/                   # Principles, architecture, roadmap, report contract, glossary, ADRs
 ├── README.md
 └── AGENTS.md
 ```

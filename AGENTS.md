@@ -25,7 +25,7 @@ Rules for anyone (human or agent) working on this codebase.
 ## Documentation
 
 - Update docs when project concepts change.
-- Keep `docs/product-brief.md`, `docs/product-principles.md`, `docs/ui-vision.md`, `docs/mvp-plan.md`, and `docs/glossary.md` aligned with the code.
+- Keep `docs/product-brief.md`, `docs/product-principles.md`, `docs/ui-vision.md`, `docs/versioning.md`, `docs/report-contract.md`, `docs/architecture.md`, `docs/roadmap.md`, `docs/mvp-plan.md`, `docs/glossary.md`, and `docs/decisions/` aligned with the code.
 
 ## Dependencies
 
