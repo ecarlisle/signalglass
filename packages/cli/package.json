@@ -22,7 +22,8 @@
     "@signalglass/core": "workspace:*",
     "@signalglass/ingress": "workspace:*",
     "@signalglass/parsers": "workspace:*",
-    "@signalglass/reports": "workspace:*"
+    "@signalglass/reports": "workspace:*",
+    "@signalglass/storage": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
