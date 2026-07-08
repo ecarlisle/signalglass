@@ -25,6 +25,8 @@ Define provider-agnostic live-mode domain types that capture the full lifecycle 
 
 - `packages/core/src/traces.ts`
 - `packages/core/src/traces.test.ts`
+- `packages/core/src/traceToAgentRun.ts`
+- `packages/core/src/traceToAgentRun.test.ts`
 
 ## Required types or contracts
 
@@ -70,17 +72,32 @@ interface Trace { ... }
 - `createDefaultCapturePolicy('debug')` may enable full raw payloads and full tool results.
 - `isRawPayloadCaptureEnabled(policy)` returns true only in debug mode with full payloads enabled.
 - A `Trace` can be converted into an `AgentRun` by grouping events into turns and mapping them to `ContextBlock` objects.
+- `traceToAgentRun(trace)` preserves trace id, model, provider, agent, and task in the resulting `AgentRun`.
+- `traceToAgentRun(trace)` maps trace events to `ContextBlock` source types without introducing provider-specific shapes.
+- `traceToAgentRun(trace)` skips content-bearing events that have no safe excerpt (no `payloadRef.excerpt`); provider/control events may remain metadata-only.
+- `traceToAgentRun(trace)` does not flatten arbitrary `trace.metadata` into `AgentRun.metadata`; trace metadata is nested under `traceMetadata` with sensitive-looking keys removed.
+- `traceToAgentRun(trace)` never includes API keys, authorization headers, secrets, or full raw payloads in the `AgentRun`.
+
+### Turn boundary convention
+
+The converter groups one logical inference cycle into a single `AgentRun` turn:
+input context/user messages, provider request/response, generated assistant output,
+and egress response. A new turn starts after an `egress_response` event. Traces
+without `egress_response` events are treated as a single turn. Multi-turn traces
+and streaming responses may require boundary refinement in the future.
 
 ## Acceptance criteria
 
-- [ ] All trace types are exported from `@signalglass/core`.
-- [ ] Standard policy denies full raw payload storage.
-- [ ] Debug policy allows full raw payload storage.
-- [ ] Trace events serialize to JSON without loss.
+- [x] All trace types are exported from `@signalglass/core`.
+- [x] Standard policy denies full raw payload storage.
+- [x] Debug policy allows full raw payload storage.
+- [x] Trace events serialize to JSON without loss.
+- [x] A `Trace` can be converted into an `AgentRun`.
 
 ## Tests
 
 - `packages/core/src/traces.test.ts`
+- `packages/core/src/traceToAgentRun.test.ts`
 
 ## References
 

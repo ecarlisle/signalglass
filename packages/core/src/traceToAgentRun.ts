@@ -11,6 +11,41 @@ function generateRunName(trace: Trace): string {
   return trace.agent ?? trace.task ?? `trace-${trace.id}`;
 }
 
+const CONTENT_BEARING_EVENT_TYPES: ReadonlyArray<TraceEvent['type']> = [
+  'message',
+  'instruction',
+  'tool_call',
+  'tool_result',
+  'context',
+];
+
+const SENSITIVE_METADATA_KEYS = new Set([
+  'authorization',
+  'apikey',
+  'api_key',
+  'token',
+  'secret',
+  'headers',
+  'rawpayload',
+  'raw_payload',
+  'rawrequest',
+  'raw_request',
+  'rawresponse',
+  'raw_response',
+]);
+
+function isContentBearingEvent(event: TraceEvent): boolean {
+  return CONTENT_BEARING_EVENT_TYPES.includes(event.type);
+}
+
+function isControlEvent(event: TraceEvent): boolean {
+  return (
+    event.type === 'provider_request' ||
+    event.type === 'provider_response' ||
+    event.type === 'egress_response'
+  );
+}
+
 function deriveSourceType(event: TraceEvent): SourceType | null {
   const { type, contentPhase, sourceType, actor } = event;
 
@@ -39,7 +74,7 @@ function deriveSourceType(event: TraceEvent): SourceType | null {
     return 'unknown';
   }
 
-  if (type === 'provider_request' || type === 'provider_response' || type === 'egress_response') {
+  if (isControlEvent(event)) {
     return 'unknown';
   }
 
@@ -53,11 +88,31 @@ function deriveContent(event: TraceEvent): string {
   return '';
 }
 
+function sanitizeTraceMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (metadata == null) return undefined;
+
+  const safe: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    const lower = key.toLowerCase();
+    if (SENSITIVE_METADATA_KEYS.has(lower)) continue;
+    safe[key] = value;
+  }
+  return safe;
+}
+
 function eventToContextBlock(event: TraceEvent, turnId: string): ContextBlock | null {
   const sourceType = deriveSourceType(event);
   if (sourceType === null) return null;
 
   const content = deriveContent(event);
+
+  // Content-bearing events should not become empty analyzer blocks when no
+  // excerpt is available. Provider/control events may remain metadata-only.
+  if (isContentBearingEvent(event) && content === '') {
+    return null;
+  }
 
   const metadata: Record<string, unknown> = {
     traceEventId: event.id,
@@ -100,19 +155,31 @@ function eventToContextBlock(event: TraceEvent, turnId: string): ContextBlock | 
   };
 }
 
+/**
+ * Determine whether an event signals the end of a request/response cycle.
+ *
+ * A new turn starts after the response has been returned to the client
+ * (`egress_response`), after generated assistant output, or after an inference
+ * usage event. This groups one logical inference cycle (input context,
+ * provider request/response, generated output) into a single AgentRun turn.
+ */
+function isCycleBoundaryEvent(event: TraceEvent): boolean {
+  // A complete request/response cycle is considered finished once the response
+  // has been returned to the client. Inference usage events and generated
+  // assistant messages that precede the egress_response stay in the same turn.
+  return event.type === 'egress_response';
+}
+
 function groupEventsIntoTurns(events: TraceEvent[]): TraceEvent[][] {
   const turns: TraceEvent[][] = [];
   let currentTurn: TraceEvent[] = [];
 
   for (const event of events) {
-    if (event.type === 'provider_request') {
-      if (currentTurn.length > 0) {
-        turns.push(currentTurn);
-      }
-      currentTurn = [event];
-    } else {
-      currentTurn.push(event);
+    if (currentTurn.length > 0 && isCycleBoundaryEvent(currentTurn[currentTurn.length - 1])) {
+      turns.push(currentTurn);
+      currentTurn = [];
     }
+    currentTurn.push(event);
   }
 
   if (currentTurn.length > 0) {
@@ -148,6 +215,13 @@ function deriveTurnOutputTokens(events: TraceEvent[]): number | undefined {
  * The converter groups trace events into turns, maps events to ContextBlocks,
  * and preserves trace metadata. It never includes full raw payloads, API keys,
  * authorization headers, or secrets. Redacted excerpts and metadata are preserved.
+ *
+ * Turn boundary convention:
+ * A turn contains one logical inference cycle: input context/user messages,
+ * the provider request/response, and generated assistant output. A new turn
+ * starts after an `egress_response` event. Traces without `egress_response`
+ * are treated as a single turn. Multi-turn traces and streaming responses may
+ * require boundary refinement in the future.
  */
 export function traceToAgentRun(trace: Trace): AgentRun {
   const turnGroups = groupEventsIntoTurns(trace.events);
@@ -189,7 +263,7 @@ export function traceToAgentRun(trace: Trace): AgentRun {
       endedAt: trace.endedAt,
       capturePolicy: trace.capturePolicy,
       mode: trace.mode,
-      ...(trace.metadata ?? {}),
+      traceMetadata: sanitizeTraceMetadata(trace.metadata),
     },
   };
 }

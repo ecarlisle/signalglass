@@ -4,7 +4,7 @@ import { createTraceEvent, createDefaultCapturePolicy } from './traces.js';
 import type { Trace } from './traces.js';
 import { analyzeRun } from './analyzer.js';
 
-function makeTrace(events: Trace['events']): Trace {
+function makeTrace(events: Trace['events'], metadata?: Record<string, unknown>): Trace {
   return {
     id: 'trace-1',
     startedAt: '2026-01-01T00:00:00.000Z',
@@ -16,6 +16,7 @@ function makeTrace(events: Trace['events']): Trace {
     model: 'gpt-4o',
     provider: 'openai',
     events,
+    metadata,
   };
 }
 
@@ -65,21 +66,17 @@ describe('traceToAgentRun', () => {
     expect(run.name).toBe('test-agent');
     expect(run.model).toBe('gpt-4o');
     expect(run.provider).toBe('openai');
-    expect(run.turns).toHaveLength(2);
+    expect(run.turns).toHaveLength(1);
 
-    const turn1 = run.turns[0];
-    expect(turn1.turnNumber).toBe(1);
-    expect(turn1.contextBlocks).toHaveLength(1);
-    expect(turn1.contextBlocks[0]!.sourceType).toBe('user_message');
-    expect(turn1.contextBlocks[0]!.content).toBe('Hello');
-
-    const turn2 = run.turns[1];
-    expect(turn2.turnNumber).toBe(2);
-    expect(turn2.contextBlocks).toHaveLength(2);
-    expect(turn2.contextBlocks[0]!.sourceType).toBe('unknown');
-    expect(turn2.contextBlocks[0]!.metadata!.traceEventType).toBe('provider_request');
-    expect(turn2.contextBlocks[1]!.sourceType).toBe('assistant_message');
-    expect(turn2.contextBlocks[1]!.content).toBe('Hi there');
+    const turn = run.turns[0];
+    expect(turn.turnNumber).toBe(1);
+    expect(turn.contextBlocks).toHaveLength(3);
+    expect(turn.contextBlocks[0]!.sourceType).toBe('user_message');
+    expect(turn.contextBlocks[0]!.content).toBe('Hello');
+    expect(turn.contextBlocks[1]!.sourceType).toBe('unknown');
+    expect(turn.contextBlocks[1]!.metadata!.traceEventType).toBe('provider_request');
+    expect(turn.contextBlocks[2]!.sourceType).toBe('assistant_message');
+    expect(turn.contextBlocks[2]!.content).toBe('Hi there');
   });
 
   it('converts instruction events into instruction ContextBlocks', () => {
@@ -117,10 +114,10 @@ describe('traceToAgentRun', () => {
     expect(run.turns).toHaveLength(1);
     const blocks = run.turns[0].contextBlocks;
     expect(blocks).toHaveLength(2);
-    expect(blocks[0].sourceType).toBe('system_instruction');
-    expect(blocks[0].content).toBe('You are helpful.');
-    expect(blocks[1].sourceType).toBe('project_instruction');
-    expect(blocks[1].content).toBe('Use the provided tools.');
+    expect(blocks[0]!.sourceType).toBe('system_instruction');
+    expect(blocks[0]!.content).toBe('You are helpful.');
+    expect(blocks[1]!.sourceType).toBe('project_instruction');
+    expect(blocks[1]!.content).toBe('Use the provided tools.');
   });
 
   it('converts tool call and tool result events', () => {
@@ -159,10 +156,10 @@ describe('traceToAgentRun', () => {
 
     const blocks = run.turns[0].contextBlocks;
     expect(blocks).toHaveLength(2);
-    expect(blocks[0].sourceType).toBe('tool_call');
-    expect(blocks[0].content).toBe('{"name":"read_file"}');
-    expect(blocks[1].sourceType).toBe('tool_output');
-    expect(blocks[1].content).toBe('file contents');
+    expect(blocks[0]!.sourceType).toBe('tool_call');
+    expect(blocks[0]!.content).toBe('{"name":"read_file"}');
+    expect(blocks[1]!.sourceType).toBe('tool_output');
+    expect(blocks[1]!.content).toBe('file contents');
   });
 
   it('does not include full raw payloads from provider events by default', () => {
@@ -226,8 +223,8 @@ describe('traceToAgentRun', () => {
     const run = traceToAgentRun(trace);
 
     const block = run.turns[0].contextBlocks[0];
-    expect(block.content).toBe('a'.repeat(240) + '…');
-    expect(block.metadata!.payloadRef).toMatchObject({
+    expect(block!.content).toBe('a'.repeat(240) + '…');
+    expect(block!.metadata!.payloadRef).toMatchObject({
       id: 'payload-7',
       redacted: true,
       excerpt: 'a'.repeat(240) + '…',
@@ -283,6 +280,12 @@ describe('traceToAgentRun', () => {
       }),
       createTraceEvent({
         traceId: 'trace-1',
+        type: 'provider_response',
+        contentPhase: 'observed',
+        actor: { role: 'provider' },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
         type: 'message',
         contentPhase: 'generated',
         sourceType: 'assistant_message',
@@ -302,6 +305,12 @@ describe('traceToAgentRun', () => {
         actor: { role: 'provider' },
         tokens: 15,
       }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'egress_response',
+        contentPhase: 'returned',
+        actor: { role: 'ingress' },
+      }),
     ]);
 
     const run = traceToAgentRun(trace);
@@ -309,7 +318,7 @@ describe('traceToAgentRun', () => {
 
     expect(result.runId).toBe('trace-1');
     expect(result.totalInputTokens).toBeGreaterThan(0);
-    expect(result.turnCount).toBe(2);
+    expect(result.turnCount).toBe(1);
     expect(result.smells.length).toBeGreaterThanOrEqual(0);
   });
 
@@ -328,5 +337,240 @@ describe('traceToAgentRun', () => {
 
     const run = traceToAgentRun(trace);
     expect(run.name).toBe('trace-trace-1');
+  });
+
+  it('skips content-bearing events that have no payloadRef.excerpt', () => {
+    const trace = makeTrace([
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'message',
+        contentPhase: 'said',
+        sourceType: 'user_message',
+        actor: { role: 'user' },
+        tokens: 10,
+      }),
+    ]);
+
+    const run = traceToAgentRun(trace);
+    expect(run.turns[0].contextBlocks).toHaveLength(0);
+  });
+
+  it('skips tool events that have no payloadRef.excerpt', () => {
+    const trace = makeTrace([
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'tool_call',
+        contentPhase: 'requested',
+        sourceType: 'tool_call',
+        actor: { role: 'agent' },
+        tokens: 30,
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'tool_result',
+        contentPhase: 'observed',
+        sourceType: 'tool_output',
+        actor: { role: 'tool' },
+        tokens: 100,
+      }),
+    ]);
+
+    const run = traceToAgentRun(trace);
+    expect(run.turns[0].contextBlocks).toHaveLength(0);
+  });
+
+  it('allows metadata-only provider control events even without payloadRef.excerpt', () => {
+    const trace = makeTrace([
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'provider_request',
+        contentPhase: 'requested',
+        actor: { role: 'ingress' },
+        routingDecision: 'routed to openai',
+      }),
+    ]);
+
+    const run = traceToAgentRun(trace);
+    const blocks = run.turns[0].contextBlocks;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.sourceType).toBe('unknown');
+    expect(blocks[0]!.content).toBe('');
+    expect(blocks[0]!.metadata!.traceEventType).toBe('provider_request');
+  });
+
+  it('preserves skipped content-bearing event ids in turn metadata', () => {
+    const trace = makeTrace([
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'message',
+        contentPhase: 'said',
+        sourceType: 'user_message',
+        actor: { role: 'user' },
+        tokens: 10,
+      }),
+    ]);
+
+    const eventId = trace.events[0].id;
+    const run = traceToAgentRun(trace);
+
+    expect(run.turns[0].contextBlocks).toHaveLength(0);
+    expect(run.turns[0].metadata!.traceEventIds).toContain(eventId);
+  });
+
+  it('groups one logical inference cycle into a single turn', () => {
+    const trace = makeTrace([
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'context',
+        contentPhase: 'sent',
+        sourceType: 'file_content',
+        actor: { role: 'agent' },
+        tokens: 50,
+        payloadRef: {
+          id: 'payload-context',
+          redacted: false,
+          excerpt: 'file content',
+          size: 12,
+        },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'message',
+        contentPhase: 'said',
+        sourceType: 'user_message',
+        actor: { role: 'user' },
+        tokens: 10,
+        payloadRef: {
+          id: 'payload-user',
+          redacted: false,
+          excerpt: 'Hello',
+          size: 5,
+        },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'provider_request',
+        contentPhase: 'requested',
+        actor: { role: 'ingress' },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'provider_response',
+        contentPhase: 'observed',
+        actor: { role: 'provider' },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'message',
+        contentPhase: 'generated',
+        sourceType: 'assistant_message',
+        actor: { role: 'model' },
+        tokens: 5,
+        payloadRef: {
+          id: 'payload-assistant',
+          redacted: false,
+          excerpt: 'Hi there',
+          size: 8,
+        },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'egress_response',
+        contentPhase: 'returned',
+        actor: { role: 'ingress' },
+      }),
+    ]);
+
+    const run = traceToAgentRun(trace);
+
+    expect(run.turns).toHaveLength(1);
+    const blocks = run.turns[0].contextBlocks;
+    expect(blocks.map((b) => b.sourceType)).toEqual([
+      'file_content',
+      'user_message',
+      'unknown',
+      'unknown',
+      'assistant_message',
+      'unknown',
+    ]);
+  });
+
+  it('starts a new turn after a completed inference cycle', () => {
+    const trace = makeTrace([
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'message',
+        contentPhase: 'said',
+        sourceType: 'user_message',
+        actor: { role: 'user' },
+        tokens: 10,
+        payloadRef: {
+          id: 'payload-user-1',
+          redacted: false,
+          excerpt: 'Hello',
+          size: 5,
+        },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'egress_response',
+        contentPhase: 'returned',
+        actor: { role: 'ingress' },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'message',
+        contentPhase: 'said',
+        sourceType: 'user_message',
+        actor: { role: 'user' },
+        tokens: 10,
+        payloadRef: {
+          id: 'payload-user-2',
+          redacted: false,
+          excerpt: 'Again',
+          size: 5,
+        },
+      }),
+    ]);
+
+    const run = traceToAgentRun(trace);
+
+    expect(run.turns).toHaveLength(2);
+    expect(run.turns[0].contextBlocks[0]!.content).toBe('Hello');
+    expect(run.turns[1].contextBlocks[0]!.content).toBe('Again');
+  });
+
+  it('does not flatten sensitive trace metadata into top-level AgentRun metadata', () => {
+    const trace = makeTrace(
+      [
+        createTraceEvent({
+          traceId: 'trace-1',
+          type: 'message',
+          contentPhase: 'said',
+          sourceType: 'user_message',
+          actor: { role: 'user' },
+          tokens: 10,
+          payloadRef: {
+            id: 'payload-safe',
+            redacted: false,
+            excerpt: 'Hello',
+            size: 5,
+          },
+        }),
+      ],
+      {
+        safeKey: 'safe-value',
+        Authorization: 'Bearer secret-token',
+        apiKey: 'sk-secret',
+        rawRequest: '{"model":"gpt-4o"}',
+      },
+    );
+
+    const run = traceToAgentRun(trace);
+
+    expect(run.metadata!.traceMetadata).toEqual({ safeKey: 'safe-value' });
+    expect(run.metadata!.Authorization).toBeUndefined();
+    expect(run.metadata!.apiKey).toBeUndefined();
+    expect(run.metadata!.rawRequest).toBeUndefined();
   });
 });
