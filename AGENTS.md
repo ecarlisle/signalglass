@@ -17,6 +17,39 @@ Rules for anyone (human or agent) working on this codebase.
 - Runtime code changes should reference the spec they implement, either in commit messages or code comments where helpful.
 - Only specs marked **Accepted** should be implemented. A spec may be marked **Implemented** only when its acceptance criteria are satisfied.
 
+## Branch and PR workflow
+
+Implementation work must happen on a spec-specific branch. Do not commit directly to `main` for spec implementation.
+
+Branch names must use this pattern:
+
+```text
+spec/<spec-number>-<short-name>
+```
+
+Example:
+
+```text
+spec/006-ingress-openai-compatible
+```
+
+Before creating a branch:
+
+- Confirm the working tree is clean.
+- Start from the latest `main`.
+
+On the branch:
+
+- Implement only the target spec.
+- Run `pnpm test`.
+- Run `pnpm build`.
+- Commit only if both pass.
+- Push the branch.
+- Open a GitHub pull request.
+- Do not merge the PR; the human reviewer will review and merge.
+
+If GitHub CLI authentication or permissions are unavailable, stop after committing locally and report the exact command failure plus the manual commands needed to push and open the PR.
+
 ## Product stance
 
 - Keep the project **observability-first** and educational.

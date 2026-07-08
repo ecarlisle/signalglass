@@ -30,6 +30,17 @@ For the implementation of the target spec, verify:
 - [ ] No generated files (`dist/`, `*.tsbuildinfo`, etc.) are tracked.
 - [ ] `pnpm test` and `pnpm build` pass.
 
+## PR review checks
+
+If reviewing a pull request, also verify:
+
+- [ ] Branch name matches the spec, e.g. `spec/<number>-<short-name>`.
+- [ ] PR title references the spec, e.g. `Implement Spec <number>: <title>`.
+- [ ] PR body includes validation results.
+- [ ] Spec status was updated to **Implemented** only if all acceptance criteria were satisfied.
+- [ ] No unrelated files were changed.
+- [ ] No secrets, `.env` files, trace dumps, local databases, generated artifacts, or raw payload captures were included.
+
 ## Report
 
 Return:

@@ -13,27 +13,70 @@ Target spec path: `{{specPath}}`
 3. The target spec at `{{specPath}}`
 4. Every doc and spec referenced by the target spec
 
-## Instructions
+## Determine spec identity
 
-- Implement only what the target spec requires.
-- Preserve the existing offline analyzer behavior.
-- Keep provider-specific logic out of `@signalglass/core`.
-- Keep ingress/network logic out of `@signalglass/core`.
-- Keep persistence/storage logic out of `@signalglass/core`.
-- OpenAI-compatible shapes must not become the internal data model.
-- Raw payload capture must remain opt-in.
-- API keys must be referenced by environment variable name and never stored directly.
-- Add or update tests for the new behavior.
-- Avoid unrelated refactors.
-- If the spec is ambiguous, prefer the smallest implementation that satisfies the acceptance criteria.
+From `{{specPath}}`:
+
+1. Extract the spec number from the filename or the spec heading.
+2. Derive the short name from the filename (the part after the spec number), e.g. `006-ingress-openai-compatible.md` → `ingress-openai-compatible`.
+3. Read the spec's **Status** section.
+
+If the target spec is not **Accepted**, stop and report that it must be accepted before implementation.
+
+## Branch and implementation
+
+1. Confirm the working tree is clean and you are on `main`.
+2. Pull the latest `main`.
+3. Create and check out a branch named:
+
+   ```text
+   spec/<spec-number>-<short-name>
+   ```
+
+4. Implement only the target spec.
+5. Preserve the existing offline analyzer behavior.
+6. Keep provider-specific logic out of `@signalglass/core`.
+7. Keep ingress/network logic out of `@signalglass/core`.
+8. Keep persistence/storage logic out of `@signalglass/core`.
+9. OpenAI-compatible shapes must not become the internal data model.
+10. Raw payload capture must remain opt-in.
+11. API keys must be referenced by environment variable name and never stored directly.
+12. Add or update tests for the new behavior.
+13. Avoid unrelated refactors.
+14. If the spec is ambiguous, prefer the smallest implementation that satisfies the acceptance criteria.
 
 ## Verification
 
 1. Run `pnpm test`.
 2. Run `pnpm build`.
-3. If both pass, update the spec status to **Implemented** when appropriate.
-4. Commit with a clear message that references the spec, e.g.:
-   `git add . && git commit -m "Implement spec 006: OpenAI-compatible ingress"`
+3. If both pass and all acceptance criteria are satisfied, update the spec status to **Implemented**.
+4. Commit with a message like:
+
+   ```text
+   Implement Spec 006: OpenAI-compatible ingress
+   ```
+
+## Push and pull request
+
+1. Push the branch.
+2. Open a GitHub PR using `gh pr create`.
+3. Do not merge the PR.
+
+Use this PR title:
+
+```text
+Implement Spec <number>: <title>
+```
+
+Use this PR body:
+
+- Summary
+- Spec implemented
+- Files changed
+- Tests added or updated
+- Validation results
+- Risks or follow-up work
+- Confirmation that no secrets, raw payload captures, local databases, or generated artifacts were committed
 
 ## Report
 
@@ -45,6 +88,7 @@ Return a summary with:
 - `pnpm test` result
 - `pnpm build` result
 - Spec status before and after
-- Git commit hash
+- Branch name
+- Pull request URL
 - Assumptions made
 - Recommended next spec to implement
