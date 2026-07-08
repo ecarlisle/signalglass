@@ -10,6 +10,8 @@ SignalGlass local usage is currently alpha/dev-oriented. The offline analyzer, O
 
 ## Install, build, and test
 
+All commands in this guide should be run from the SignalGlass repo root.
+
 ```bash
 pnpm install
 pnpm build
@@ -17,6 +19,15 @@ pnpm test
 ```
 
 The root currently has no separate `typecheck` script. TypeScript is exercised by package builds.
+
+> **Note:** On first install, pnpm may block native build scripts for `better-sqlite3` and `esbuild`.
+> If build or tests fail with a missing native binding, run:
+> ```bash
+> pnpm approve-builds
+> # approve better-sqlite3 and esbuild when prompted
+> pnpm rebuild better-sqlite3 esbuild
+> ```
+> See the troubleshooting section below for details.
 
 ## Run offline analysis
 
@@ -47,7 +58,13 @@ Generated reports are local artifacts and should not be committed.
 
 ## Configure a provider
 
-Create `signalglass.config.json`:
+Start from the example config and copy it to your local config:
+
+```bash
+cp signalglass.config.example.json signalglass.config.json
+```
+
+Then edit `signalglass.config.json` with your upstream provider details:
 
 ```json
 {
@@ -76,10 +93,10 @@ Create `signalglass.config.json`:
 Set the upstream key in the shell. Do not put the key in the JSON file:
 
 ```bash
-export OPENAI_API_KEY=sk-...
+export YOUR_API_KEY_ENV_VAR=sk-...
 ```
 
-See `docs/provider-config.md` for the full validated shape.
+Replace `YOUR_API_KEY_ENV_VAR` with the value of `apiKeyEnv` from your config. See `docs/provider-config.md` for the full validated shape.
 
 ## Start live ingress
 
@@ -111,6 +128,19 @@ Check the server:
 ```bash
 curl http://localhost:8080/health
 curl http://localhost:8080/v1/models
+```
+
+Use the model `id` from the `/v1/models` response in your `/v1/chat/completions` requests. The model id must match one of the models configured in `signalglass.config.json`.
+
+Example test request:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Reply with: Hello from SignalGlass"}]
+  }'
 ```
 
 ## Inspect stored traces
@@ -173,8 +203,10 @@ These are manual OpenAI-compatible endpoint configurations, not first-class Sign
 If ingress reports that an environment variable is not set, confirm the provider config uses the variable name and the shell running ingress exports the value:
 
 ```bash
-export OPENAI_API_KEY=sk-...
+export YOUR_API_KEY_ENV_VAR=sk-...
 ```
+
+Replace `YOUR_API_KEY_ENV_VAR` with the actual `apiKeyEnv` value from your `signalglass.config.json`.
 
 ### Unsupported provider or malformed config
 
@@ -200,15 +232,33 @@ Ingress persistence is opt-in. Restart ingress with:
 
 Trace commands must use the same storage path.
 
-### pnpm no-TTY or ignored-build-script errors
+### pnpm native build script approval
 
-Some managed/non-interactive pnpm environments may request module-directory confirmation or block native dependency build scripts. In CI-like environments, `CI=true pnpm test` may bypass the no-TTY prompt, but build-script policy still needs to permit `better-sqlite3` and `esbuild`.
+`pnpm install` may block native build scripts for `better-sqlite3` and `esbuild` in a fresh checkout. If build or tests fail, approve the builds and rebuild:
+
+```bash
+pnpm approve-builds
+# When prompted, approve better-sqlite3 and esbuild
+pnpm rebuild better-sqlite3 esbuild
+```
+
+Alternatively, add the packages to `pnpm-workspace.yaml`:
+
+```yaml
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+```
 
 Do not blindly approve dependency scripts in an untrusted checkout. Review the lockfile and dependency source first.
 
 ### better-sqlite3 native binding errors
 
-If storage tests report that the `better_sqlite3.node` binding cannot be found, reinstall/rebuild dependencies in an environment with a working native compiler toolchain and permitted package build scripts.
+If storage tests or trace commands report that the `better_sqlite3.node` binding cannot be found, reinstall and rebuild dependencies in an environment with a working native compiler toolchain and permitted package build scripts:
+
+```bash
+pnpm rebuild better-sqlite3
+```
 
 ### Privacy
 
