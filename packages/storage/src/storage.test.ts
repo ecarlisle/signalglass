@@ -318,7 +318,11 @@ describe('TraceStorage', () => {
       ['bearer token', 'Authorization: Bearer bearer-token-123', 'bearer-token-123'],
       ['cookie header', 'Cookie: session=secret-cookie-value', 'secret-cookie-value'],
       ['proxy authorization header', 'Proxy-Authorization: Bearer proxy-secret-value', 'proxy-secret-value'],
-      ['env assignment', 'OPENAI_API_KEY=sk-test-env-secret', 'sk-test-env-secret'],
+      ['env assignment (uppercase)', 'OPENAI_API_KEY=sk-test-env-secret', 'sk-test-env-secret'],
+      ['env assignment (lowercase)', 'openai_api_key=sk-test-lower-env', 'sk-test-lower-env'],
+      ['env assignment (mixed-case)', 'Openai_Api_Key=sk-test-mixed-env', 'sk-test-mixed-env'],
+      ['env assignment (lowercase secret)', 'app_secret=my-secret-value', 'my-secret-value'],
+      ['env assignment (lowercase token)', 'auth_token=my-token-value', 'my-token-value'],
     ])('should redact %s inside stored excerpts', (_label, excerpt, leakedValue) => {
       const trace = createTestTrace({
         mode: 'standard',

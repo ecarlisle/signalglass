@@ -12,7 +12,7 @@ const JSON_SECRET =
   /(["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|auth(?:orization)?|secret|password|credential|storageKey|storage_key)["']?\s*:\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)/gi;
 
 const ENV_SECRET =
-  /\b([A-Z_][A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|AUTHORIZATION|COOKIE)[A-Z0-9_]*)\s*=\s*("[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)/g;
+  /\b([A-Z_][A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|AUTHORIZATION|COOKIE)[A-Z0-9_]*)\s*=\s*("[^"\r\n]*"|'[^'\r\n]*'|[^\s\r\n]+)/gi;
 
 const AUTH_HEADER =
   /\b(authorization|proxy-authorization|x-api-key)\s*[:=]\s*(?:Bearer\s+[^\s,;\r\n]+|[^\s,;\r\n]+)/gi;
