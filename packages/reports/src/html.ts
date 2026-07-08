@@ -1,4 +1,5 @@
 import type { AnalysisResult } from '@signalglass/core';
+import { sanitizeReportString } from './sanitize.js';
 
 export function renderHtml(analysis: AnalysisResult): string {
   return `<!doctype html>
@@ -6,7 +7,7 @@ export function renderHtml(analysis: AnalysisResult): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Signalglass – ${escapeHtml(analysis.runName)}</title>
+  <title>Signalglass – ${escapeHtml(safe(analysis.runName))}</title>
   <style>
     :root { --bg: #fafafa; --card: #fff; --text: #222; --muted: #666; --border: #e0e0e0; }
     body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 2rem; background: var(--bg); color: var(--text); }
@@ -34,9 +35,9 @@ export function renderHtml(analysis: AnalysisResult): string {
   <div class="container">
     <h1>Signalglass report</h1>
     <p>
-      ${escapeHtml(analysis.runName)} ·
-      ${escapeHtml(analysis.model ?? 'unknown model')} ·
-      ${escapeHtml(analysis.provider ?? 'unknown provider')}
+      ${escapeHtml(safe(analysis.runName))} ·
+      ${escapeHtml(safe(analysis.model ?? 'unknown model'))} ·
+      ${escapeHtml(safe(analysis.provider ?? 'unknown provider'))}
     </p>
 
     <div class="cards">
@@ -52,7 +53,7 @@ export function renderHtml(analysis: AnalysisResult): string {
         <tr><th>Source type</th><th>Tokens</th><th>Blocks</th><th>Share</th></tr>
       </thead>
       <tbody>
-        ${analysis.tokensBySourceType.map((b) => `<tr><td>${escapeHtml(b.sourceType)}</td><td>${b.tokens}</td><td>${b.blockCount}</td><td>${Math.round(b.percentage * 100)}%</td></tr>`).join('')}
+        ${analysis.tokensBySourceType.map((b) => `<tr><td>${escapeHtml(safe(b.sourceType))}</td><td>${b.tokens}</td><td>${b.blockCount}</td><td>${Math.round(b.percentage * 100)}%</td></tr>`).join('')}
       </tbody>
     </table>
 
@@ -72,27 +73,27 @@ export function renderHtml(analysis: AnalysisResult): string {
         <tr><th>Turn</th><th>Type</th><th>Name</th><th>Tokens</th></tr>
       </thead>
       <tbody>
-        ${analysis.largestBlocks.slice(0, 10).map((b) => `<tr><td>${b.turnNumber}</td><td>${escapeHtml(b.sourceType)}</td><td>${escapeHtml(b.name ?? '')}</td><td>${b.tokens}</td></tr>`).join('')}
+        ${analysis.largestBlocks.slice(0, 10).map((b) => `<tr><td>${b.turnNumber}</td><td>${escapeHtml(safe(b.sourceType))}</td><td>${escapeHtml(safe(b.name ?? ''))}</td><td>${b.tokens}</td></tr>`).join('')}
       </tbody>
     </table>
 
     <h2>Context smells</h2>
     ${analysis.smells.length === 0 ? '<p>None detected.</p>' : analysis.smells.map((s) => `
       <div class="smell ${s.severity}">
-        <strong>[${s.severity.toUpperCase()}] ${escapeHtml(s.title)}</strong>
+        <strong>[${s.severity.toUpperCase()}] ${escapeHtml(safe(s.title))}</strong>
         ${s.isHeuristic ? '<span class="heuristic">heuristic</span>' : ''}
         <dl>
           <dt>What happened</dt>
-          <dd>${escapeHtml(s.whatHappened)}</dd>
+          <dd>${escapeHtml(safe(s.whatHappened))}</dd>
           <dt>Why it matters</dt>
-          <dd>${escapeHtml(s.whyItMatters)}</dd>
+          <dd>${escapeHtml(safe(s.whyItMatters))}</dd>
           <dt>Evidence</dt>
-          <dd>${escapeHtml(s.evidenceSummary)}</dd>
+          <dd>${escapeHtml(safe(s.evidenceSummary))}</dd>
           <dt>Recommendation</dt>
-          <dd>${escapeHtml(s.recommendation)}</dd>
+          <dd>${escapeHtml(safe(s.recommendation))}</dd>
           ${s.suggestedNextSteps.length > 0 ? `
             <dt>Try next</dt>
-            <dd><ul>${s.suggestedNextSteps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul></dd>
+            <dd><ul>${s.suggestedNextSteps.map((step) => `<li>${escapeHtml(safe(step))}</li>`).join('')}</ul></dd>
           ` : ''}
         </dl>
       </div>
@@ -101,21 +102,21 @@ export function renderHtml(analysis: AnalysisResult): string {
     <h2>Recommendations</h2>
     ${analysis.recommendations.length === 0 ? '<p>None.</p>' : analysis.recommendations.map((r) => `
       <div class="smell info">
-        <strong>${escapeHtml(r.title)}</strong>
-        <p>${escapeHtml(r.description)}</p>
+        <strong>${escapeHtml(safe(r.title))}</strong>
+        <p>${escapeHtml(safe(r.description))}</p>
         <dl>
           <dt>Why it matters</dt>
-          <dd>${escapeHtml(r.whyItMatters)}</dd>
+          <dd>${escapeHtml(safe(r.whyItMatters))}</dd>
           <dt>Inspect</dt>
-          <dd>${escapeHtml(r.inspectSuggestion)}</dd>
+          <dd>${escapeHtml(safe(r.inspectSuggestion))}</dd>
           <dt>Try</dt>
-          <dd>${escapeHtml(r.trySuggestion)}</dd>
+          <dd>${escapeHtml(safe(r.trySuggestion))}</dd>
         </dl>
       </div>
     `).join('')}
 
     <footer>
-      Generated at ${escapeHtml(analysis.generatedAt)}.
+      Generated at ${escapeHtml(safe(analysis.generatedAt))}.
       Token counts are approximate estimates.
       Heuristic detections are labeled and should be verified against the raw run data.
     </footer>
@@ -130,4 +131,8 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function safe(text: string): string {
+  return sanitizeReportString(text);
 }

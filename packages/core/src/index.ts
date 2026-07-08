@@ -6,5 +6,6 @@ export * from './repeated.js';
 export * from './smells.js';
 export * from './recommendations.js';
 export * from './traces.js';
+export * from './privacy.js';
 export { traceToAgentRun } from './traceToAgentRun.js';
 export { analyzeRun } from './analyzer.js';

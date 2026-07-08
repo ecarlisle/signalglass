@@ -8,6 +8,7 @@ import {
   createTraceEvent,
   estimateTokens,
   createDefaultCapturePolicy,
+  redactAndTruncateSensitiveText,
 } from '@signalglass/core';
 import type { ProviderAdapter, ProviderConfig } from './types.js';
 
@@ -201,18 +202,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function makePayloadRef(content: string): TraceEvent['payloadRef'] {
-  const excerpt = makeExcerpt(content, MAX_EXCERPT_LENGTH);
+  const excerpt = redactAndTruncateSensitiveText(content, MAX_EXCERPT_LENGTH);
   return {
     id: generateId(),
-    redacted: excerpt.length < content.length,
+    redacted: true,
     excerpt,
     size: content.length,
   };
-}
-
-function makeExcerpt(content: string, maxLength: number): string {
-  if (content.length <= maxLength) return content;
-  return content.slice(0, maxLength) + '…';
 }
 
 function generateId(): string {

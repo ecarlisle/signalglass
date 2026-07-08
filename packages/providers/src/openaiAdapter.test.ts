@@ -157,4 +157,27 @@ describe('openai adapter', () => {
     expect(json).not.toContain('authorization');
     expect(json).not.toContain('api_key');
   });
+
+  it('redacts secrets from adapter-created excerpts before truncation', () => {
+    const request = {
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'user',
+          content: `Use this key sk-test-secret-key-in-first-240-chars before doing anything. ${'x'.repeat(400)}`,
+        },
+      ],
+    };
+
+    const events = openaiAdapter.normalizeRequest(request, testProvider);
+    const userMessage = events.find(
+      (event) => event.type === 'message' && event.contentPhase === 'said',
+    );
+
+    expect(userMessage?.payloadRef?.excerpt).toBeDefined();
+    expect(userMessage!.payloadRef!.excerpt).not.toContain('sk-test-secret-key-in-first-240-chars');
+    expect(userMessage!.payloadRef!.excerpt).toContain('[REDACTED_API_KEY]');
+    expect(userMessage!.payloadRef!.redacted).toBe(true);
+    expect(userMessage!.payloadRef!.excerpt!.length).toBeLessThanOrEqual(240);
+  });
 });

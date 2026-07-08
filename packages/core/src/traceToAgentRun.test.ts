@@ -322,6 +322,59 @@ describe('traceToAgentRun', () => {
     expect(result.smells.length).toBeGreaterThanOrEqual(0);
   });
 
+  it('uses completionTokens, not totalTokens, for AgentRun output token accounting', () => {
+    const trace = makeTrace([
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'message',
+        contentPhase: 'said',
+        sourceType: 'user_message',
+        actor: { role: 'user' },
+        tokens: 999,
+        payloadRef: {
+          id: 'payload-user',
+          redacted: true,
+          excerpt: 'Hello',
+        },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'message',
+        contentPhase: 'generated',
+        sourceType: 'assistant_message',
+        actor: { role: 'model' },
+        tokens: 999,
+        payloadRef: {
+          id: 'payload-assistant',
+          redacted: true,
+          excerpt: 'Hi',
+        },
+      }),
+      createTraceEvent({
+        traceId: 'trace-1',
+        type: 'inference',
+        contentPhase: 'observed',
+        actor: { role: 'provider' },
+        tokens: 148,
+        metadata: {
+          promptTokens: 120,
+          completionTokens: 28,
+          totalTokens: 148,
+        },
+      }),
+    ]);
+
+    const run = traceToAgentRun(trace);
+
+    expect(run.turns[0].outputTokens).toBe(28);
+    expect(run.outputTokens).toBe(28);
+    expect(run.turns[0].metadata).toMatchObject({
+      promptTokens: 120,
+      completionTokens: 28,
+      totalTokens: 148,
+    });
+  });
+
   it('uses the task as the run name when agent is missing', () => {
     const trace = makeTrace([]);
     trace.agent = undefined;

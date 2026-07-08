@@ -4,6 +4,7 @@ import {
   collectRoutingDecisions,
   collectRedactedExcerpts,
 } from './traceMetrics.js';
+import { sanitizeReportString } from './sanitize.js';
 
 export interface ListSummaryRow {
   id: string;
@@ -25,10 +26,10 @@ export function buildListSummary(trace: Trace): ListSummaryRow {
   const routingDecisions = collectRoutingDecisions(events);
 
   return {
-    id: trace.id,
-    status: trace.status,
-    provider: trace.provider ?? 'unknown',
-    model: trace.model ?? 'unknown',
+    id: safe(trace.id),
+    status: safe(trace.status),
+    provider: safe(trace.provider ?? 'unknown'),
+    model: safe(trace.model ?? 'unknown'),
     events: events.length,
     routingDecisions,
     excerptCount: excerpts.length,
@@ -51,12 +52,12 @@ export function renderTraceListSummary(traces: Trace[]): string {
   lines.push(formatRow(widths.map((w) => '─'.repeat(w)), widths));
 
   for (const trace of traces) {
-    const id = truncate(trace.id, widths[0]);
-    const status = trace.status;
-    const provider = truncate(trace.provider ?? '—', widths[2]);
-    const model = truncate(trace.model ?? '—', widths[3]);
+    const id = truncate(safe(trace.id), widths[0]);
+    const status = safe(trace.status);
+    const provider = truncate(safe(trace.provider ?? '—'), widths[2]);
+    const model = truncate(safe(trace.model ?? '—'), widths[3]);
     const events = String(trace.events?.length ?? 0);
-    const started = truncate(trace.startedAt, widths[5]);
+    const started = truncate(safe(trace.startedAt), widths[5]);
 
     lines.push(formatRow([id, status, provider, model, events, started], widths));
   }
@@ -73,15 +74,15 @@ export function renderTraceListJson(traces: Trace[]): string {
     const tokenMetrics = computeTokenMetrics(events);
 
     return {
-      id: trace.id,
-      status: trace.status,
-      provider: trace.provider ?? null,
-      model: trace.model ?? null,
-      agent: trace.agent ?? null,
-      task: trace.task ?? null,
-      mode: trace.mode,
-      startedAt: trace.startedAt,
-      endedAt: trace.endedAt ?? null,
+      id: safe(trace.id),
+      status: safe(trace.status),
+      provider: trace.provider ? safe(trace.provider) : null,
+      model: trace.model ? safe(trace.model) : null,
+      agent: trace.agent ? safe(trace.agent) : null,
+      task: trace.task ? safe(trace.task) : null,
+      mode: safe(trace.mode),
+      startedAt: safe(trace.startedAt),
+      endedAt: trace.endedAt ? safe(trace.endedAt) : null,
       eventCount: events.length,
       tokenMetrics,
     };
@@ -97,4 +98,8 @@ function formatRow(columns: string[], widths: number[]): string {
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen - 1) + '\u2026';
+}
+
+function safe(text: string): string {
+  return sanitizeReportString(text);
 }

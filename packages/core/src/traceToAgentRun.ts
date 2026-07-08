@@ -212,12 +212,30 @@ function groupEventsIntoTurns(events: TraceEvent[]): TraceEvent[][] {
   return turns;
 }
 
+function getNumericMetadata(event: TraceEvent, key: string): number | undefined {
+  const value = event.metadata?.[key];
+  return typeof value === 'number' ? value : undefined;
+}
+
+function sumInferenceMetadata(events: TraceEvent[], key: string): number | undefined {
+  let total = 0;
+  let found = false;
+
+  for (const event of events) {
+    if (event.type !== 'inference') continue;
+    const value = getNumericMetadata(event, key);
+    if (value == null) continue;
+    total += value;
+    found = true;
+  }
+
+  return found ? total : undefined;
+}
+
 function deriveTurnOutputTokens(events: TraceEvent[]): number | undefined {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    if (event.type === 'inference' && typeof event.tokens === 'number') {
-      return event.tokens;
-    }
+  const completionTokens = sumInferenceMetadata(events, 'completionTokens');
+  if (completionTokens != null) {
+    return completionTokens;
   }
 
   const generatedTokens = events
@@ -230,6 +248,19 @@ function deriveTurnOutputTokens(events: TraceEvent[]): number | undefined {
     .reduce((sum, e) => sum + (e.tokens ?? 0), 0);
 
   return generatedTokens > 0 ? generatedTokens : undefined;
+}
+
+function deriveTurnUsageMetadata(events: TraceEvent[]): Record<string, number> {
+  const usage: Record<string, number> = {};
+  const promptTokens = sumInferenceMetadata(events, 'promptTokens');
+  const completionTokens = sumInferenceMetadata(events, 'completionTokens');
+  const totalTokens = sumInferenceMetadata(events, 'totalTokens');
+
+  if (promptTokens != null) usage.promptTokens = promptTokens;
+  if (completionTokens != null) usage.completionTokens = completionTokens;
+  if (totalTokens != null) usage.totalTokens = totalTokens;
+
+  return usage;
 }
 
 /**
@@ -254,6 +285,7 @@ export function traceToAgentRun(trace: Trace): AgentRun {
     const contextBlocks = events
       .map((event) => eventToContextBlock(event, turnId))
       .filter((block): block is ContextBlock => block !== null);
+    const usageMetadata = deriveTurnUsageMetadata(events);
 
     return {
       id: turnId,
@@ -262,6 +294,7 @@ export function traceToAgentRun(trace: Trace): AgentRun {
       outputTokens: deriveTurnOutputTokens(events),
       metadata: {
         traceEventIds: events.map((e) => e.id),
+        ...usageMetadata,
       },
     };
   });

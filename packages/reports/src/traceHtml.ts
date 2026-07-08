@@ -7,6 +7,7 @@ import {
   collectTransformationSummaries,
   collectRedactedExcerpts,
 } from './traceMetrics.js';
+import { sanitizeReportString } from './sanitize.js';
 
 export function renderTraceHtml(trace: Trace): string {
   const events = trace.events ?? [];
@@ -18,15 +19,15 @@ export function renderTraceHtml(trace: Trace): string {
   const excerpts = collectRedactedExcerpts(events);
 
   const rows = [
-    renderRow('Trace ID', trace.id),
-    renderRow('Status', trace.status),
-    renderRow('Provider', trace.provider ?? 'unknown'),
-    renderRow('Model', trace.model ?? 'unknown'),
-    renderRow('Mode', trace.mode),
-    renderRow('Started', trace.startedAt),
-    renderRow('Ended', trace.endedAt ?? '—'),
-    renderRow('Agent', trace.agent ?? '—'),
-    renderRow('Task', trace.task ?? '—'),
+    renderRow('Trace ID', safe(trace.id)),
+    renderRow('Status', safe(trace.status)),
+    renderRow('Provider', safe(trace.provider ?? 'unknown')),
+    renderRow('Model', safe(trace.model ?? 'unknown')),
+    renderRow('Mode', safe(trace.mode)),
+    renderRow('Started', safe(trace.startedAt)),
+    renderRow('Ended', trace.endedAt ? safe(trace.endedAt) : '—'),
+    renderRow('Agent', trace.agent ? safe(trace.agent) : '—'),
+    renderRow('Task', trace.task ? safe(trace.task) : '—'),
     renderRow('Events', String(events.length)),
   ];
 
@@ -64,7 +65,7 @@ export function renderTraceHtml(trace: Trace): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Signalglass Trace Report — ${escapeHtml(trace.id)}</title>
+<title>Signalglass Trace Report — ${escapeHtml(safe(trace.id))}</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
   h1 { border-bottom: 2px solid #ddd; padding-bottom: 0.5rem; }
@@ -130,6 +131,10 @@ ${excerpts.length > 0 ? `<div class="section">
 
 function renderRow(label: string, value: string): string {
   return `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`;
+}
+
+function safe(text: string): string {
+  return sanitizeReportString(text);
 }
 
 function escapeHtml(text: string): string {

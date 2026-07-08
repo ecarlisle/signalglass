@@ -1,4 +1,5 @@
-import type { TraceEvent, PayloadReference } from '@signalglass/core';
+import type { TraceEvent } from '@signalglass/core';
+import { sanitizeReportString } from './sanitize.js';
 
 export interface TokenMetrics {
   totalInputTokens: number | null;
@@ -29,23 +30,57 @@ export interface EventFieldCollector {
 
 export function computeTokenMetrics(events: TraceEvent[]): TokenMetrics {
   const inferenceEvents = events.filter((e) => e.type === 'inference');
-  const inputEvents = events.filter(
-    (e) => e.type !== 'inference' && e.tokens != null && e.contentPhase != null && ['sent', 'requested', 'observed'].includes(e.contentPhase),
-  );
-  const outputEvents = events.filter(
-    (e) => e.type !== 'inference' && e.tokens != null && e.contentPhase != null && ['generated', 'returned'].includes(e.contentPhase),
-  );
+  const promptTokens = sumInferenceMetadata(inferenceEvents, 'promptTokens');
+  const completionTokens = sumInferenceMetadata(inferenceEvents, 'completionTokens');
+  const totalTokens = sumInferenceMetadata(inferenceEvents, 'totalTokens');
 
-  const totalInput = inputEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
-  const totalOutput = outputEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
-  const inferenceTokens = inferenceEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+  const inputEvents = events.filter((e) => {
+    return (
+      e.type !== 'inference' &&
+      e.tokens != null &&
+      e.contentPhase != null &&
+      ['said', 'sent', 'requested', 'observed'].includes(e.contentPhase)
+    );
+  });
+  const outputEvents = events.filter((e) => {
+    return (
+      e.type !== 'inference' &&
+      e.tokens != null &&
+      e.contentPhase != null &&
+      ['generated', 'returned'].includes(e.contentPhase)
+    );
+  });
+
+  const phaseInput = inputEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+  const phaseOutput = outputEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+  const inferenceTokens =
+    totalTokens ??
+    (inferenceEvents.length > 0
+      ? inferenceEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0)
+      : undefined);
 
   return {
-    totalInputTokens: inputEvents.length > 0 ? totalInput : null,
-    totalOutputTokens: outputEvents.length > 0 ? totalOutput : null,
-    inferenceTokens: inferenceEvents.length > 0 ? inferenceTokens : null,
+    totalInputTokens:
+      promptTokens ?? (inputEvents.length > 0 ? phaseInput : null),
+    totalOutputTokens:
+      completionTokens ?? (outputEvents.length > 0 ? phaseOutput : null),
+    inferenceTokens: inferenceTokens ?? null,
     approximate: true,
   };
+}
+
+function sumInferenceMetadata(events: TraceEvent[], key: string): number | undefined {
+  let total = 0;
+  let found = false;
+
+  for (const event of events) {
+    const value = event.metadata?.[key];
+    if (typeof value !== 'number') continue;
+    total += value;
+    found = true;
+  }
+
+  return found ? total : undefined;
 }
 
 export function groupEventsByType(events: TraceEvent[]): EventTypeGroup[] {
@@ -74,7 +109,7 @@ export function collectRoutingDecisions(events: TraceEvent[]): string[] {
   const decisions: string[] = [];
   for (const e of events) {
     if (e.routingDecision) {
-      decisions.push(e.routingDecision);
+      decisions.push(sanitizeReportString(e.routingDecision));
     }
   }
   return decisions;
@@ -84,7 +119,7 @@ export function collectTransformationSummaries(events: TraceEvent[]): string[] {
   const summaries: string[] = [];
   for (const e of events) {
     if (e.transformationSummary) {
-      summaries.push(e.transformationSummary);
+      summaries.push(sanitizeReportString(e.transformationSummary));
     }
   }
   return summaries;
@@ -95,8 +130,8 @@ export function collectRedactedExcerpts(events: TraceEvent[]): ExcerptEntry[] {
   for (const e of events) {
     if (e.payloadRef?.excerpt && e.payloadRef.redacted) {
       excerpts.push({
-        eventType: e.type,
-        text: e.payloadRef.excerpt,
+        eventType: sanitizeReportString(e.type),
+        text: sanitizeReportString(e.payloadRef.excerpt),
       });
     }
   }

@@ -7,6 +7,7 @@ import {
   collectTransformationSummaries,
   collectRedactedExcerpts,
 } from './traceMetrics.js';
+import { sanitizeReportString } from './sanitize.js';
 
 export function renderTraceTerminal(trace: Trace): string {
   const lines: string[] = [];
@@ -15,20 +16,20 @@ export function renderTraceTerminal(trace: Trace): string {
 
   lines.push('Signalglass trace report');
   lines.push('');
-  lines.push(`  Trace ID:    ${trace.id}`);
-  lines.push(`  Status:      ${trace.status}`);
-  lines.push(`  Provider:    ${trace.provider ?? 'unknown'}`);
-  lines.push(`  Model:       ${trace.model ?? 'unknown'}`);
-  lines.push(`  Mode:        ${trace.mode}`);
-  lines.push(`  Started:     ${trace.startedAt}`);
+  lines.push(`  Trace ID:    ${safe(trace.id)}`);
+  lines.push(`  Status:      ${safe(trace.status)}`);
+  lines.push(`  Provider:    ${safe(trace.provider ?? 'unknown')}`);
+  lines.push(`  Model:       ${safe(trace.model ?? 'unknown')}`);
+  lines.push(`  Mode:        ${safe(trace.mode)}`);
+  lines.push(`  Started:     ${safe(trace.startedAt)}`);
   if (trace.endedAt) {
-    lines.push(`  Ended:       ${trace.endedAt}`);
+    lines.push(`  Ended:       ${safe(trace.endedAt)}`);
   }
   if (trace.agent) {
-    lines.push(`  Agent:       ${trace.agent}`);
+    lines.push(`  Agent:       ${safe(trace.agent)}`);
   }
   if (trace.task) {
-    lines.push(`  Task:        ${trace.task}`);
+    lines.push(`  Task:        ${safe(trace.task)}`);
   }
 
   lines.push(`  Events:      ${events.length}`);
@@ -103,4 +104,8 @@ export function renderTraceTerminal(trace: Trace): string {
 
 function pad(text: string, width: number): string {
   return text.length >= width ? text : text + ' '.repeat(width - text.length);
+}
+
+function safe(text: string): string {
+  return sanitizeReportString(text);
 }

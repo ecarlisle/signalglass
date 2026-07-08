@@ -312,6 +312,81 @@ describe('TraceStorage', () => {
       expect(retrieved!.events[0].payloadRef!.redacted).toBe(true);
     });
 
+    it.each([
+      ['secret value', 'secret=my-secret-value', 'my-secret-value'],
+      ['OpenAI-style API key', 'please use sk-test-secret-key-in-excerpt today', 'sk-test-secret-key-in-excerpt'],
+      ['bearer token', 'Authorization: Bearer bearer-token-123', 'bearer-token-123'],
+      ['cookie header', 'Cookie: session=secret-cookie-value', 'secret-cookie-value'],
+      ['proxy authorization header', 'Proxy-Authorization: Bearer proxy-secret-value', 'proxy-secret-value'],
+      ['env assignment', 'OPENAI_API_KEY=sk-test-env-secret', 'sk-test-env-secret'],
+    ])('should redact %s inside stored excerpts', (_label, excerpt, leakedValue) => {
+      const trace = createTestTrace({
+        mode: 'standard',
+        capturePolicy: createDefaultPolicy({
+          mode: 'standard',
+          storeShortRedactedExcerpts: true,
+        }),
+        events: [
+          {
+            id: 'event-1',
+            traceId: 'test-trace-1',
+            timestamp: '2024-01-01T00:00:00Z',
+            type: 'message',
+            contentPhase: 'said',
+            payloadRef: {
+              id: 'payload-1',
+              excerpt,
+              redacted: true,
+            },
+          },
+        ],
+      });
+
+      storage.saveTrace(trace);
+      const retrieved = storage.getTrace('test-trace-1');
+      const storedExcerpt = retrieved!.events[0].payloadRef!.excerpt!;
+
+      expect(storedExcerpt).not.toContain(leakedValue);
+      expect(storedExcerpt).toContain('[REDACTED');
+      expect(retrieved!.events[0].payloadRef!.redacted).toBe(true);
+    });
+
+    it('should apply custom secret patterns and max excerpt length to stored excerpts', () => {
+      const trace = createTestTrace({
+        mode: 'standard',
+        capturePolicy: createDefaultPolicy({
+          mode: 'standard',
+          storeShortRedactedExcerpts: true,
+          redaction: {
+            maxExcerptLength: 20,
+            secretPatterns: ['custom-secret-[0-9]+'],
+            stripHeaders: ['authorization', 'x-api-key'],
+          },
+        }),
+        events: [
+          {
+            id: 'event-1',
+            traceId: 'test-trace-1',
+            timestamp: '2024-01-01T00:00:00Z',
+            type: 'message',
+            contentPhase: 'said',
+            payloadRef: {
+              id: 'payload-1',
+              excerpt: `safe text custom-secret-12345 ${'x'.repeat(100)}`,
+              redacted: true,
+            },
+          },
+        ],
+      });
+
+      storage.saveTrace(trace);
+      const retrieved = storage.getTrace('test-trace-1');
+      const storedExcerpt = retrieved!.events[0].payloadRef!.excerpt!;
+
+      expect(storedExcerpt).not.toContain('custom-secret-12345');
+      expect(storedExcerpt.length).toBeLessThanOrEqual(20);
+    });
+
     it('should drop unredacted excerpts in standard mode', () => {
       const trace = createTestTrace({
         mode: 'standard',
@@ -518,6 +593,39 @@ describe('TraceStorage', () => {
       // Debug mode with explicit opt-in should preserve payloadRef
       expect(retrieved!.events[0].payloadRef).toBeDefined();
       expect(retrieved!.events[0].payloadRef!.storageKey).toBe('full-raw-data');
+    });
+
+    it('should strip credential-like storageKey values even in debug mode', () => {
+      const trace = createTestTrace({
+        mode: 'debug',
+        capturePolicy: createDefaultPolicy({
+          mode: 'debug',
+          storeFullRawPayloads: true,
+          storeFullToolResults: true,
+        }),
+        events: [
+          {
+            id: 'event-1',
+            traceId: 'test-trace-1',
+            timestamp: '2024-01-01T00:00:00Z',
+            type: 'message',
+            contentPhase: 'said',
+            payloadRef: {
+              id: 'payload-1',
+              storageKey: 'raw/sk-test-secret-storage-key',
+              excerpt: 'Authorization: Bearer excerpt-secret-token',
+              redacted: false,
+            },
+          },
+        ],
+      });
+
+      storage.saveTrace(trace);
+      const retrieved = storage.getTrace('test-trace-1');
+
+      expect(retrieved!.events[0].payloadRef).toBeDefined();
+      expect(retrieved!.events[0].payloadRef!.storageKey).toBeUndefined();
+      expect(retrieved!.events[0].payloadRef!.excerpt).not.toContain('excerpt-secret-token');
     });
 
     it('should still strip API keys even in debug mode', () => {
