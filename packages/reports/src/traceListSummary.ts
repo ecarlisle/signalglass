@@ -1,7 +1,7 @@
 import type { Trace } from '@signalglass/core';
 import {
   computeTokenMetrics,
-  groupEventsByType,
+  collectRoutingDecisions,
   collectRedactedExcerpts,
 } from './traceMetrics.js';
 
@@ -22,12 +22,7 @@ export function buildListSummary(trace: Trace): ListSummaryRow {
   const tokenMetrics = computeTokenMetrics(events);
   const excerpts = collectRedactedExcerpts(events);
 
-  const routingDecisions: string[] = [];
-  for (const e of events) {
-    if (e.routingDecision) {
-      routingDecisions.push(e.routingDecision);
-    }
-  }
+  const routingDecisions = collectRoutingDecisions(events);
 
   return {
     id: trace.id,

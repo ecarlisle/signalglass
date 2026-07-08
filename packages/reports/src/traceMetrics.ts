@@ -28,13 +28,13 @@ export interface EventFieldCollector {
 }
 
 export function computeTokenMetrics(events: TraceEvent[]): TokenMetrics {
+  const inferenceEvents = events.filter((e) => e.type === 'inference');
   const inputEvents = events.filter(
-    (e) => e.tokens != null && e.contentPhase != null && ['sent', 'requested', 'observed'].includes(e.contentPhase),
+    (e) => e.type !== 'inference' && e.tokens != null && e.contentPhase != null && ['sent', 'requested', 'observed'].includes(e.contentPhase),
   );
   const outputEvents = events.filter(
-    (e) => e.tokens != null && e.contentPhase != null && ['generated', 'returned'].includes(e.contentPhase),
+    (e) => e.type !== 'inference' && e.tokens != null && e.contentPhase != null && ['generated', 'returned'].includes(e.contentPhase),
   );
-  const inferenceEvents = events.filter((e) => e.type === 'inference');
 
   const totalInput = inputEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
   const totalOutput = outputEvents.reduce((sum, e) => sum + (e.tokens ?? 0), 0);

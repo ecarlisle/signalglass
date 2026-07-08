@@ -9,6 +9,7 @@ import {
   renderTraceHtml,
   renderTraceListSummary,
   renderTraceListJson,
+  computeTokenMetrics,
 } from './index.js';
 import type { AgentRun, Trace, PayloadReference } from '@signalglass/core';
 
@@ -180,6 +181,40 @@ describe('trace report formatters', () => {
     expect(parsed.tokenMetrics.approximate).toBe(true);
     expect(typeof parsed.tokenMetrics.totalInputTokens).toBe('number');
     expect(typeof parsed.tokenMetrics.inferenceTokens).toBe('number');
+  });
+
+  it('does not double-count inference event tokens in input/output phase totals', () => {
+    const eventsWithInference = [
+      {
+        id: 'evt-input',
+        traceId: 'trace-abc',
+        timestamp: '2025-01-01T00:00:00.000Z',
+        type: 'message' as const,
+        contentPhase: 'sent' as const,
+        tokens: 100,
+      },
+      {
+        id: 'evt-inference',
+        traceId: 'trace-abc',
+        timestamp: '2025-01-01T00:00:01.000Z',
+        type: 'inference' as const,
+        contentPhase: 'requested' as const,
+        tokens: 50,
+      },
+      {
+        id: 'evt-output',
+        traceId: 'trace-abc',
+        timestamp: '2025-01-01T00:00:02.000Z',
+        type: 'message' as const,
+        contentPhase: 'returned' as const,
+        tokens: 200,
+      },
+    ];
+    const metrics = computeTokenMetrics(eventsWithInference);
+    // The inference event's 50 tokens should only appear in inferenceTokens
+    expect(metrics.totalInputTokens).toBe(100);
+    expect(metrics.totalOutputTokens).toBe(200);
+    expect(metrics.inferenceTokens).toBe(50);
   });
 
   it('renders an HTML trace report', () => {

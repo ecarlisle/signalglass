@@ -122,7 +122,11 @@ describe('trace command integration', () => {
   it('TraceStorage creates parent directories for new paths', () => {
     const nestedPath = join(dbDir, 'nested', 'deep', 'test.db');
     expect(existsSync(nestedPath)).toBe(false);
-    expect(() => new TraceStorage({ databasePath: nestedPath })).not.toThrow();
+    let nestedStorage: TraceStorage | undefined;
+    expect(() => {
+      nestedStorage = new TraceStorage({ databasePath: nestedPath });
+    }).not.toThrow();
+    nestedStorage?.close();
   });
 
   it('list and show from seeded storage return consistent results', () => {
@@ -139,42 +143,50 @@ describe('trace command integration', () => {
   it('tracesCommand list returns terminal output containing trace id', () => {
     storage = createSeededStorage();
     storage.close();
-    // Don't capture process.exit — just verify it doesn't throw
-    expect(() => {
-      tracesCommand(['--storage', dbPath, 'list']);
-    }).not.toThrow();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    tracesCommand(['--storage', dbPath, 'list']);
+    expect(logSpy.mock.calls.join('\n')).toContain('trace-seeded-1');
+    logSpy.mockRestore();
   });
 
   it('tracesCommand list --report json returns JSON output', () => {
     storage = createSeededStorage();
     storage.close();
-    expect(() => {
-      tracesCommand(['--storage', dbPath, 'list', '--report', 'json']);
-    }).not.toThrow();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    tracesCommand(['--storage', dbPath, 'list', '--report', 'json']);
+    expect(logSpy.mock.calls.join('\n')).toContain('trace-seeded-1');
+    expect(logSpy.mock.calls.join('\n')).toContain('"approximate"');
+    logSpy.mockRestore();
   });
 
   it('tracesCommand show returns terminal output containing trace id', () => {
     storage = createSeededStorage();
     storage.close();
-    expect(() => {
-      tracesCommand(['--storage', dbPath, 'show', 'trace-seeded-1']);
-    }).not.toThrow();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    tracesCommand(['--storage', dbPath, 'show', 'trace-seeded-1']);
+    expect(logSpy.mock.calls.join('\n')).toContain('trace-seeded-1');
+    expect(logSpy.mock.calls.join('\n')).toContain('Signalglass trace report');
+    logSpy.mockRestore();
   });
 
   it('tracesCommand show --report json returns JSON output', () => {
     storage = createSeededStorage();
     storage.close();
-    expect(() => {
-      tracesCommand(['--storage', dbPath, 'show', 'trace-seeded-1', '--report', 'json']);
-    }).not.toThrow();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    tracesCommand(['--storage', dbPath, 'show', 'trace-seeded-1', '--report', 'json']);
+    expect(logSpy.mock.calls.join('\n')).toContain('trace-seeded-1');
+    expect(logSpy.mock.calls.join('\n')).toContain('"reportType": "trace"');
+    logSpy.mockRestore();
   });
 
   it('tracesCommand show --report html returns HTML output', () => {
     storage = createSeededStorage();
     storage.close();
-    expect(() => {
-      tracesCommand(['--storage', dbPath, 'show', 'trace-seeded-1', '--report', 'html']);
-    }).not.toThrow();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    tracesCommand(['--storage', dbPath, 'show', 'trace-seeded-1', '--report', 'html']);
+    expect(logSpy.mock.calls.join('\n')).toContain('trace-seeded-1');
+    expect(logSpy.mock.calls.join('\n')).toContain('<!DOCTYPE html>');
+    logSpy.mockRestore();
   });
 
   describe('tracesCommand error paths', () => {
