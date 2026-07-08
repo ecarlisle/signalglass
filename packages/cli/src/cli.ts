@@ -4,18 +4,25 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { parseSignalglassJson } from '@signalglass/parsers';
 import { analyzeRun } from '@signalglass/core';
 import { renderTerminal, renderJson, renderHtml } from '@signalglass/reports';
+import { loadConfig, startIngressServer } from '@signalglass/ingress';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-function printUsage() {
+function printAnalyzeUsage() {
   console.error('Usage: signalglass analyze <file> [--report terminal|json|html] [--output <file>]');
 }
 
-function main() {
-  let args = process.argv.slice(2);
-  // pnpm sometimes passes a leading `--` separator through to the script.
-  if (args[0] === '--') {
-    args = args.slice(1);
-  }
+function printIngressUsage() {
+  console.error('Usage: signalglass ingress --config <file> [--port <port>]');
+}
 
+function printUsage() {
+  console.error('Usage: signalglass <command> [options]');
+  console.error('Commands:');
+  console.error('  analyze <file> [--report terminal|json|html] [--output <file>]');
+  console.error('  ingress --config <file> [--port <port>]');
+}
+
+function analyzeCommand(args: string[]) {
   const { positionals, values } = parseArgs({
     args,
     allowPositionals: true,
@@ -25,16 +32,10 @@ function main() {
     },
   });
 
-  const command = positionals[0];
-  if (command !== 'analyze') {
-    printUsage();
-    process.exit(1);
-  }
-
-  const filePath = positionals[1];
+  const filePath = positionals[0];
   if (!filePath) {
     console.error('Error: missing file path');
-    printUsage();
+    printAnalyzeUsage();
     process.exit(1);
   }
 
@@ -69,4 +70,85 @@ function main() {
   }
 }
 
-main();
+export function validatePort(raw: string): number {
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`Invalid port: "${raw}"`);
+  }
+  const port = Number.parseInt(raw, 10);
+  if (Number.isNaN(port) || port < 1 || port > 65535) {
+    throw new Error(`Port must be an integer between 1 and 65535, got: ${raw}`);
+  }
+  return port;
+}
+
+async function ingressCommand(args: string[]) {
+  const { values } = parseArgs({
+    args,
+    options: {
+      config: { type: 'string' },
+      port: { type: 'string' },
+    },
+  });
+
+  if (!values.config) {
+    console.error('Error: missing --config');
+    printIngressUsage();
+    process.exit(1);
+  }
+
+  let port: number | undefined;
+  if (values.port !== undefined) {
+    try {
+      port = validatePort(values.port);
+    } catch (error) {
+      console.error(`Error: ${error instanceof Error ? error.message : error}`);
+      printIngressUsage();
+      process.exit(1);
+    }
+  }
+
+  const config = await loadConfig(values.config);
+
+  const server = await startIngressServer({ config, port });
+  const address = server.address();
+  const listeningPort = address && typeof address === 'object' ? address.port : port;
+
+  console.log(`Signalglass ingress listening on http://localhost:${listeningPort}/v1`);
+}
+
+async function main() {
+  let args = process.argv.slice(2);
+  // pnpm sometimes passes a leading `--` separator through to the script.
+  if (args[0] === '--') {
+    args = args.slice(1);
+  }
+
+  const { positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    strict: false,
+    options: {},
+  });
+
+  const command = positionals[0];
+  const commandArgs = args.slice(1);
+
+  switch (command) {
+    case 'analyze':
+      analyzeCommand(commandArgs);
+      break;
+    case 'ingress':
+      await ingressCommand(commandArgs);
+      break;
+    default:
+      printUsage();
+      process.exit(1);
+  }
+}
+
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === pathToFileURL(fileURLToPath(import.meta.url)).href) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}
