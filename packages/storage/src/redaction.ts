@@ -13,6 +13,8 @@ const SENSITIVE_HEADERS = [
   'proxy-authorization',
 ];
 
+const DEFAULT_MAX_EXCERPT_LENGTH = 240;
+
 const SENSITIVE_PATTERNS = [
   /api[_-]?key/i,
   /auth/i,
@@ -57,11 +59,11 @@ function sanitizeEvent(event: TraceEvent, policy: CapturePolicy): TraceEvent {
       sanitized.payloadRef = sanitizeDebugPayloadRef(event.payloadRef, policy);
     } else if (
       policy.storeShortRedactedExcerpts &&
-      event.payloadRef.excerpt &&
-      event.payloadRef.redacted
+      event.payloadRef.excerpt
     ) {
-      // Standard/minimal mode: keep only a sanitized, bounded excerpt and
-      // never trust the caller-provided redacted flag as proof of safety.
+      // Standard/minimal mode: keep only a sanitized, bounded excerpt.
+      // We never trust the caller-provided redacted flag as proof of safety;
+      // sanitizeExcerptOnlyPayloadRef re-sanitizes and forces redacted: true.
       sanitized.payloadRef = sanitizeExcerptOnlyPayloadRef(event.payloadRef, policy);
     } else {
       // Remove payload reference entirely
@@ -108,7 +110,7 @@ function sanitizeExcerptOnlyPayloadRef(
 function sanitizeExcerpt(excerpt: string, policy: CapturePolicy): string {
   return redactAndTruncateSensitiveText(
     excerpt,
-    policy.redaction?.maxExcerptLength ?? 240,
+    policy.redaction?.maxExcerptLength ?? DEFAULT_MAX_EXCERPT_LENGTH,
     redactionOptions(policy),
   );
 }

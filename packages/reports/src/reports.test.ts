@@ -315,6 +315,7 @@ describe('trace report formatters', () => {
       ],
     };
     const terminal = renderTraceTerminal(traceWithSensitiveFields);
+    expect(terminal).not.toContain('sk-test-secret-key-in-provider');
     expect(terminal).not.toContain('sk-test-secret-key-in-route');
     expect(terminal).not.toContain('model-token');
     expect(terminal).not.toContain('abc123');
@@ -328,11 +329,13 @@ describe('trace report formatters', () => {
     const json = renderTraceJson(traceWithSensitiveFields);
     const parsed = JSON.parse(json);
     expect(parsed.routingDecisions).toBeDefined();
+    expect(JSON.stringify(parsed)).not.toContain('sk-test-secret-key-in-provider');
     expect(JSON.stringify(parsed)).not.toContain('sk-test-secret-key-in-route');
     expect(JSON.stringify(parsed)).not.toContain('secret-route-token');
     expect(JSON.stringify(parsed)).not.toContain('raw-secret-key');
 
     const html = renderTraceHtml(traceWithSensitiveFields);
+    expect(html).not.toContain('sk-test-secret-key-in-provider');
     expect(html).not.toContain('sk-test-secret-key-in-route');
     expect(html).not.toContain('model-token');
     expect(html).not.toContain('secret-cookie');

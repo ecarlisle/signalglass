@@ -19,7 +19,7 @@ const AUTH_HEADER =
 
 const COOKIE_HEADER = /\b(cookie|set-cookie)\s*[:=]\s*[^\r\n]+/gi;
 const BEARER_TOKEN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
-const OPENAI_STYLE_KEY = /\bsk-[A-Za-z0-9][A-Za-z0-9_-]{6,}\b/g;
+const PREFIXED_API_KEY = /\bsk-[A-Za-z0-9][A-Za-z0-9_-]{6,}\b/g;
 
 /**
  * Redact credential-like substrings from text that may be stored or reported.
@@ -44,7 +44,7 @@ export function redactSensitiveText(
   redacted = redacted.replace(AUTH_HEADER, `$1: ${REDACTED}`);
   redacted = redacted.replace(COOKIE_HEADER, `$1: ${REDACTED}`);
   redacted = redacted.replace(BEARER_TOKEN, `Bearer ${REDACTED}`);
-  redacted = redacted.replace(OPENAI_STYLE_KEY, REDACTED_API_KEY);
+  redacted = redacted.replace(PREFIXED_API_KEY, REDACTED_API_KEY);
   redacted = redacted.replace(JSON_SECRET, `$1"${REDACTED}"`);
   redacted = redacted.replace(KEY_VALUE_SECRET, `$1=${REDACTED}`);
   redacted = redacted.replace(ENV_SECRET, `$1=${REDACTED}`);

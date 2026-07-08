@@ -80,7 +80,7 @@ Before any content is stored, SignalGlass applies redaction rules:
 
 ## Retention
 
-The default capture policy sets `retentionDays` only when configured by the caller. `deleteExpiredTraces()` removes traces whose expiry has passed, and SQLite cascade deletion removes their events. Deployments that need automatic cleanup should schedule that cleanup call.
+Retention is configurable via the optional `capturePolicy.retentionDays` field. When `retentionDays` is not set by the caller, traces have no automatic expiry and are kept indefinitely. `deleteExpiredTraces()` removes traces whose expiry has passed, and SQLite cascade deletion removes their events. Deployments that need automatic cleanup should set `retentionDays` and schedule periodic calls to `deleteExpiredTraces()`. The default capture policy does not set `retentionDays`.
 
 ## Report output
 

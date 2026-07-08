@@ -435,7 +435,7 @@ describe('TraceStorage', () => {
       expect(event.payloadRef!.excerpt).toContain('[REDACTED]');
     });
 
-    it('should drop unredacted excerpts in standard mode', () => {
+    it('should sanitize and store excerpts even when the caller redacted flag is false', () => {
       const trace = createTestTrace({
         mode: 'standard',
         capturePolicy: createDefaultPolicy({
@@ -452,7 +452,7 @@ describe('TraceStorage', () => {
             contentPhase: 'said',
             payloadRef: {
               id: 'payload-1',
-              excerpt: 'Unsafe content that should not be stored',
+              excerpt: 'Unsafe content that should be sanitized before storage',
               redacted: false,
               storageKey: 'raw-key',
             },
@@ -463,11 +463,15 @@ describe('TraceStorage', () => {
       storage.saveTrace(trace);
       const retrieved = storage.getTrace('test-trace-1');
 
-      // Unredacted excerpts should be dropped entirely in standard mode
-      expect(retrieved!.events[0].payloadRef).toBeUndefined();
+      // We never trust the caller-provided redacted flag. Sanitization and
+      // forced redacted=true ensure the stored excerpt is safe.
+      expect(retrieved!.events[0].payloadRef).toBeDefined();
+      expect(retrieved!.events[0].payloadRef!.excerpt).toBe('Unsafe content that should be sanitized before storage');
+      expect(retrieved!.events[0].payloadRef!.redacted).toBe(true);
+      expect(retrieved!.events[0].payloadRef!.storageKey).toBeUndefined();
     });
 
-    it('should drop payloadRef completely for unredacted content in standard mode', () => {
+    it('should sanitize and store excerpts from unredacted content', () => {
       const trace = createTestTrace({
         mode: 'standard',
         capturePolicy: createDefaultPolicy({
@@ -484,7 +488,7 @@ describe('TraceStorage', () => {
             contentPhase: 'said',
             payloadRef: {
               id: 'payload-1',
-              excerpt: 'Unredacted text',
+              excerpt: 'Unredacted text that will be sanitized',
               redacted: false,
             },
           },
@@ -494,8 +498,11 @@ describe('TraceStorage', () => {
       storage.saveTrace(trace);
       const retrieved = storage.getTrace('test-trace-1');
 
-      // Entire payloadRef should be absent
-      expect(retrieved!.events[0].payloadRef).toBeUndefined();
+      // Excerpt is stored because sanitizeExcerptOnlyPayloadRef handles safety,
+      // not the caller-provided redacted flag.
+      expect(retrieved!.events[0].payloadRef).toBeDefined();
+      expect(retrieved!.events[0].payloadRef!.excerpt).toBe('Unredacted text that will be sanitized');
+      expect(retrieved!.events[0].payloadRef!.redacted).toBe(true);
     });
 
     it('should strip storageKey and keep redacted excerpt in standard mode', () => {

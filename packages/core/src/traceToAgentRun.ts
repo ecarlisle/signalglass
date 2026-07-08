@@ -250,8 +250,14 @@ function deriveTurnOutputTokens(events: TraceEvent[]): number | undefined {
   return generatedTokens > 0 ? generatedTokens : undefined;
 }
 
-function deriveTurnUsageMetadata(events: TraceEvent[]): Record<string, number> {
-  const usage: Record<string, number> = {};
+interface TurnUsageMetadata {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
+function deriveTurnUsageMetadata(events: TraceEvent[]): TurnUsageMetadata {
+  const usage: TurnUsageMetadata = {};
   const promptTokens = sumInferenceMetadata(events, 'promptTokens');
   const completionTokens = sumInferenceMetadata(events, 'completionTokens');
   const totalTokens = sumInferenceMetadata(events, 'totalTokens');

@@ -70,7 +70,7 @@ When `capturePolicy.mode` is `"debug"` and `storeFullRawPayloads` is explicitly 
 
 ### Retention
 
-- Retention is configurable via `capturePolicy.retentionDays` (default: 30 days).
+- Retention is configurable via optional `capturePolicy.retentionDays`. When undefined, no default expiry is set and traces never expire.
 - `deleteExpiredTraces()` removes traces whose `expires_at` is in the past.
 - Expired trace events are cascade-deleted by SQLite foreign key enforcement.
 
