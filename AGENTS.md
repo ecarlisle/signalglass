@@ -50,6 +50,30 @@ On the branch:
 
 If GitHub CLI authentication or permissions are unavailable, stop after committing locally and report the exact command failure plus the manual commands needed to push and open the PR.
 
+## Approval step
+
+Every spec PR should go through a final read-only approval before the human merge.
+
+The normal flow is:
+
+```text
+Draft → Accepted → Implemented PR → Review → Approval → Human merge
+```
+
+The Approver is read-only and must not:
+
+- Edit code or docs.
+- Commit or push.
+- Approve the PR in GitHub.
+- Merge the PR.
+
+The Approver inspects the PR branch, description, review comments, and validation results, then reports exactly one of:
+
+- `MERGE` — the PR is ready for the human to merge.
+- `DO NOT MERGE` — the PR has blockers that must be resolved first.
+
+The human remains responsible for the actual merge. See `.pi/prompts/approve-pr.md` for the prompt template.
+
 ## Product stance
 
 - Keep the project **observability-first** and educational.

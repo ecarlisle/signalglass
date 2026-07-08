@@ -40,6 +40,10 @@ Steps:
 
 For the full rules, see the **Branch and PR workflow** section in [`AGENTS.md`](../AGENTS.md).
 
+## Approval
+
+Before a human merges a spec PR, run the final read-only approval prompt in [`.pi/prompts/approve-pr.md`](../.pi/prompts/approve-pr.md). The Approver only reports `MERGE` or `DO NOT MERGE`; the human performs the actual merge. See the **Approval step** section in [`AGENTS.md`](../AGENTS.md) for details.
+
 ## Test expectations
 
 Every spec implementation must include tests that map to the spec's acceptance criteria. A spec is not complete until its required tests exist, pass, and cover the acceptance criteria. See the **Test expectations** section in [`AGENTS.md`](../AGENTS.md) for the full rules.

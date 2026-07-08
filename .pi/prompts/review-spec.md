@@ -45,6 +45,10 @@ If reviewing a pull request, also verify:
 - [ ] No unrelated files were changed.
 - [ ] No secrets, `.env` files, trace dumps, local databases, generated artifacts, or raw payload captures were included.
 
+## Approval handoff
+
+The reviewer identifies issues and suggests fixes. After review comments are addressed, the Approver performs the final read-only merge-readiness decision using `.pi/prompts/approve-pr.md`. The reviewer does not merge; the Approver does not merge; the human merges after the Approver reports `MERGE`.
+
 ## Report
 
 Return:
