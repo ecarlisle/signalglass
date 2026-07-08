@@ -150,28 +150,32 @@ describe('TraceStorage', () => {
       storage.saveTrace(trace);
 
       // Verify events exist
-      let retrieved = storage.getTrace('cascade-test');
+      const retrieved = storage.getTrace('cascade-test');
       expect(retrieved).not.toBeNull();
       expect(retrieved!.events).toHaveLength(2);
 
-      // Get the underlying db reference to check raw event count
-      // We can use getTrace as the public check - after delete it should be null
+      type CountRow = { count: number };
+
+      // Events should exist in the DB before deletion
+      const db = (storage as unknown as { db: import('better-sqlite3').Database }).db;
+      const beforeCount = db.prepare(
+        'SELECT COUNT(*) as count FROM trace_events WHERE trace_id = ?'
+      ).get('cascade-test') as CountRow;
+      expect(beforeCount.count).toBe(2);
+
       storage.deleteTrace('cascade-test');
 
-      retrieved = storage.getTrace('cascade-test');
-      expect(retrieved).toBeNull();
+      // Public read: trace should be null
+      expect(storage.getTrace('cascade-test')).toBeNull();
 
-      // Now save another trace and verify no orphan events from the deleted one
-      const trace2 = createTestTrace({ id: 'cascade-test-2' });
-      storage.saveTrace(trace2);
-      const retrieved2 = storage.getTrace('cascade-test-2');
-      expect(retrieved2).not.toBeNull();
-      expect(retrieved2!.events).toHaveLength(2);
+      // Direct DB check: no orphan trace_events rows
+      const afterCount = db.prepare(
+        'SELECT COUNT(*) as count FROM trace_events WHERE trace_id = ?'
+      ).get('cascade-test') as CountRow;
+      expect(afterCount.count).toBe(0);
 
-      // The deleted trace's events should not appear
-      const traces = storage.listTraces();
-      expect(traces).toHaveLength(1);
-      expect(traces[0].id).toBe('cascade-test-2');
+      // Remaining traces should be empty
+      expect(storage.listTraces()).toHaveLength(0);
     });
   });
 
@@ -637,6 +641,9 @@ describe('TraceStorage', () => {
     });
 
     it('should delete expired traces deterministically', () => {
+      type CountRow = { count: number };
+      const getDb = () => (storage as unknown as { db: import('better-sqlite3').Database }).db;
+
       // Save a trace with a reasonable policy
       const trace = createTestTrace({
         id: 'expiring-trace',
@@ -645,7 +652,7 @@ describe('TraceStorage', () => {
       storage.saveTrace(trace);
 
       // Manually set expires_at to the past using the underlying connection
-      const db = (storage as any).db;
+      const db = getDb();
       db.prepare(
         `UPDATE traces SET expires_at = datetime('now', '-1 day') WHERE id = ?`
       ).run('expiring-trace');
@@ -669,13 +676,23 @@ describe('TraceStorage', () => {
       // Fresh trace should remain
       expect(storage.getTrace('fresh-trace')).not.toBeNull();
 
-      // Events for the expired trace should cascade delete
-      // Verify by checking the fresh trace still has its events
-      const freshRetrieved = storage.getTrace('fresh-trace');
-      expect(freshRetrieved!.events).toHaveLength(2);
+      // Events for the expired trace should cascade delete (direct DB check)
+      const afterCount = db.prepare(
+        'SELECT COUNT(*) as count FROM trace_events WHERE trace_id = ?'
+      ).get('expiring-trace') as CountRow;
+      expect(afterCount.count).toBe(0);
+
+      // Fresh trace events should still exist
+      const freshEvents = db.prepare(
+        'SELECT COUNT(*) as count FROM trace_events WHERE trace_id = ?'
+      ).get('fresh-trace') as CountRow;
+      expect(freshEvents.count).toBe(2);
     });
 
     it('should delete expired trace events via cascade', () => {
+      type CountRow = { count: number };
+      const db = (storage as unknown as { db: import('better-sqlite3').Database }).db;
+
       const trace = createTestTrace({
         id: 'cascade-expiry',
         capturePolicy: createDefaultPolicy({ retentionDays: 30 }),
@@ -683,15 +700,20 @@ describe('TraceStorage', () => {
       storage.saveTrace(trace);
 
       // Manually expire the trace
-      const db = (storage as any).db;
       db.prepare(
         `UPDATE traces SET expires_at = datetime('now', '-1 day') WHERE id = ?`
       ).run('cascade-expiry');
 
       storage.deleteExpiredTraces();
 
-      // Trace should be gone, and events should cascade delete
+      // Trace should be gone
       expect(storage.getTrace('cascade-expiry')).toBeNull();
+
+      // Events should cascade delete (direct DB check)
+      const afterCount = db.prepare(
+        'SELECT COUNT(*) as count FROM trace_events WHERE trace_id = ?'
+      ).get('cascade-expiry') as CountRow;
+      expect(afterCount.count).toBe(0);
 
       // Verify only fresh traces remain (none left here)
       expect(storage.listTraces()).toHaveLength(0);

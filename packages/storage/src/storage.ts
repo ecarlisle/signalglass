@@ -165,8 +165,10 @@ export class TraceStorage {
   }
 
   deleteExpiredTraces(): number {
+    // Normalize both sides through datetime() so ISO strings (from Date.toISOString())
+    // and SQLite datetime('now') format are compared consistently.
     const result = this.db.prepare(`
-      DELETE FROM traces WHERE expires_at IS NOT NULL AND expires_at < datetime('now')
+      DELETE FROM traces WHERE expires_at IS NOT NULL AND datetime(expires_at) < datetime('now')
     `).run();
     return result.changes;
   }

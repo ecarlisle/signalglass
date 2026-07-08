@@ -520,16 +520,18 @@ describe('ingress server', () => {
       const storagePath = join(tmpdir(), `signalglass-ingress-storage-test-${Date.now()}.db`);
       const storage = new TraceStorage({ databasePath: storagePath });
 
-      storage.saveTrace(capturedTrace!);
-      const retrieved = storage.getTrace(capturedTrace!.id);
+      try {
+        storage.saveTrace(capturedTrace!);
+        const retrieved = storage.getTrace(capturedTrace!.id);
 
-      expect(retrieved).not.toBeNull();
-      expect(retrieved!.id).toBe(capturedTrace!.id);
-      expect(retrieved!.provider).toBe('openai');
-      expect(retrieved!.events.length).toBe(capturedTrace!.events.length);
-
-      storage.close();
-      await unlink(storagePath);
+        expect(retrieved).not.toBeNull();
+        expect(retrieved!.id).toBe(capturedTrace!.id);
+        expect(retrieved!.provider).toBe('openai');
+        expect(retrieved!.events.length).toBe(capturedTrace!.events.length);
+      } finally {
+        storage.close();
+        await unlink(storagePath);
+      }
 
       server.close();
     });

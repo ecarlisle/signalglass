@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parseSignalglassJson } from '@signalglass/parsers';
 import { analyzeRun } from '@signalglass/core';
+import type { Trace } from '@signalglass/core';
 import { renderTerminal, renderJson, renderHtml } from '@signalglass/reports';
 import { loadConfig, startIngressServer } from '@signalglass/ingress';
 import { TraceStorage } from '@signalglass/storage';
@@ -113,12 +114,12 @@ async function ingressCommand(args: string[]) {
 
   // Initialize storage if --storage option is provided
   let storage: TraceStorage | undefined;
-  let onTrace: ((trace: any) => void | Promise<void>) | undefined;
+  let onTrace: ((trace: Trace) => void | Promise<void>) | undefined;
 
   if (values.storage) {
     try {
       storage = new TraceStorage({ databasePath: values.storage });
-      onTrace = async (trace) => {
+      onTrace = async (trace: Trace) => {
         try {
           storage!.saveTrace(trace);
         } catch (error) {
@@ -132,7 +133,15 @@ async function ingressCommand(args: string[]) {
     }
   }
 
-  const server = await startIngressServer({ config, port, onTrace });
+  let server;
+  try {
+    server = await startIngressServer({ config, port, onTrace });
+  } catch (error) {
+    if (storage) {
+      storage.close();
+    }
+    throw error;
+  }
   const address = server.address();
   const listeningPort = address && typeof address === 'object' ? address.port : port;
 
