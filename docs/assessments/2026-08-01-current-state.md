@@ -139,7 +139,7 @@ Where code and documentation disagree, the current code is treated as evidence o
 ### 10. Privacy/redaction (cross-cutting)
 
 - **Behavior:** [FACT] Three layers — `core/privacy.ts` regex redaction, `storage/redaction.ts` recursive sanitization, `reports/sanitize.ts` report-bound strings; plus `traceToAgentRun`'s `sanitizeTraceMetadata`.
-- **Assessment:** [FACT] Strong defense-in-depth, genuinely preservable. [INFERENCE] But redaction is **capture-time**, not **profile-based**: the adapter redacts before the excerpt is created, so raw evidence is never available to later profiles. [RECOMMENDATION] Under the foundation, capture, persistence, and export are separate decisions: a metadata-only profile must not collect full payloads in the first place; a redacted profile may discard content at its declared capture boundary; full-fidelity capture is explicit, protected, and not the universal default.
+- **Assessment:** [FACT] Strong defense-in-depth, genuinely preservable. [INFERENCE] But redaction is **capture-time**, not **profile-based**: the adapter redacts before the excerpt is created, so raw evidence is never available to later profiles. [RECOMMENDATION] Under the foundation, capture, persistence, and export are independent policy stages: metadata-only collection must not collect complete content; collection-time redaction may intentionally prevent sensitive content from entering SignalGlass; persistence may retain less than was transiently observed; export may disclose less than was persisted; full-fidelity capture is explicit, protected, and not the universal default.
 
 ### 11. Token / latency / cost / savings
 
@@ -173,7 +173,7 @@ Required separation: **evidence → measurement → interpretation**. The table 
 | Cost as versioned derivation | [FACT] Absent | Cost = measured usage × versioned pricing schedule; part of the measurement layer, **not** the optimization-analysis module |
 | Context sources/contributions explicit | [INFERENCE] SourceType classification; no provenance | Add provenance links (retrieval source, file rule, MCP call) |
 | Completeness/dropped-evidence reporting | [FACT] None | Per-interaction and per-event completeness metadata; "not captured" reported, never silently assumed |
-| Capture policy decomposed | [FACT] One hardwired `standard` mode at capture | Collection, persistence, and export are separate decisions. Metadata-only must not collect full payloads first; redacted may discard at its declared capture boundary; full-fidelity is explicit, protected, and not the universal default |
+| Capture policy decomposed | [FACT] One hardwired `standard` mode at capture | Collection, persistence, and export are independent policy stages. Metadata-only must not collect complete content; collection-time redaction may intentionally prevent sensitive content from entering SignalGlass; persistence may retain less than was transiently observed; export may disclose less than was persisted; full-fidelity is explicit, protected, and not the universal default |
 | Tool execution observed | [FACT] Only tool definitions in the request | Tool/MCP/retrieval systems as independently observable capture surfaces |
 | `AgentRun` as optional projection | [FACT] Canonical | Demote; keep as analysis projection |
 | Smells/recommendations/savings outside core | [FACT] Inside `@signalglass/core` | Move to an optional, clearly labeled analysis module; savings language is interpretation, not measurement |
@@ -252,10 +252,10 @@ What it **omits / cannot know** [FACT]:
 | # | Risk | Severity | Why it matters |
 |---|---|---|---|
 | R1 | Canonical model migration touches every package, with no storage migration framework | High | DDL is `CREATE TABLE IF NOT EXISTS` with no versioning; existing `.signalglass/*.db` files would be incompatible; a misstep breaks all three CLI modes |
-| R2 | Capture-time redaction destroys evidence before any profile can use it | High | The mission's core value is fidelity; moving redaction to the export boundary while preserving privacy guarantees (and their regression tests) is the riskiest privacy work |
+| R2 | Capture-time redaction destroys evidence before any profile can use it | High | The mission's core value is fidelity; implementing collection, persistence, and export as independent policy stages — including protected full-fidelity collection and collection-time redaction that intentionally prevents sensitive content from entering SignalGlass — while preserving the existing privacy guarantees (and their regression tests) is the riskiest privacy work |
 | R3 | No streaming support | High | Real harnesses (Pi, OpenCode) stream by default; live observability is unusable until SSE is transparent |
 | R4 | Tool/MCP/retrieval execution invisible | Medium-High | Mission explicitly names these as observable systems; the proxy boundary alone cannot see agent-side tool execution |
-| R5 | Non-deterministic event order after storage | Medium | Undermines replay and deterministic measurements; needs sequence numbers |
+| R5 | Non-deterministic event order after storage | Medium | Undermines deterministic request reconstruction and deterministic measurements; needs sequence numbers |
 | R6 | Silent data loss in the current schema (actor column absent) | Medium | Stored traces lose actor identity without any indication |
 | R7 | No CI; manual validation; spec-status inaccuracy (002/003) | Medium | Migration is exactly when regression risk spikes |
 | R8 | Scope creep into optimization features (roadmap v0.7/v0.9) | Medium | Pulls toward the old mission; must be deferred until the evidence core exists |
@@ -294,4 +294,4 @@ Decisions intentionally **deferred to the future evidence-model specification** 
 7. **Sequencing and clock specifics.** Sequence-number generation and the exact clocks recorded at capture.
 8. **Storage migration strategy.** Migration framework mechanics and how legacy tables are retained as projections.
 
-Decisions **recorded as established in ADR 0004** (do not require the evidence-model spec): captured evidence is authoritative; observations/measurements/interpretations are separate; capture boundaries and uncertainty are explicit; core instrumentation must not transform semantic inputs; optimization is optional experimental/analysis scope; the repository is migrated incrementally rather than replaced.
+Decisions **recorded as established in ADR 0004** (do not require the evidence-model spec): captured evidence is the authoritative record of what SignalGlass observed at its declared capture boundary; observations/measurements/interpretations are separate; capture boundaries and uncertainty are explicit; core instrumentation must not transform semantic inputs; optimization is optional experimental/analysis scope; the repository is migrated incrementally rather than replaced.

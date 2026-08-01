@@ -6,7 +6,7 @@ SignalGlass observes, records, measures, visualizes, compares, and replays AI in
 
 Its guiding commitments:
 
-- **Evidence is authoritative.** Raw captured evidence is ground truth. Metrics, visualizations, and explanations are derived, versioned views over that evidence.
+- **Evidence is authoritative.** Captured evidence is the authoritative record of what SignalGlass observed at its declared capture boundary — it does not prove hidden provider behavior or unobserved activity. Metrics, visualizations, and explanations are derived, versioned views over that evidence.
 - **Observe before optimizing.** SignalGlass never rewrites, summarizes, compresses, deduplicates, or otherwise changes the interactions it measures. Prompt optimization and context transformation are only ever explicit experimental conditions or optional analysis — not core behavior.
 - **Separation by design.** Observations, deterministic measurements, and interpretations are kept separate. Token counts, latency, and cost are deterministic derivations (cost = measured usage × a versioned pricing schedule); smells, recommendations, and narrative are optional, clearly labeled interpretations.
 - **Honest boundaries.** Capture boundaries and uncertainty are explicit. SignalGlass does not claim to know hidden provider behavior, and it reports what it could not capture.

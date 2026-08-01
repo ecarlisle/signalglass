@@ -44,8 +44,9 @@ Ratify the architectural foundation (done in the realignment docs PR); write and
 
 ### Replay and comparison
 
-- Deterministic replay of recorded interactions.
+- Deterministic request reconstruction: reissuing a recorded request under a declared environment, with reproducible replay configuration and orchestration.
 - Side-by-side comparison of derived measurements across runs, models, and providers.
+- Identical responses cannot be guaranteed: models, providers, tools, external data, and inference may be nondeterministic or may change over time.
 
 ### Optional analysis
 

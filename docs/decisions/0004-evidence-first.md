@@ -17,7 +17,7 @@ The new mission requires a clear foundation before any further model work:
 - Treat prompt optimization and context transformation only as explicit experimental conditions or optional analysis — not as core behavior.
 - Treat MCP, Graphify, retrieval systems, and other tools as independently observable systems.
 - Make uncertainty and capture boundaries explicit. Do not claim to know hidden provider behavior.
-- Treat raw captured evidence as authoritative; all metrics, visualizations, and explanations must be derived, versioned views.
+- Treat captured evidence as the authoritative record of what SignalGlass observed at its declared capture boundary; it does not prove hidden provider behavior or unobserved activity. All metrics, visualizations, and explanations must be derived, versioned views.
 
 The authoritative target-direction statement is `docs/architectural-foundation.md` (v0.1). This ADR records only the architectural decisions that are already established. It deliberately does **not** define the complete evidence schema; that belongs to a future evidence-model specification.
 
@@ -25,7 +25,7 @@ The authoritative target-direction statement is `docs/architectural-foundation.m
 
 SignalGlass adopts the following architectural decisions:
 
-1. **Captured evidence is authoritative.** Raw captured evidence is the ground truth. All metrics, visualizations, and explanations are derived, versioned views over that evidence. No metric or explanation may be presented as if it were itself raw evidence.
+1. **Captured evidence is authoritative.** Captured evidence is the authoritative record of what SignalGlass observed at its declared capture boundary. It does not prove hidden provider behavior or unobserved activity. All metrics, visualizations, and explanations are derived, versioned views over that evidence. No metric or explanation may be presented as if it were itself raw evidence.
 
 2. **Observations, measurements, and interpretations are separate.**
    - **Observations** are captured facts (requests, responses, tool activity, context provenance).
@@ -35,7 +35,7 @@ SignalGlass adopts the following architectural decisions:
 
 3. **Capture boundaries and uncertainty are explicit.** Every capture surface declares what it observes and what it cannot see (for example, an HTTP proxy does not see client-side tool execution). Missing evidence is reported as missing; estimates and approximations are labeled; hidden provider behavior is never claimed.
 
-4. **Core instrumentation must not transform semantic inputs.** The capture path must not rewrite, summarize, compress, deduplicate, or otherwise change the interactions being measured. Any transformation that occurs (for example, excerpting under a redacted profile) happens at a declared capture boundary and is recorded as such. Capture, persistence, and export are separate decisions: a metadata-only profile must not collect full payloads in the first place; a redacted profile may discard content at its declared capture boundary; full-fidelity capture is explicit, appropriately protected, and not the universal default.
+4. **Core instrumentation must not transform semantic inputs.** The capture path must not rewrite, summarize, compress, deduplicate, or otherwise change the interactions being measured. Any transformation that occurs (for example, excerpting under a redacted profile) happens at a declared capture boundary and is recorded as such. Capture, persistence, and export are independent policy stages: metadata-only collection must not collect complete content; collection-time redaction may intentionally prevent sensitive content from entering SignalGlass; persistence may retain less than was transiently observed; export may disclose less than was persisted; full-fidelity collection and persistence must be explicit and appropriately protected, and are not the universal default.
 
 5. **Optimization is optional experimental or analysis scope.** Prompt optimization and context transformation are explicit experimental conditions or optional analysis outputs that the user chooses to act on. They are never core behavior and never applied automatically.
 

@@ -16,7 +16,7 @@ Its purpose is to **observe, record, measure, visualize, compare, and replay** A
 The platform's commitments:
 
 - **Fidelity first.** Preserve the fidelity of application-visible requests, responses, tool activity, and context provenance. Do not rewrite, summarize, compress, deduplicate, optimize, or otherwise change the interactions being measured.
-- **Evidence is authoritative.** Raw captured evidence is the ground truth. All metrics, visualizations, and explanations are derived, versioned views over that evidence.
+- **Evidence is authoritative.** Captured evidence is the authoritative record of what SignalGlass observed at its declared capture boundary. It does not prove hidden provider behavior or unobserved activity. All metrics, visualizations, and explanations are derived, versioned views over that evidence.
 - **Separation of concerns.** Observations, deterministic measurements, and interpretations are kept separate. Mixing them is an architecture violation.
 - **Honest boundaries.** Capture boundaries and uncertainty are explicit. SignalGlass does not claim to know hidden provider behavior, and it reports what it could not capture.
 - **Tools are observable systems.** MCP, Graphify, retrieval systems, and other tools are treated as independently observable systems with their own capture boundaries, not as opaque subroutines.
@@ -27,7 +27,7 @@ The platform's commitments:
 1. **Observe before optimizing.** The first job is to show what an agent actually sent and what came back. Optimization features are optional analysis on top of that foundation.
 2. **Preserve what is captured.** The capture path must not transform semantic inputs. Instrumentation may add metadata around evidence; it must not alter the evidence itself.
 3. **Evidence → measurement → interpretation.** Evidence records are captured facts. Measurements are deterministic derivations over evidence (token counts, latency, cost, durations). Interpretations are human-facing explanations (smells, recommendations, narrative) that may involve judgment and must be labeled as such.
-4. **Raw evidence is authoritative; everything else is derived and versioned.** Metrics, visualizations, and explanations must record the versions of the evidence schema and of the algorithms that produced them.
+4. **Captured evidence is authoritative; everything else is derived and versioned.** Captured evidence is the authoritative record of what SignalGlass observed at its declared capture boundary, not proof of hidden provider behavior or unobserved activity. Metrics, visualizations, and explanations must record the versions of the evidence schema and of the algorithms that produced them.
 5. **Uncertainty is explicit.** Estimates are labeled estimates. Approximations are labeled approximations. Missing evidence is reported as missing, not silently assumed.
 6. **Capture, persistence, and export are separate decisions.** A capture policy is not one switch. Collection, storage, and disclosure each have their own settings, and each must be honored independently.
 7. **Full fidelity is explicit, not default.** Full-fidelity capture is opt-in, appropriately protected, and never presented as the universal default. Lower-fidelity profiles may discard content at their declared capture boundary.
@@ -39,11 +39,11 @@ The platform's commitments:
 
 | Term | Definition |
 |---|---|
-| **Evidence** | A captured record of something that actually happened: a request, a response, a tool call, a retrieval result, a span lifecycle. Raw evidence is authoritative. |
-| **Interaction** | A logical unit of AI activity — for example, one agent step, one model call, one tool/MCP invocation, or one user turn. An interaction may contain multiple spans. |
-| **Span** | A structured, hierarchically organized segment of an interaction (a model call span, a tool span, an MCP call span, a retrieval span). Spans reference a parent span (`parentSpanId`) so they can be nested and replayed in order. |
-| **Event** | A discrete observed occurrence within a span. Events belong to a span via `spanId`; they are ordered deterministically. |
-| **Capture profile** | The declared set of collection, persistence, and export decisions for a capture point (for example, full-fidelity, redacted, metadata-only). A metadata-only profile must not collect full payloads in the first place. A redacted profile may discard content at its declared capture boundary. Full-fidelity capture is explicit, protected, and not the universal default. |
+| **Evidence** | A captured record of what SignalGlass observed at a declared capture boundary: a request, a response, a tool call, a retrieval result, a span lifecycle. Captured evidence is the authoritative record of what was observed; it does not prove hidden provider behavior or unobserved activity. |
+| **Interaction** | The enclosing logical AI exchange or task execution being observed (for example, one agent step or one user turn). Model calls, tool calls, MCP calls, and retrieval operations are spans within an interaction, not interchangeable examples of interactions. Exact interaction-boundary rules are deferred to the evidence-model specification. |
+| **Span** | A structured, hierarchically organized segment of an interaction (a model call span, a tool span, an MCP call span, a retrieval span). Spans reference a parent span via `parentSpanId`, which establishes span hierarchy. `parentSpanId` does not establish deterministic execution or replay order; ordering requires separately specified sequencing and timing rules (deferred to the evidence-model specification). |
+| **Event** | A discrete observed occurrence within a span. Events attach to a span via `spanId`. Neither `parentSpanId` nor `spanId` establishes deterministic execution or replay order; ordering requires separately specified sequencing and timing rules (deferred to the evidence-model specification). |
+| **Capture profile** | The declared set of collection, persistence, and export decisions for a capture point (for example, full-fidelity, redacted, metadata-only). Collection, persistence, and export are independent policy stages: metadata-only collection must not collect complete content; collection-time redaction may intentionally prevent sensitive content from entering SignalGlass; persistence may retain less than was transiently observed; export may disclose less than was persisted. Full-fidelity capture is explicit, protected, and not the universal default. |
 | **Capture boundary** | The documented limit of what an observer can and cannot see (for example, an HTTP proxy cannot see client-side tool execution). Boundaries and uncertainty are explicit. |
 | **Measurement** | A deterministic derivation from evidence (token counts, latency, duration, cost). Measurements record the algorithm/derivation version and references to their inputs. |
 | **Derivation** | A versioned transformation of evidence or measurements into a new record (a metric, a projection, a cost figure). Derivations always reference their inputs and their algorithm version. |
@@ -89,7 +89,7 @@ This roadmap is directional, not a release ledger. Milestone names are placehold
 4. **Deterministic measurements** — token accounting, latency/duration, and cost as versioned derivations over evidence, with algorithm versions and input references; provider-reported vs. locally estimated values distinguished.
 5. **Streaming** — transparent streaming capture (SSE passthrough with event extraction), so real agent-harness traffic can be observed without changing it.
 6. **Multi-span interactions** — model, tool, MCP, and retrieval spans within one logical interaction, including tool/MCP/retrieval systems as independently observable capture surfaces.
-7. **Replay and comparison** — deterministic replay of recorded interactions and side-by-side comparison of derived measurements.
+7. **Replay and comparison** — deterministic request reconstruction, reproducible replay configuration and orchestration, and reissuing a recorded request under a declared environment, plus side-by-side comparison of derived measurements. Identical responses cannot be guaranteed because models, providers, tools, external data, and inference may be nondeterministic or may change over time.
 8. **Optional analysis** — smells, recommendations, reduction previews, and other optimization-oriented features as a clearly labeled, optional analysis module.
 
 Items previously prioritized as optimization features (reduction previews, budgets, recommendations, savings lenses) are **deferred** until the evidence, capture-fidelity, completeness, and measurement milestones above are in place.
@@ -100,7 +100,7 @@ SignalGlass makes these boundaries explicit:
 
 - **Observation boundary.** Each capture surface observes what crosses its boundary and nothing more. An HTTP proxy observes the wire traffic it proxies; it does not see agent-side tool execution. MCP, retrieval, and Graphify activity are observable only through their own capture surfaces or documented adapters.
 - **Fidelity boundary.** Capture must not transform semantic inputs. If a capture surface must parse before forwarding (for example, the current ingress parses request JSON before forwarding), that fact is documented and byte-exact preservation is not claimed until separately verified.
-- **Privacy boundary.** Full-fidelity capture is opt-in, protected, and never the universal default. Lower-fidelity profiles may discard content at their declared capture boundary. Redaction applies per the capture profile's export decisions; a redacted profile may intentionally discard content.
+- **Privacy boundary.** Capture, persistence, and export are independent policy stages. Metadata-only collection must not collect complete content; collection-time redaction may intentionally prevent sensitive content from entering SignalGlass; persistence may retain less than was transiently observed; export may disclose less than was persisted. Full-fidelity collection and persistence must be explicit and appropriately protected, and are never the universal default. Redaction is a policy decision at any stage, not solely an export decision.
 - **Knowledge boundary.** SignalGlass does not claim to know hidden provider behavior. Provider-reported values are recorded as provider-reported; everything else is labeled as local estimate.
 - **Interpretation boundary.** Optimization advice and explanations are interpretations. They are optional, labeled, and never presented as measurements.
 
@@ -109,7 +109,7 @@ SignalGlass makes these boundaries explicit:
 Measurements must be made without modifying the interactions being measured. The plan:
 
 1. **Capture without transformation.** The capture path appends evidence records around interactions; it does not rewrite, summarize, compress, deduplicate, or reorder interaction content. Any transformation that is ever applied to payloads (for example, excerpting under a redacted profile) happens at a declared capture boundary and is recorded as such.
-2. **Collect, then measure.** Measurements are computed after capture, as derivations over stored evidence. Nothing is measured by mutating the evidence.
+2. **Collect, then measure.** Measurements are computed as derivations over captured evidence. Nothing is measured by mutating the evidence. Measurements do not require evidence to be persisted: reproducible recalculation requires that the necessary evidence and derivation inputs be retained. Lower-fidelity or non-persisting profiles may intentionally limit later recalculation, and that limitation must be represented in completeness or reproducibility metadata. (The concrete schema for such metadata is deferred to the evidence-model specification.)
 3. **Versioned derivation records.** Every derived measurement record carries:
    - the algorithm/derivation version that produced it, and
    - references to its inputs (evidence record ids and, where relevant, their versions).
