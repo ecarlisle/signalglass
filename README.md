@@ -1,32 +1,37 @@
 # SignalGlass
 
-Observability for AI coding-agent runs.
+A disciplined observability platform for AI interactions.
 
-SignalGlass helps developers inspect what context AI coding agents send to models, where tokens are spent, what gets repeated, what appears wasteful, and how different models or agent runs behave on the same task.
+SignalGlass observes, records, measures, visualizes, compares, and replays AI interactions — preserving the fidelity of application-visible requests, responses, tool activity, and context provenance.
 
-SignalGlass is an observability and education tool. Token savings matter, but the larger goal is to make agent behavior legible. Its core offering is **signal**, not automatic optimization.
+Its guiding commitments:
 
-## Two complementary modes
+- **Evidence is authoritative.** Captured evidence is the authoritative record of what SignalGlass observed at its declared capture boundary — it does not prove hidden provider behavior or unobserved activity. Metrics, visualizations, and explanations are derived, versioned views over that evidence.
+- **Observe before optimizing.** SignalGlass never rewrites, summarizes, compresses, deduplicates, or otherwise changes the interactions it measures. Prompt optimization and context transformation are only ever explicit experimental conditions or optional analysis — not core behavior.
+- **Separation by design.** Observations, deterministic measurements, and interpretations are kept separate. Token counts, latency, and cost are deterministic derivations (cost = measured usage × a versioned pricing schedule); smells, recommendations, and narrative are optional, clearly labeled interpretations.
+- **Honest boundaries.** Capture boundaries and uncertainty are explicit. SignalGlass does not claim to know hidden provider behavior, and it reports what it could not capture.
+- **Tools are observable systems.** MCP, Graphify, retrieval systems, and other tools are treated as independently observable systems.
+
+The authoritative target-direction document is **[docs/architectural-foundation.md](docs/architectural-foundation.md)**. The completed current-state assessment is in **[docs/assessments/2026-08-01-current-state.md](docs/assessments/2026-08-01-current-state.md)**.
+
+## Current v0.x functionality
+
+The repository today ships a working v0.x implementation (see the [assessment](docs/assessments/2026-08-01-current-state.md)):
 
 1. **Offline Run Analysis** — analyze captured agent runs from JSON or parser inputs.
-2. **Live Ingress Observability** — act as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and optimization opportunities.
+2. **Live Ingress Observability** — act as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, routing decisions, and provider errors.
 
-Both modes share the same internal domain model. A live trace can be converted into an `AgentRun` so the existing analyzer, smells, recommendations, and reports can be reused.
+Both modes share the same internal domain model. A live trace can be converted into an `AgentRun` so the existing analyzer can be reused.
 
-## What it is
+> **Note on legacy optimization features.** The current analyzer's smells, recommendations, and token-conservation language date from an earlier optimization-centered mission. Under the architectural foundation they are **legacy/optional functionality** — interpretations over measurements, not core behavior. They remain available in the v0.x code and are being re-framed as an optional analysis module in the target architecture.
 
-- An analyzer and reporting tool for saved agent-run data.
-- A live ingress observability layer with OpenAI-compatible proxy support.
-- A way to answer: **“What did the agent send to the model, and what can we learn from it?”**
-- A source of SIGNAL: cost, relevance, behavior, comparison, and education.
-- Every finding should explain what happened, why it matters, what evidence supports it, and what to inspect or try next.
-
-## What it is not (yet)
+## What SignalGlass is not (yet)
 
 - An automatic optimizer that rewrites context for you.
 - A first-class integration for every agent harness.
-- A system that stores full raw payloads or API keys by default.
+- A system that stores full raw payloads or API keys by default. Capture fidelity is governed by explicit capture profiles in the target architecture; full-fidelity capture is opt-in and never the universal default.
 - A production gateway with auth, encryption at rest, or remote storage.
+- A system that claims exact provider behavior or byte-exact request preservation (the current ingress parses request JSON before forwarding).
 
 ## Quick start
 
@@ -72,7 +77,7 @@ signalglass/
 │   ├── reports/            # Terminal, JSON, and static HTML report formatters
 │   └── storage/            # SQLite persistence for traces/events
 ├── samples/                # Example agent-run files
-├── docs/                   # Principles, architecture, roadmap, report contract, glossary, ADRs
+├── docs/                   # Foundation, principles, architecture, roadmap, glossary, ADRs, assessments
 ├── README.md
 └── AGENTS.md
 ```
@@ -103,7 +108,7 @@ See `docs/ingress.md`, `docs/provider-config.md`, and `docs/privacy.md` for deta
 
 ## Token counts are approximate
 
-SignalGlass currently uses a simple character-based approximation (roughly one token per four characters). It is designed so that a real tokenizer can be plugged in later.
+SignalGlass currently uses a simple character-based approximation (roughly one token per four characters). In the target architecture, token counts are deterministic measurements recorded as versioned derivations over evidence, with provider-reported and locally estimated values distinguished.
 
 ## License
 
