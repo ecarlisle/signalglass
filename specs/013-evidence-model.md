@@ -20,8 +20,10 @@ The Architectural Foundation (approved v0.1) and ADR 0004 are the authoritative
 target-direction documents. This spec makes their evidence-first direction
 concrete. Where this spec and the foundation conflict, the newer accepted
 revision wins; where this spec and legacy v0.x documentation conflict, this
-spec wins for the target architecture and the legacy documents become
-compatibility projections (see [§11 Legacy supersession](#11-legacy-supersession)).
+spec wins for the target architecture. Formal supersession of the legacy
+documents takes effect only when this spec is accepted: until then they
+remain accurate records of the implemented v0.x state, and upon acceptance
+they become compatibility projections (see [§11 Legacy supersession](#11-legacy-supersession)).
 
 ## Scope
 
@@ -32,7 +34,8 @@ compatibility projections (see [§11 Legacy supersession](#11-legacy-supersessio
 - Evidence status and uncertainty semantics.
 - Capture profiles (collection / persistence / export) as a contract.
 - Versioning rules for evidence and derivations.
-- Formal supersession of legacy specs 002, 003, and 004.
+- Formal supersession of legacy specs 002, 003, and 004 (takes effect upon
+  acceptance of this spec; see §11).
 
 ## Non-goals
 
@@ -84,6 +87,14 @@ exactly one trace, and `interactionId` (the interaction's id) and `traceId`
 "interaction" when referring to the domain object and "trace" when referring
 to its serialized record; they are two views of one entity, not two containers.
 
+**Canonical serialized shape.** The serialized trace record carries both
+`interactionId` and `traceId` at the top level, with equal values. This
+equality is an invariant that serialization MUST enforce and that consumers
+MAY rely on. `traceId` is the reference identifier: events, spans, envelopes,
+artifacts, and derived records reference the trace by `traceId` only, never by
+`interactionId`. Neither field is omitted, and readers are never required to
+infer one from the other.
+
 **Rationale:** Two competing top-level containers would make "interaction" and
 "trace" ambiguous forever. One serialization keeps identity, ordering,
 completeness, and lifecycle in a single place.
@@ -120,9 +131,13 @@ ordering key lives on every content-bearing record.
 
 ### 2.1 Identifiers
 
-- `traceId` — stable, opaque identifier of a trace; the same value as the
-  interaction's `id` (see §1.2). MUST be unique within a SignalGlass
+- `interactionId` — the domain identifier of the interaction; the same value
+  as `traceId` (§1.2). Serialized at the trace top level; nested records never
+  use it to reference the trace.
+- `traceId` — stable, opaque identifier of the serialized trace record; MUST
+  equal `interactionId` (§1.2). MUST be unique within a SignalGlass
   installation; SHOULD be globally unique (ULID-style values are recommended).
+  Nested records reference the trace by `traceId` only.
 - `spanId` — stable, opaque span identifier, unique within the trace.
 - `parentSpanId` — MAY be absent on root spans. Establishes **hierarchy only**;
   it MUST NOT be used for ordering.
@@ -132,6 +147,12 @@ ordering key lives on every content-bearing record.
 Identifiers MUST be assigned at capture time, MUST be immutable, and MUST NOT be
 derived from content. Content-derived identity (for example, a hash) is a
 separate `contentHash` field, never an id.
+
+`null` is reserved for structural absence: a root span's absent
+`parentSpanId`, or an event attached to the trace root via `spanId`. Evidence
+statuses and measured values MUST NOT be represented by `null` or by omitted
+fields (§4): absence of an evidence value is a status (`unknown`, `missing`,
+`not_applicable`), never `null`.
 
 ### 2.2 Deterministic sequence ordering
 
@@ -143,11 +164,33 @@ ordering constructs (timestamps, hierarchy) are derived views over `seq`.
 - Two events MUST NOT share a `seq` within one trace.
 - `seq` values MUST be contiguous: the first event has `seq` 0, and every
   subsequent event's `seq` is exactly one greater than its predecessor's.
-- `seq` is assigned by the capture surface, not by persistence or replay.
+- `seq` is assigned by the trace's **authoritative sequencing surface** — the
+  capture component that observes the event — at the point of observation,
+  before the event is persisted or forwarded. Persistence and replay never
+  assign `seq`.
 - Spans reference their start/end `seq` range (`startSeq`, `endSeq`).
 - Total order is `seq`; partial order is the `parentSpanId` hierarchy.
 - Concurrency: two spans are concurrent when their `seq` ranges overlap and
   neither is an ancestor of the other.
+
+**One sequencing surface per trace.** Each trace has exactly one authoritative
+sequencing surface that owns its `seq` sequence. Cross-surface trace
+federation (multiple capture surfaces merged into one trace) is deferred
+(see §1.2); until then, records from other surfaces enter a trace only through
+its sequencing surface, and this contract does not define cross-surface
+ordering.
+
+**What a sequence gap proves, and what it cannot prove.** A missing `seq` value
+between two observed events proves that a sequence position was assigned but
+is absent from the retained evidence: at least one event that reached the
+sequencing surface was dropped before persistence or removed from retention.
+A gap cannot detect an event that failed before a sequence number was
+assigned — an event that never reached the sequencing surface leaves no
+numerical trace. An uninterrupted `seq` range therefore does not prove complete
+capture. Completely uncaptured events are disclosed through the trace
+completeness record (§4.3) and the capture surface's boundary statement (§5.2)
+— for example, as an explicit `missing` record when the surface knows an event
+should have existed — never inferred from sequence position.
 
 **Rationale:** Timestamps alone are insufficient ordering: capture clocks may
 tie, may be adjusted, and may not reflect the true order of observation. A
@@ -179,10 +222,16 @@ survives replay.
 - **Duplicates:** the same `eventId` appearing twice in one trace is a
   duplicate. Persistence MUST detect it and record a single event plus a
   completeness note (`duplicateDetected`), never two distinct events.
-- **Dropped events:** because `seq` is contiguous (§2.2), any gap in `seq`
-  within a trace is proof that at least one event was dropped (or never
-  captured). The completeness record MUST report the gap and the adjacent
-  event ids; SignalGlass MUST NOT invent the missing event.
+  Collapsing a duplicate does not create a sequence gap; the retained
+  sequence stays contiguous.
+- **Dropped events:** a `seq` gap (§2.2) proves that an assigned sequence
+  position is absent from the retained evidence: at least one event that
+  reached the sequencing surface was dropped before persistence or removed
+  from retention. The completeness record MUST report the gap and the
+  adjacent event ids; SignalGlass MUST NOT invent the missing event. An event
+  that failed before a sequence number was assigned produces no gap; it is
+  disclosed through the completeness record's boundary statement or an
+  explicit `missing` record (§4.1), never inferred from sequence position.
 
 ## 3. Span and event semantics
 
@@ -216,9 +265,10 @@ and result events.
 declared fidelity:
 
 - `structurally_faithful` (default) — the payload is preserved as the parsed
-  structure that was captured (for example, a JSON object), with field order
-  and values equivalent to what was observed. Byte-for-byte equivalence is not
-  claimed.
+  structure that was captured (for example, a JSON object), with values
+  equivalent to what was observed. Field order, raw bytes, original
+  whitespace, lexical formatting, and transport encoding are not preserved;
+  byte-for-byte equivalence is not claimed.
 - `byte_faithful` (optional) — the raw bytes or text are preserved. This
   requires recording `nativeEncoding` and `nativeContentType` on the envelope;
   `nativeContentHash` SHOULD also be recorded.
@@ -243,7 +293,8 @@ evidence complete and falsifiable without overstating what was stored.
   the cancellation was observed.
 - `retry` events MUST reference the original request's `eventId` and record the
   retry policy inputs observed (attempt count, delay) without asserting the
-  provider's internal policy.
+  provider's internal policy. The associated error event MAY be referenced
+  separately (for example, `errorEventId`) when that is useful.
 
 ## 4. Evidence status
 
@@ -254,12 +305,19 @@ Every evidence payload (event content, envelope, artifact payload) carries an
 
 | Status | Meaning |
 |---|---|
-| `captured` | Exact content is present. |
+| `captured` | Content is present at its declared fidelity (§3.2: `structurally_faithful` or `byte_faithful`). |
 | `redacted` | Content existed; it was removed or masked per a recorded policy. The original content hash MAY be present. |
 | `truncated` | Content existed; only a declared prefix or excerpt is stored. The truncation boundary MUST be recorded. |
 | `missing` | Capture failed or did not occur; no claim is made about the content. |
 | `unknown` | It cannot be determined whether the content existed (for example, provider internals). |
 | `not_applicable` | No such content applies (for example, a stream-only control event has no request body). |
+
+Evidence states MUST NOT be collapsed into `null` or omitted fields.
+`unknown` (cannot determine whether the content existed), `missing` (known
+not to be captured), `not_applicable` (no such content), and a captured
+numeric zero (a real value, for example `output_tokens: 0`) are distinct and
+MUST be represented by the statuses above, with an explicit value where one
+exists — never by `null`.
 
 ### 4.2 The `inferred` status
 
@@ -278,7 +336,11 @@ so raw evidence is never quietly guessed.
 Each trace carries a derived **completeness record** computed from its events:
 
 - counts of events and payloads by status;
-- `seq` gaps (dropped events) and duplicate detections;
+- `seq` gaps (assigned sequence positions absent from retained evidence) and
+  duplicate detections;
+- completely uncaptured events (never assigned a sequence position), disclosed
+  here and in the boundary statement or as explicit `missing` records (§4.1),
+  never inferred from sequence position;
 - a boundary statement: what the interaction's observation boundary could not
   observe.
 
@@ -477,9 +539,9 @@ deleted.
 
 | Spec | Legacy model | Status under 013 |
 |---|---|---|
-| [002 — Core domain](../specs/002-core-domain.md) | `AgentRun`, `Turn`, `ContextBlock`, token estimation, smells/recommendations | Pending supersession by 013. `AgentRun` becomes a compatibility projection. |
-| [003 — Offline analysis](../specs/003-offline-analysis.md) | Offline analysis pipeline over `AgentRun` | Pending supersession. Analysis becomes interpretation records over evidence. |
-| [004 — Trace model](../specs/004-trace-model.md) | `Trace`/`TraceEvent`, `ContentPhase`, `StorageMode` | Pending supersession. `Trace`/`TraceEvent` become a compatibility projection over evidence. |
+| [002 — Core domain](../specs/002-core-domain.md) | `AgentRun`, `Turn`, `ContextBlock`, token estimation, smells/recommendations | Pending supersession by 013. `AgentRun` will become a compatibility projection. |
+| [003 — Offline analysis](../specs/003-offline-analysis.md) | Offline analysis pipeline over `AgentRun` | Pending supersession. Analysis will become interpretation records over evidence. |
+| [004 — Trace model](../specs/004-trace-model.md) | `Trace`/`TraceEvent`, `ContentPhase`, `StorageMode` | Pending supersession. `Trace`/`TraceEvent` will become a compatibility projection over evidence. |
 
 ### 11.2 Compatible legacy concepts
 
@@ -490,8 +552,9 @@ deleted.
   provider-internal state.
 - Token estimates map to `estimated` measurements; heuristic smells map to
   interpretation records with `low`/`medium` confidence.
-- Trace-to-`AgentRun` conversion (spec 004) becomes one documented projection;
-  the inverse projection (evidence to trace view) is supported the same way.
+- Trace-to-`AgentRun` conversion (spec 004) will become one documented
+  projection; the inverse projection (evidence to trace view) will be
+  supported the same way.
 
 ### 11.3 Legacy concepts that do not carry over
 
@@ -528,7 +591,11 @@ without carrying presentation fields.
 ## 13. Examples
 
 Full serialized evidence examples for the following are in
-[`docs/evidence-model.md`](../docs/evidence-model.md) (§9):
+[`docs/evidence-model.md`](../docs/evidence-model.md) (§9). Each numbered
+example is an independent trace: its own identifiers and its own `seq`
+sequence starting at 0. Complete traces include `interaction_start` and
+`interaction_end`; no example places an event after its terminal event, and
+no partial example is presented as complete:
 
 1. a minimal single-span interaction;
 2. a model request and response with request/response envelopes;
@@ -538,8 +605,9 @@ Full serialized evidence examples for the following are in
 6. retrieval with context artifacts and contributions;
 7. context-provider (Graphify) activity;
 8. errors, cancellation, and retries;
-9. a trace with redacted, truncated, missing, and unknown evidence, plus
-   measurements and an interpretation.
+9. a trace with redacted, missing, and unknown evidence (including an
+   explicit `missing` record), plus derived measurement and interpretation
+   records that reference example 2's evidence.
 
 The examples are normative illustrations of this spec's contract; where an
 example conflicts with the prose above, the prose wins.
@@ -581,7 +649,7 @@ contract for future implementation specs:
 - [`docs/evidence-model.md`](../docs/evidence-model.md)
 - [`docs/capture-profiles.md`](../docs/capture-profiles.md)
 - [`docs/model-versioning.md`](../docs/model-versioning.md)
-- [`docs/trace-model.md`](../docs/trace-model.md) (legacy, superseded)
+- [`docs/trace-model.md`](../docs/trace-model.md) (legacy, pending supersession by Spec 013)
 - [`docs/versioning.md`](../docs/versioning.md)
 - [`docs/glossary.md`](../docs/glossary.md)
 - [`specs/000-index.md`](../specs/000-index.md)

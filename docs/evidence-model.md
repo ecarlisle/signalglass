@@ -37,8 +37,9 @@ into versioned **capture profiles**.
 
 ## Identity and ordering
 
-- `interactionId` is the trace id. Spans and events carry `traceId` with the
-  same value. One interaction, one trace, one identity.
+- The serialized trace carries both `interactionId` and `traceId` at the top
+  level with equal values; the equality is an invariant. Spans and events
+  carry `traceId` only. One interaction, one trace, one identity.
 - Every event carries `seq`: a non-negative integer, strictly increasing and
   **contiguous** within the trace (first event `seq` 0; each subsequent event
   exactly one greater). `seq` is assigned by the capture surface at observation
@@ -47,8 +48,15 @@ into versioned **capture profiles**.
   ordering. `durationMs` comes from a monotonic clock.
 - Spans declare `startSeq`/`endSeq`; nested spans reference `parentSpanId`
   (hierarchy only). Spans with overlapping `seq` ranges are concurrent.
-- Duplicates are detected by `eventId`; because `seq` is contiguous, any `seq`
-  gap is proof of a dropped event and is reported in the completeness record.
+- Duplicates are detected by `eventId` and collapsed without creating a
+  sequence gap.
+- A `seq` gap proves that an assigned sequence position is absent from the
+  retained evidence (an event that reached the sequencing surface was dropped
+  before persistence or removed from retention). A gap cannot detect an event
+  that failed before a sequence number was assigned, so an uninterrupted `seq`
+  range does not prove complete capture. Uncaptured events are disclosed
+  through the completeness record and boundary statements — for example, an
+  explicit `missing` record — never inferred from sequence position.
   SignalGlass never invents missing events.
 
 ## Evidence status
@@ -57,7 +65,7 @@ Every payload carries exactly one `evidenceStatus`:
 
 | Status | Meaning |
 |---|---|
-| `captured` | Exact content present. |
+| `captured` | Content present at its declared fidelity (`structurally_faithful` or `byte_faithful`). |
 | `redacted` | Content existed; removed/masked per a recorded policy. Original hash may remain. |
 | `truncated` | Content existed; only a declared prefix/excerpt stored. |
 | `missing` | Capture failed or didn't happen; no claim about content. |
@@ -66,6 +74,12 @@ Every payload carries exactly one `evidenceStatus`:
 
 `inferred` is **not** an evidence status: it appears only on derived records
 (measurements, interpretations) and must be labeled there.
+
+Evidence states are never collapsed into `null` or omitted fields: `unknown`,
+`missing`, `not_applicable`, and a captured numeric zero (for example,
+`output_tokens: 0`) are distinct and are represented by a status plus an
+explicit value where one exists. `null` appears only for structural absence (a
+root span's `parentSpanId`, an event attached to the trace root via `spanId`).
 
 ## Observation boundaries
 
@@ -121,8 +135,10 @@ measurement. Interpretations never modify evidence.
 Provider-native payloads are preserved at a declared `providerNativeFidelity`:
 
 - `structurally_faithful` (default) — the parsed structure that was captured
-  (for example, a JSON object), with field order and values equivalent to what
-  was observed. Byte-for-byte equivalence is not claimed.
+  (for example, a JSON object), with values equivalent to what was observed.
+  Field order, raw bytes, original whitespace, lexical formatting, and
+  transport encoding are not preserved. Byte-for-byte equivalence is not
+  claimed.
 - `byte_faithful` — the raw bytes or text, with `nativeEncoding` and
   `nativeContentType` recorded (and `nativeContentHash` recommended).
 
@@ -132,15 +148,21 @@ An envelope never implies byte fidelity unless `byte_faithful` is recorded.
 
 - **Run** — a derived, session-level grouping of interactions. The legacy
   `AgentRun` is a projection over evidence, not a canonical container.
-- **Legacy trace view** — the v0.x `Trace`/`TraceEvent` shape becomes a
-  compatibility projection over evidence (see Spec 013 §11).
+- **Legacy trace view** — the v0.x `Trace`/`TraceEvent` shape will become a
+  compatibility projection over evidence once Spec 013 is accepted (see
+  Spec 013 §11).
 - **Redacted exports** — projections under an export policy; they never
   overwrite authoritative evidence.
 
 ## Serialized examples
 
-The following examples are normative illustrations of Spec 013. All examples
-refer to the same interaction: *"Fix the failing TypeScript build in this repo."*
+The following examples are normative illustrations of Spec 013. **Each numbered
+example is an independent trace**: its own identifiers and its own `seq`
+sequence starting at 0; no sequence continues from one example to the next.
+Every complete trace includes `interaction_start` and `interaction_end`, and no
+event appears after the terminal `interaction_end`. `null` appears only for
+structural absence — a root span's `parentSpanId`, or an event attached to the
+trace root via `spanId`; evidence status and measured values are never `null`.
 
 ### 1. Minimal single-span interaction
 
@@ -148,7 +170,8 @@ A complete trace with one model span and lifecycle events:
 
 ```json
 {
-  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY1",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1",
   "evidenceSchemaVersion": "1.0.0",
   "captureProfile": { "name": "dev-basic", "version": "1.2.0" },
   "captureSurface": "client_side",
@@ -161,7 +184,7 @@ A complete trace with one model span and lifecycle events:
   ],
   "spans": [
     {
-      "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY1",
+      "spanId": "span-1-0001",
       "kind": "model",
       "name": "model:claude-sonnet-4",
       "parentSpanId": null,
@@ -174,42 +197,10 @@ A complete trace with one model span and lifecycle events:
     }
   ],
   "events": [
-    {
-      "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ1",
-      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-      "spanId": null,
-      "seq": 0,
-      "kind": "interaction_start",
-      "capturedAt": "2025-06-01T14:00:00.123Z",
-      "evidenceStatus": "captured"
-    },
-    {
-      "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ2",
-      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-      "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY1",
-      "seq": 1,
-      "kind": "span_start",
-      "capturedAt": "2025-06-01T14:00:00.200Z",
-      "evidenceStatus": "captured"
-    },
-    {
-      "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ3",
-      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-      "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY1",
-      "seq": 2,
-      "kind": "span_end",
-      "capturedAt": "2025-06-01T14:00:05.300Z",
-      "evidenceStatus": "captured"
-    },
-    {
-      "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ4",
-      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-      "spanId": null,
-      "seq": 3,
-      "kind": "interaction_end",
-      "capturedAt": "2025-06-01T14:00:05.411Z",
-      "evidenceStatus": "captured"
-    }
+    { "eventId": "evt-1-0001", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1", "spanId": null, "seq": 0, "kind": "interaction_start", "capturedAt": "2025-06-01T14:00:00.123Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-1-0002", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1", "spanId": "span-1-0001", "seq": 1, "kind": "span_start", "capturedAt": "2025-06-01T14:00:00.200Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-1-0003", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1", "spanId": "span-1-0001", "seq": 2, "kind": "span_end", "capturedAt": "2025-06-01T14:00:05.300Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-1-0004", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1", "spanId": null, "seq": 3, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:05.411Z", "evidenceStatus": "captured" }
   ],
   "completeness": {
     "eventsByStatus": { "captured": 4 },
@@ -220,6 +211,9 @@ A complete trace with one model span and lifecycle events:
 }
 ```
 
+`completeness` is a derived record; it is shown here and in example 9 and
+omitted from the other examples for brevity.
+
 ### 2. Model request and response with envelopes
 
 The request envelope keeps normalized fields plus the provider-native payload
@@ -228,82 +222,227 @@ usage:
 
 ```json
 {
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ5",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY1",
-  "seq": 2,
-  "kind": "model_request",
-  "capturedAt": "2025-06-01T14:00:00.200Z",
-  "evidenceStatus": "captured",
-  "observationRole": "client_sent",
-  "requestEnvelope": {
-    "model": "claude-sonnet-4",
-    "provider": "anthropic",
-    "providerNativeFidelity": "structurally_faithful",
-    "messages": [
-      { "role": "system", "content": "You are a helpful software engineering assistant." },
-      { "role": "user", "content": "Fix the failing TypeScript build in this repo." }
-    ],
-    "providerNative": { "stream": false, "temperature": 0.2, "max_tokens": 4096 }
-  },
-  "contextContributions": [
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": { "name": "dev-basic", "version": "1.2.0" },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:05.411Z",
+  "status": "completed",
+  "spans": [
     {
-      "artifactId": "art-01J5TZXQ8K7M2N4P6R8T0VWXY2",
-      "locator": { "type": "whole" },
-      "position": 0,
-      "provenanceState": "recorded"
+      "spanId": "span-2-0001",
+      "kind": "model",
+      "name": "model:claude-sonnet-4",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 4,
+      "startedAt": "2025-06-01T14:00:00.200Z",
+      "finishedAt": "2025-06-01T14:00:05.300Z",
+      "durationMs": 5100,
+      "status": "completed"
     }
+  ],
+  "events": [
+    { "eventId": "evt-2-0001", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2", "spanId": null, "seq": 0, "kind": "interaction_start", "capturedAt": "2025-06-01T14:00:00.123Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-2-0002", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2", "spanId": "span-2-0001", "seq": 1, "kind": "span_start", "capturedAt": "2025-06-01T14:00:00.200Z", "evidenceStatus": "captured" },
+    {
+      "eventId": "evt-2-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "spanId": "span-2-0001",
+      "seq": 2,
+      "kind": "model_request",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "requestEnvelope": {
+        "model": "claude-sonnet-4",
+        "provider": "anthropic",
+        "providerNativeFidelity": "structurally_faithful",
+        "messages": [
+          { "role": "system", "content": "You are a helpful software engineering assistant." },
+          { "role": "user", "content": "Fix the failing TypeScript build in this repo." }
+        ],
+        "providerNative": { "stream": false, "temperature": 0.2, "max_tokens": 4096 }
+      },
+      "contextContributions": [
+        {
+          "artifactId": "art-2-0001",
+          "locator": { "type": "whole" },
+          "position": 0,
+          "provenanceState": "recorded"
+        }
+      ]
+    },
+    {
+      "eventId": "evt-2-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "spanId": "span-2-0001",
+      "seq": 3,
+      "kind": "model_response",
+      "capturedAt": "2025-06-01T14:00:05.300Z",
+      "evidenceStatus": "captured",
+      "observationRole": "provider_reported",
+      "responseEnvelope": {
+        "finishReason": "end_turn",
+        "providerNativeFidelity": "structurally_faithful",
+        "providerNative": {
+          "id": "msg_01J5TZXQ8K7M2N4P6R8T0VXWY2",
+          "content": [ { "type": "text", "text": "I fixed the build. Run pnpm typecheck to verify." } ],
+          "usage": {
+            "input_tokens": 1842,
+            "output_tokens": 57
+          }
+        }
+      }
+    },
+    { "eventId": "evt-2-0005", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2", "spanId": "span-2-0001", "seq": 4, "kind": "span_end", "capturedAt": "2025-06-01T14:00:05.300Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-2-0006", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2", "spanId": null, "seq": 5, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:05.411Z", "evidenceStatus": "captured" }
   ]
 }
 ```
 
+The artifact contributed into the request (`contextContributions` on
+`evt-2-0003`) is recorded beside the trace:
+
 ```json
 {
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ6",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY1",
-  "seq": 3,
-  "kind": "model_response",
-  "capturedAt": "2025-06-01T14:00:05.300Z",
+  "artifactId": "art-2-0001",
+  "kind": "file",
   "evidenceStatus": "captured",
-  "observationRole": "provider_reported",
-  "responseEnvelope": {
-    "finishReason": "end_turn",
-    "providerNativeFidelity": "structurally_faithful",
-    "providerNative": {
-      "id": "msg_01J5TZXQ8K7M2N4P6R8T0VXWY",
-      "content": [ { "type": "text", "text": "I fixed the build. Run pnpm typecheck to verify." } ],
-      "usage": {
-        "input_tokens": 1842,
-        "output_tokens": 57
-      }
-    }
-  }
+  "payloadRef": {
+    "excerpt": "project-instruction: fix the failing TypeScript build",
+    "contentHash": "sha256:2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a"
+  },
+  "provenance": { "source": "repository", "path": ".signalglass/project-instruction.md" }
 }
 ```
+
+The token counts in the response envelope (`input_tokens: 1842`,
+`output_tokens: 57`) are provider-reported; the derived measurement and
+interpretation records shown after example 9 reference this event.
 
 ### 3. Streaming responses
 
 Each delivered chunk is a `model_response_chunk` event with a chunk index and
-the provider-native delta preserved at the declared fidelity:
+the provider-native delta preserved at the declared fidelity; final usage
+arrives as a `model_usage` event:
 
 ```json
 {
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ7",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY1",
-  "seq": 4,
-  "kind": "model_response_chunk",
-  "capturedAt": "2025-06-01T14:00:04.010Z",
-  "evidenceStatus": "captured",
-  "observationRole": "returned",
-  "responseEnvelope": {
-    "chunkIndex": 0,
-    "providerNative": {
-      "type": "content_block_delta",
-      "delta": { "type": "text_delta", "text": "I fixed " }
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": { "name": "dev-basic", "version": "1.2.0" },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:04.400Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-3-0001",
+      "kind": "model",
+      "name": "model:claude-sonnet-4",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 7,
+      "startedAt": "2025-06-01T14:00:00.200Z",
+      "finishedAt": "2025-06-01T14:00:04.300Z",
+      "durationMs": 4100,
+      "status": "completed"
     }
-  }
+  ],
+  "events": [
+    { "eventId": "evt-3-0001", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3", "spanId": null, "seq": 0, "kind": "interaction_start", "capturedAt": "2025-06-01T14:00:00.123Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-3-0002", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3", "spanId": "span-3-0001", "seq": 1, "kind": "span_start", "capturedAt": "2025-06-01T14:00:00.200Z", "evidenceStatus": "captured" },
+    {
+      "eventId": "evt-3-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 2,
+      "kind": "model_request",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "requestEnvelope": {
+        "model": "claude-sonnet-4",
+        "provider": "anthropic",
+        "providerNativeFidelity": "structurally_faithful",
+        "messages": [ { "role": "user", "content": "Summarize the last 20 commits." } ],
+        "providerNative": { "stream": true, "temperature": 0.2 }
+      }
+    },
+    {
+      "eventId": "evt-3-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 3,
+      "kind": "model_response_chunk",
+      "capturedAt": "2025-06-01T14:00:04.010Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "responseEnvelope": {
+        "chunkIndex": 0,
+        "providerNativeFidelity": "structurally_faithful",
+        "providerNative": {
+          "type": "content_block_delta",
+          "delta": { "type": "text_delta", "text": "The last 20 commits cover " }
+        }
+      }
+    },
+    {
+      "eventId": "evt-3-0005",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 4,
+      "kind": "model_response_chunk",
+      "capturedAt": "2025-06-01T14:00:04.020Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "responseEnvelope": {
+        "chunkIndex": 1,
+        "providerNativeFidelity": "structurally_faithful",
+        "providerNative": {
+          "type": "content_block_delta",
+          "delta": { "type": "text_delta", "text": "dependency bumps, the ingress rewrite, and " }
+        }
+      }
+    },
+    {
+      "eventId": "evt-3-0006",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 5,
+      "kind": "model_response_chunk",
+      "capturedAt": "2025-06-01T14:00:04.030Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "responseEnvelope": {
+        "chunkIndex": 2,
+        "providerNativeFidelity": "structurally_faithful",
+        "providerNative": {
+          "type": "content_block_delta",
+          "delta": { "type": "text_delta", "text": " doc updates." }
+        }
+      }
+    },
+    {
+      "eventId": "evt-3-0007",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 6,
+      "kind": "model_usage",
+      "capturedAt": "2025-06-01T14:00:04.300Z",
+      "evidenceStatus": "captured",
+      "observationRole": "provider_reported",
+      "usage": { "input_tokens": 1410, "output_tokens": 42 }
+    },
+    { "eventId": "evt-3-0008", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3", "spanId": "span-3-0001", "seq": 7, "kind": "span_end", "capturedAt": "2025-06-01T14:00:04.300Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-3-0009", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3", "spanId": null, "seq": 8, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:04.400Z", "evidenceStatus": "captured" }
+  ]
 }
 ```
 
@@ -313,36 +452,64 @@ Tool activity is a span; its request and result are events on that span:
 
 ```json
 {
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ8",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY2",
-  "seq": 5,
-  "kind": "tool_call",
-  "capturedAt": "2025-06-01T14:00:01.400Z",
-  "evidenceStatus": "captured",
-  "observationRole": "client_sent",
-  "tool": {
-    "name": "bash",
-    "arguments": { "command": "pnpm typecheck" }
-  }
-}
-```
-
-```json
-{
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ9",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY2",
-  "seq": 6,
-  "kind": "tool_result",
-  "capturedAt": "2025-06-01T14:00:01.900Z",
-  "evidenceStatus": "captured",
-  "observationRole": "returned",
-  "toolResult": {
-    "exitCode": 0,
-    "stdout": "No type errors found.",
-    "stderr": ""
-  }
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": { "name": "dev-basic", "version": "1.2.0" },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:02.000Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-4-0001",
+      "kind": "tool",
+      "name": "tool:bash",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 4,
+      "startedAt": "2025-06-01T14:00:01.400Z",
+      "finishedAt": "2025-06-01T14:00:01.900Z",
+      "durationMs": 500,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    { "eventId": "evt-4-0001", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4", "spanId": null, "seq": 0, "kind": "interaction_start", "capturedAt": "2025-06-01T14:00:00.123Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-4-0002", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4", "spanId": "span-4-0001", "seq": 1, "kind": "span_start", "capturedAt": "2025-06-01T14:00:01.400Z", "evidenceStatus": "captured" },
+    {
+      "eventId": "evt-4-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+      "spanId": "span-4-0001",
+      "seq": 2,
+      "kind": "tool_call",
+      "capturedAt": "2025-06-01T14:00:01.400Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "tool": {
+        "name": "bash",
+        "arguments": { "command": "pnpm typecheck" }
+      }
+    },
+    {
+      "eventId": "evt-4-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+      "spanId": "span-4-0001",
+      "seq": 3,
+      "kind": "tool_result",
+      "capturedAt": "2025-06-01T14:00:01.900Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "toolResult": {
+        "exitCode": 0,
+        "stdout": "No type errors found.",
+        "stderr": ""
+      }
+    },
+    { "eventId": "evt-4-0005", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4", "spanId": "span-4-0001", "seq": 4, "kind": "span_end", "capturedAt": "2025-06-01T14:00:01.900Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-4-0006", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4", "spanId": null, "seq": 5, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:02.000Z", "evidenceStatus": "captured" }
+  ]
 }
 ```
 
@@ -352,60 +519,151 @@ MCP activity is a span, with the server and tool named:
 
 ```json
 {
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ10",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY3",
-  "seq": 7,
-  "kind": "mcp_request",
-  "capturedAt": "2025-06-01T14:00:02.100Z",
-  "evidenceStatus": "captured",
-  "observationRole": "client_sent",
-  "mcp": {
-    "server": "site-intelligence",
-    "tool": "get_site_overview",
-    "arguments": {}
-  }
-}
-```
-
-```json
-{
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ11",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY3",
-  "seq": 8,
-  "kind": "mcp_result",
-  "capturedAt": "2025-06-01T14:00:02.400Z",
-  "evidenceStatus": "captured",
-  "observationRole": "returned",
-  "mcpResult": {
-    "content": [ { "type": "text", "text": "386 indexed pages; 0 warnings." } ]
-  }
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": { "name": "dev-basic", "version": "1.2.0" },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:02.500Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-5-0001",
+      "kind": "mcp",
+      "name": "mcp:site-intelligence:get_site_overview",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 4,
+      "startedAt": "2025-06-01T14:00:02.100Z",
+      "finishedAt": "2025-06-01T14:00:02.400Z",
+      "durationMs": 300,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    { "eventId": "evt-5-0001", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5", "spanId": null, "seq": 0, "kind": "interaction_start", "capturedAt": "2025-06-01T14:00:00.123Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-5-0002", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5", "spanId": "span-5-0001", "seq": 1, "kind": "span_start", "capturedAt": "2025-06-01T14:00:02.100Z", "evidenceStatus": "captured" },
+    {
+      "eventId": "evt-5-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+      "spanId": "span-5-0001",
+      "seq": 2,
+      "kind": "mcp_request",
+      "capturedAt": "2025-06-01T14:00:02.100Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "mcp": {
+        "server": "site-intelligence",
+        "tool": "get_site_overview",
+        "arguments": {}
+      }
+    },
+    {
+      "eventId": "evt-5-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+      "spanId": "span-5-0001",
+      "seq": 3,
+      "kind": "mcp_result",
+      "capturedAt": "2025-06-01T14:00:02.400Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "mcpResult": {
+        "content": [ { "type": "text", "text": "386 indexed pages; 0 warnings." } ]
+      }
+    },
+    { "eventId": "evt-5-0005", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5", "spanId": "span-5-0001", "seq": 4, "kind": "span_end", "capturedAt": "2025-06-01T14:00:02.400Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-5-0006", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5", "spanId": null, "seq": 5, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:02.500Z", "evidenceStatus": "captured" }
+  ]
 }
 ```
 
 ### 6. Retrieval with context artifacts and contributions
 
-Retrieval activity is a span; the result event names the query, and the
-artifacts it produced carry provenance:
+Retrieval activity is a span; the result event names the query, the artifacts
+it produced carry provenance, and a `context_assembled` event records that a
+retrieved fragment entered the model request's assembled context:
 
 ```json
 {
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ12",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY4",
-  "seq": 9,
-  "kind": "retrieval_result",
-  "capturedAt": "2025-06-01T14:00:03.000Z",
-  "evidenceStatus": "captured",
-  "observationRole": "returned",
-  "retrieval": { "query": "context window best practices", "resultCount": 3 }
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY6",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": { "name": "dev-basic", "version": "1.2.0" },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:03.300Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-6-0001",
+      "kind": "retrieval",
+      "name": "retrieval:context-window-best-practices",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 4,
+      "startedAt": "2025-06-01T14:00:03.000Z",
+      "finishedAt": "2025-06-01T14:00:03.100Z",
+      "durationMs": 100,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    { "eventId": "evt-6-0001", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6", "spanId": null, "seq": 0, "kind": "interaction_start", "capturedAt": "2025-06-01T14:00:00.123Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-6-0002", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6", "spanId": "span-6-0001", "seq": 1, "kind": "span_start", "capturedAt": "2025-06-01T14:00:03.000Z", "evidenceStatus": "captured" },
+    {
+      "eventId": "evt-6-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6",
+      "spanId": "span-6-0001",
+      "seq": 2,
+      "kind": "retrieval_request",
+      "capturedAt": "2025-06-01T14:00:03.000Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "retrieval": { "query": "context window best practices", "topK": 3 }
+    },
+    {
+      "eventId": "evt-6-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6",
+      "spanId": "span-6-0001",
+      "seq": 3,
+      "kind": "retrieval_result",
+      "capturedAt": "2025-06-01T14:00:03.100Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "retrieval": { "query": "context window best practices", "resultCount": 3 }
+    },
+    { "eventId": "evt-6-0005", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6", "spanId": "span-6-0001", "seq": 4, "kind": "span_end", "capturedAt": "2025-06-01T14:00:03.100Z", "evidenceStatus": "captured" },
+    {
+      "eventId": "evt-6-0006",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6",
+      "spanId": null,
+      "seq": 5,
+      "kind": "context_assembled",
+      "capturedAt": "2025-06-01T14:00:03.200Z",
+      "evidenceStatus": "captured",
+      "observationRole": "application_constructed",
+      "contextContributions": [
+        {
+          "artifactId": "art-6-0001",
+          "locator": { "type": "fragment" },
+          "position": 0,
+          "provenanceState": "recorded"
+        }
+      ]
+    },
+    { "eventId": "evt-6-0007", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6", "spanId": null, "seq": 6, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:03.300Z", "evidenceStatus": "captured" }
+  ]
 }
 ```
 
+The retrieved fragment is a context artifact with provenance:
+
 ```json
 {
-  "artifactId": "art-01J5TZXQ8K7M2N4P6R8T0VWXY2",
+  "artifactId": "art-6-0001",
   "kind": "fragment",
   "evidenceStatus": "captured",
   "payloadRef": {
@@ -420,10 +678,6 @@ artifacts it produced carry provenance:
 }
 ```
 
-The contribution that added this artifact into the model request appeared in
-example 2 (`contextContributions`): it references the artifact by id, uses a
-`whole` locator, records its position, and states `recorded` provenance.
-
 ### 7. Context-provider (Graphify) activity
 
 Context-provider results may be large; here the payload was truncated at capture
@@ -431,87 +685,174 @@ per the collection policy, with the truncation boundary recorded:
 
 ```json
 {
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ13",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY5",
-  "seq": 10,
-  "kind": "context_provider_result",
-  "capturedAt": "2025-06-01T14:00:03.500Z",
-  "evidenceStatus": "truncated",
-  "observationRole": "returned",
-  "truncation": { "maxLength": 8000, "originalLength": 12403 },
-  "contextProvider": {
-    "name": "graphify",
-    "kind": "codebase_graph",
-    "artifactIds": ["art-01J5TZXQ8K7M2N4P6R8T0VWXY3"]
-  }
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": { "name": "dev-basic", "version": "1.2.0" },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:03.600Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-7-0001",
+      "kind": "context_provider",
+      "name": "context_provider:graphify",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 4,
+      "startedAt": "2025-06-01T14:00:03.400Z",
+      "finishedAt": "2025-06-01T14:00:03.500Z",
+      "durationMs": 100,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    { "eventId": "evt-7-0001", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7", "spanId": null, "seq": 0, "kind": "interaction_start", "capturedAt": "2025-06-01T14:00:00.123Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-7-0002", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7", "spanId": "span-7-0001", "seq": 1, "kind": "span_start", "capturedAt": "2025-06-01T14:00:03.400Z", "evidenceStatus": "captured" },
+    {
+      "eventId": "evt-7-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+      "spanId": "span-7-0001",
+      "seq": 2,
+      "kind": "context_provider_request",
+      "capturedAt": "2025-06-01T14:00:03.400Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "contextProvider": { "name": "graphify", "kind": "codebase_graph" }
+    },
+    {
+      "eventId": "evt-7-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+      "spanId": "span-7-0001",
+      "seq": 3,
+      "kind": "context_provider_result",
+      "capturedAt": "2025-06-01T14:00:03.500Z",
+      "evidenceStatus": "truncated",
+      "observationRole": "returned",
+      "truncation": { "maxLength": 8000, "originalLength": 12403 },
+      "contextProvider": {
+        "name": "graphify",
+        "kind": "codebase_graph"
+      }
+    },
+    { "eventId": "evt-7-0005", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7", "spanId": "span-7-0001", "seq": 4, "kind": "span_end", "capturedAt": "2025-06-01T14:00:03.500Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-7-0006", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7", "spanId": null, "seq": 5, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:03.600Z", "evidenceStatus": "captured" }
+  ]
 }
 ```
 
 ### 8. Errors, cancellation, and retries
 
-An error is scoped to the boundary where it was observed; a retry references the
-original request:
+An error is scoped to the boundary where it was observed. The retry references
+the **original request event** (`originalRequestEventId`); the associated error
+is referenced separately (`errorEventId`):
 
 ```json
 {
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ14",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY6",
-  "seq": 11,
-  "kind": "error",
-  "capturedAt": "2025-06-01T14:00:04.500Z",
-  "evidenceStatus": "captured",
-  "actor": "mcp",
-  "error": {
-    "type": "timeout",
-    "message": "mcp server timed out after 30000ms",
-    "observedAt": "client_side"
-  }
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": { "name": "dev-basic", "version": "1.2.0" },
+  "captureSurface": "ingress_proxy",
+  "observationBoundary": "client_sent",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:05.600Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-8-0001",
+      "kind": "model",
+      "name": "model:claude-sonnet-4",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 6,
+      "startedAt": "2025-06-01T14:00:00.200Z",
+      "finishedAt": "2025-06-01T14:00:05.500Z",
+      "durationMs": 5300,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    { "eventId": "evt-8-0001", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": null, "seq": 0, "kind": "interaction_start", "capturedAt": "2025-06-01T14:00:00.123Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-8-0002", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": "span-8-0001", "seq": 1, "kind": "span_start", "capturedAt": "2025-06-01T14:00:00.200Z", "evidenceStatus": "captured" },
+    {
+      "eventId": "evt-8-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 2,
+      "kind": "model_request",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "requestEnvelope": {
+        "model": "claude-sonnet-4",
+        "provider": "anthropic",
+        "providerNativeFidelity": "structurally_faithful",
+        "messages": [ { "role": "user", "content": "Fix the failing TypeScript build in this repo." } ],
+        "providerNative": { "stream": false }
+      }
+    },
+    {
+      "eventId": "evt-8-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 3,
+      "kind": "error",
+      "capturedAt": "2025-06-01T14:00:04.500Z",
+      "evidenceStatus": "captured",
+      "actor": "model",
+      "error": {
+        "type": "timeout",
+        "message": "Upstream request timed out after 30000ms (observed at the ingress proxy).",
+        "observedAt": "ingress_proxy"
+      }
+    },
+    {
+      "eventId": "evt-8-0005",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 4,
+      "kind": "retry",
+      "capturedAt": "2025-06-01T14:00:05.100Z",
+      "evidenceStatus": "captured",
+      "retry": {
+        "originalRequestEventId": "evt-8-0003",
+        "errorEventId": "evt-8-0004",
+        "attempt": 2,
+        "observedDelayMs": 500
+      }
+    },
+    {
+      "eventId": "evt-8-0006",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 5,
+      "kind": "cancelled",
+      "capturedAt": "2025-06-01T14:00:05.400Z",
+      "evidenceStatus": "captured",
+      "cancellation": {
+        "requestedBy": "user",
+        "observedAt": "client_side"
+      }
+    },
+    { "eventId": "evt-8-0007", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": "span-8-0001", "seq": 6, "kind": "span_end", "capturedAt": "2025-06-01T14:00:05.500Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-8-0008", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": null, "seq": 7, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:05.600Z", "evidenceStatus": "captured" }
+  ]
 }
 ```
 
-```json
-{
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ15",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": null,
-  "seq": 12,
-  "kind": "cancelled",
-  "capturedAt": "2025-06-01T14:00:04.900Z",
-  "evidenceStatus": "captured",
-  "cancellation": {
-    "requestedBy": "user",
-    "observedAt": "client_side"
-  }
-}
-```
+### 9. Mixed evidence statuses with an explicit `missing` record
+
+One payload is redacted (secrets policy), one is explicitly missing (capture
+failure at the observation boundary), and one is unknown (provider internals).
+The completeness record reflects all three without inventing anything:
 
 ```json
 {
-  "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ16",
-  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ",
-  "spanId": "span-01J5TZXQ8K7M2N4P6R8T0VWXY1",
-  "seq": 13,
-  "kind": "retry",
-  "capturedAt": "2025-06-01T14:00:05.100Z",
-  "evidenceStatus": "captured",
-  "retry": {
-    "originalRequestEventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ14",
-    "attempt": 2
-  }
-}
-```
-
-### 9. Mixed evidence status, measurements, and an interpretation
-
-A fragment where one payload is redacted (secrets policy), one is missing
-(capture failure), and one is unknown (provider internals). The completeness
-record reflects this without inventing anything:
-
-```json
-{
-  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWZZ",
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
   "evidenceSchemaVersion": "1.0.0",
   "captureProfile": { "name": "dev-standard", "version": "2.0.0" },
   "captureSurface": "ingress_proxy",
@@ -520,59 +861,101 @@ record reflects this without inventing anything:
   "finishedAt": "2025-06-02T09:30:12.800Z",
   "status": "completed",
   "events": [
-    {
-      "eventId": "evt-9-0001",
-      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWZZ",
-      "spanId": null,
-      "seq": 0,
-      "kind": "interaction_start",
-      "capturedAt": "2025-06-02T09:30:00.000Z",
-      "evidenceStatus": "captured"
-    },
+    { "eventId": "evt-9-0001", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9", "spanId": null, "seq": 0, "kind": "interaction_start", "capturedAt": "2025-06-02T09:30:00.000Z", "evidenceStatus": "captured" },
     {
       "eventId": "evt-9-0002",
-      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWZZ",
-      "spanId": "span-9-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+      "spanId": null,
       "seq": 1,
       "kind": "model_request",
       "capturedAt": "2025-06-02T09:30:00.100Z",
       "evidenceStatus": "redacted",
-      "redaction": { "policy": "secrets-v1", "reasons": ["authorization-header"], "originalHash": "sha256:ab12cd34ef56ab12cd34ef56ab12cd34" },
-      "observationRole": "client_sent"
+      "observationRole": "client_sent",
+      "redaction": {
+        "policy": "secrets-v1",
+        "reasons": ["authorization-header"],
+        "originalHash": "sha256:ab12cd34ef56ab12cd34ef56ab12cd34"
+      }
     },
     {
       "eventId": "evt-9-0003",
-      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWZZ",
-      "spanId": "span-9-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+      "spanId": null,
       "seq": 2,
+      "kind": "model_response",
+      "capturedAt": "2025-06-02T09:30:12.400Z",
+      "evidenceStatus": "missing",
+      "observationRole": "returned",
+      "missing": {
+        "reason": "capture_failed",
+        "note": "Connection reset before the response body was read.",
+        "reportedBy": { "captureSurface": "ingress_proxy", "observationBoundary": "returned" }
+      }
+    },
+    {
+      "eventId": "evt-9-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+      "spanId": null,
+      "seq": 3,
       "kind": "model_usage",
       "capturedAt": "2025-06-02T09:30:12.600Z",
       "evidenceStatus": "unknown",
       "observationRole": "provider_reported",
-      "usage": { "input_tokens": null, "output_tokens": null, "reason": "not_reported_by_provider" }
-    }
+      "usage": {
+        "evidenceStatus": "unknown",
+        "reason": "not_reported_by_provider",
+        "inputTokens": { "evidenceStatus": "unknown" },
+        "outputTokens": { "evidenceStatus": "unknown" }
+      }
+    },
+    { "eventId": "evt-9-0005", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9", "spanId": null, "seq": 4, "kind": "interaction_end", "capturedAt": "2025-06-02T09:30:12.800Z", "evidenceStatus": "captured" }
   ],
   "completeness": {
-    "eventsByStatus": { "captured": 1, "redacted": 1, "unknown": 1 },
-    "seqGaps": [ { "afterSeq": 2, "expectedSeq": 3, "note": "capture surface failed before interaction_end" } ],
+    "eventsByStatus": { "captured": 2, "redacted": 1, "missing": 1, "unknown": 1 },
+    "seqGaps": [],
     "duplicatesDetected": [],
-    "boundaryStatement": "Ingress proxy capture; provider internals and redacted payloads not observable."
+    "boundaryStatement": "Ingress proxy capture. The model response body was not captured: the capture surface observed a connection reset before the body was read and recorded an explicit `missing` event. Provider internals are not observable. No claim is made about the uncaptured response content."
   }
 }
 ```
 
-Measurements derive deterministically from the evidence above and cite their
-inputs and versions:
+**What this example demonstrates about missing evidence.** What is known to be
+missing: the model response body. How SignalGlass knows: the capture surface
+recorded an explicit `missing` record at the moment the response could not be
+read. Which observation boundary reported that state: the `ingress_proxy`
+surface, on the `returned` (provider-to-client) side. What remains unavailable:
+any claim about the response content — no response-based measurement can be
+derived from this trace, and the content cannot be reconstructed. Note that the
+`seq` values are contiguous: the missing response was disclosed explicitly,
+never inferred from a sequence position (no later sequence number exists, so
+there is no observable gap).
+
+This example also distinguishes the ways a value can be absent, which `null`
+must never collapse:
+
+- `unknown` — cannot be determined whether the content existed (the provider
+  did not report usage; `inputTokens`/`outputTokens` carry status `unknown`
+  and no value);
+- `missing` — known to exist but not captured (the response body);
+- `not_applicable` — no such content applies (for example, a control event has
+  no request body);
+- a captured numeric zero — a real value (for example `output_tokens: 0` with
+  `evidenceStatus: "captured"`), not an absence.
+
+The derived records below are computed from the evidence in **example 2** (the
+model request/response trace), which carries provider-reported usage.
+Example 9's own usage is `unknown`, so it produces no usage-based measurements;
+the derivations show how records cite their inputs and versions:
 
 ```json
 {
-  "measurementId": "msr-01J5TZXQ8K7M2N4P6R8T0VXWZ1",
+  "measurementId": "msr-2-0001",
   "type": "token_count",
   "value": 1842,
   "unit": "tokens",
   "kind": "provider_reported",
   "algorithm": { "name": "provider-reported-usage", "version": "1.0.0" },
-  "inputs": [{ "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ", "eventId": "evt-01J5TZXQ8K7M2N4P6R8T0VXWZ6" }],
+  "inputs": [{ "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2", "eventId": "evt-2-0004" }],
   "configuration": { "tokenizerRegistry": "anthropic-2025-05" },
   "calculatedAt": "2025-06-01T14:00:05.400Z"
 }
@@ -580,15 +963,15 @@ inputs and versions:
 
 ```json
 {
-  "measurementId": "msr-01J5TZXQ8K7M2N4P6R8T0VXWZ2",
+  "measurementId": "msr-2-0002",
   "type": "cost",
   "value": 0.000926,
   "unit": "usd",
   "kind": "locally_calculated",
   "algorithm": { "name": "price-usage", "version": "1.3.0" },
   "inputs": [
-    { "measurementId": "msr-01J5TZXQ8K7M2N4P6R8T0VXWZ1" },
-    { "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ" }
+    { "measurementId": "msr-2-0001" },
+    { "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2" }
   ],
   "configuration": { "pricingTable": "anthropic-2025-06", "tokenizerRegistry": "anthropic-2025-05" },
   "calculatedAt": "2025-06-01T14:00:05.500Z"
@@ -600,20 +983,19 @@ confidence is explicitly a judgment:
 
 ```json
 {
-  "interpretationId": "int-01J5TZXQ8K7M2N4P6R8T0VXWZ1",
+  "interpretationId": "int-2-0001",
   "title": "Repeated context block detected",
   "kind": "smell",
   "label": "repeated-context",
   "labelVersion": "1.0.0",
   "inputs": [
-    { "measurementId": "msr-01J5TZXQ8K7M2N4P6R8T0VXWZ1" },
-    { "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWYZ" }
+    { "measurementId": "msr-2-0001" },
+    { "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2" }
   ],
-  "claim": "The same project-instruction artifact appeared in 6 of 9 model requests in this interaction.",
+  "claim": "The project-instruction artifact was contributed into the model request context in this interaction; the cited measurement and trace support this judgment.",
   "confidence": "medium"
 }
 ```
-
 ## Related documentation
 
 - [Spec 013 — Evidence model (normative contract)](../specs/013-evidence-model.md)

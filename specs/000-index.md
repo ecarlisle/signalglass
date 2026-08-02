@@ -70,7 +70,7 @@ SignalGlass is a disciplined observability platform for AI interactions. Its cur
 
 The existing offline analyzer is preserved. Live ingress is added beside it, not as a replacement. Optimization-oriented deliverables (smells, recommendations, savings) are legacy/optional analysis scope under the architectural foundation and are not core behavior; the target architecture separates observations, deterministic measurements, and interpretations.
 
-The v0.x models behind these modes (`AgentRun`, `Trace`/`TraceEvent`) are compatibility projections over the canonical evidence model defined by [Spec 013](013-evidence-model.md).
+The v0.x models behind these modes (`AgentRun`, `Trace`/`TraceEvent`) will be expressed as compatibility projections over the canonical evidence model defined by [Spec 013](013-evidence-model.md) once it is accepted.
 
 ## References
 

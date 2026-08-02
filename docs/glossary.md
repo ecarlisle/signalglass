@@ -36,7 +36,7 @@ The second SignalGlass mode. SignalGlass acts as an OpenAI-compatible ingress/pr
 ## Trace
 A live-captured session representing a complete provider exchange. A trace can be converted into an `AgentRun` for offline-style analysis.
 
-> **Legacy v0.x.** Superseded by [Spec 013 — Evidence model](../specs/013-evidence-model.md): a trace is now the canonical serialized record of one interaction.
+> **Legacy v0.x.** Pending supersession by [Spec 013 — Evidence model](../specs/013-evidence-model.md) upon acceptance: under the evidence model, a trace is the canonical serialized record of one interaction, carrying both `traceId` and `interactionId` at the top level (equal values; the equality is an invariant), with nested records referencing `traceId`.
 
 ## TraceEvent
 A single event in a trace. Current event types include `message`, `instruction`, `context`, `transformation`, `tool_call`, `tool_result`, `provider_request`, `provider_response`, `provider_error`, `inference`, and `egress_response`.
@@ -78,7 +78,7 @@ A discrete observed occurrence attached to a span or trace root, carrying conten
 The declared scope of what a capture surface could and could not observe, recorded with the evidence. Claims are scoped to the boundary where they were observed.
 
 ## Evidence status
-The state of an evidence payload: `captured`, `redacted`, `truncated`, `missing`, `unknown`, or `not_applicable`. `inferred` appears only on derived records.
+The state of an evidence payload: `captured`, `redacted`, `truncated`, `missing`, `unknown`, or `not_applicable`. `inferred` appears only on derived records. Statuses are never collapsed into `null` or omitted fields.
 
 ## Measurement record
 A deterministic derivation over evidence (token counts, latency, duration, cost) with algorithm/version, input references, and configuration versions. Cost is a derivation, not evidence.
@@ -93,4 +93,4 @@ A named, versioned bundle of one setting from each of the three independent poli
 A derived representation of evidence (for example, a Run, a legacy `Trace`/`AgentRun` shape, or a redacted export). Projections never alter or overwrite authoritative evidence.
 
 ## Trace completeness
-A derived description of which evidence was captured, redacted, truncated, missing, or unknown for an interaction, including `seq` gaps and boundary statements. Never invents evidence.
+A derived description of which evidence was captured, redacted, truncated, missing, or unknown for an interaction, including `seq` gaps (assigned sequence positions absent from retained evidence), boundary statements, and explicit `missing` records. Never invents evidence.
