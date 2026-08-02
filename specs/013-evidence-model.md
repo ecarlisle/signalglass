@@ -2,10 +2,13 @@
 
 ## Status
 
-Draft — current authority for the target architecture. While Draft, this spec
-is the target-architecture contract for design and implementation planning; it
-does not override the accepted Architectural Foundation or ADR 0004, which
-remain authoritative on any conflict until this spec is accepted.
+Accepted — ready to implement. This spec is the canonical evidence contract
+for the target architecture: authoritative for design and implementation
+planning, superseding legacy specs 002, 003, and 004 (§11). The Architectural
+Foundation (approved v0.1) and ADR 0004 remain authoritative target-direction
+documents; where this spec and the foundation conflict, the newer accepted
+revision wins. Acceptance ratifies this contract; it does not imply the
+runtime evidence model is implemented (see §14).
 
 ## Purpose
 
@@ -23,10 +26,11 @@ The Architectural Foundation (approved v0.1) and ADR 0004 are the authoritative
 target-direction documents. This spec makes their evidence-first direction
 concrete. Where this spec and the foundation conflict, the newer accepted
 revision wins; where this spec and legacy v0.x documentation conflict, this
-spec wins for the target architecture. Formal supersession of the legacy
-documents takes effect only when this spec is accepted: until then they
-remain accurate records of the implemented v0.x state, and upon acceptance
-they become compatibility projections (see [§11 Legacy supersession](#11-legacy-supersession)).
+spec wins for the target architecture. Acceptance of this spec formally
+superseded the legacy model specifications (002, 003, and 004): they remain on
+`main` as historical records of the implemented v0.x state, and their
+concepts are expressed through compatibility projections (see
+[§11 Legacy supersession](#11-legacy-supersession)).
 
 ## Scope
 
@@ -37,7 +41,7 @@ they become compatibility projections (see [§11 Legacy supersession](#11-legacy
 - Evidence status and uncertainty semantics.
 - Capture profiles (collection / persistence / export) as a contract.
 - Versioning rules for evidence and derivations.
-- Formal supersession of legacy specs 002, 003, and 004 (takes effect upon
+- Formal supersession of legacy specs 002, 003, and 004 (effected by
   acceptance of this spec; see §11).
 
 ## Non-goals
@@ -770,18 +774,20 @@ This spec requires:
 
 ### 11.1 Legacy specs
 
-Upon acceptance, this spec will formally supersede the legacy v0.x model
-specifications. Until then (this spec is Draft), specs 002, 003, and 004 remain
-accurate records of the implemented v0.x state and are labeled in the
-[spec index](000-index.md) as "legacy v0.x, pending supersession by 013", not
-formally Superseded. They remain on `main` as historical records and are not
-deleted.
+Acceptance of this spec formally supersedes the legacy v0.x model
+specifications. Specs 002, 003, and 004 are marked **Superseded** in the
+[spec index](000-index.md), with this spec identified as the superseding
+specification. They remain on `main` as historical records of the implemented
+v0.x state and are not deleted; they describe the v0.x runtime, not the
+target-architecture contract. The supersession scope below covers the legacy
+model contracts; each legacy spec remains the historical record for its v0.x
+behavior.
 
 | Spec | Legacy model | Status under 013 |
 |---|---|---|
-| [002 — Core domain](../specs/002-core-domain.md) | `AgentRun`, `Turn`, `ContextBlock`, token estimation, smells/recommendations | Pending supersession by 013. `AgentRun` will become a compatibility projection. |
-| [003 — Offline analysis](../specs/003-offline-analysis.md) | Offline analysis pipeline over `AgentRun` | Pending supersession. Analysis will become interpretation records over evidence. |
-| [004 — Trace model](../specs/004-trace-model.md) | `Trace`/`TraceEvent`, `ContentPhase`, `StorageMode` | Pending supersession. `Trace`/`TraceEvent` will become a compatibility projection over evidence. |
+| [002 — Core domain](../specs/002-core-domain.md) | `AgentRun`, `Turn`, `ContextBlock`, token estimation, smells/recommendations | Superseded by 013. `AgentRun` is expressed as a compatibility projection. |
+| [003 — Offline analysis](../specs/003-offline-analysis.md) | Offline analysis pipeline over `AgentRun` | Superseded by 013. Analysis is expressed as interpretation records over evidence. |
+| [004 — Trace model](../specs/004-trace-model.md) | `Trace`/`TraceEvent`, `ContentPhase`, `StorageMode` | Superseded by 013. `Trace`/`TraceEvent` is expressed as a compatibility projection over evidence. |
 
 ### 11.2 Compatible legacy concepts
 
@@ -792,9 +798,9 @@ deleted.
   provider-internal state.
 - Token estimates map to `estimated` measurements; heuristic smells map to
   interpretation records with `low`/`medium` confidence.
-- Trace-to-`AgentRun` conversion (spec 004) will become one documented
-  projection; the inverse projection (evidence to trace view) will be
-  supported the same way.
+- Trace-to-`AgentRun` conversion (spec 004) is expressed as one documented
+  projection; the inverse projection (evidence to trace view) is supported
+  the same way.
 
 ### 11.3 Legacy concepts that do not carry over
 
@@ -872,8 +878,8 @@ example conflicts with the prose above, the prose wins.
 
 ## Tests
 
-No production code changes are made on this branch. The mapping below is a
-contract for future implementation specs:
+No production code changes are made by this spec; it is documentation-only.
+The mapping below is a contract for future implementation specs:
 
 - identity/ordering: `seq` contiguity, tie resolution, duplicate and gap
   handling;
@@ -889,7 +895,7 @@ contract for future implementation specs:
 - [`docs/evidence-model.md`](../docs/evidence-model.md)
 - [`docs/capture-profiles.md`](../docs/capture-profiles.md)
 - [`docs/model-versioning.md`](../docs/model-versioning.md)
-- [`docs/trace-model.md`](../docs/trace-model.md) (legacy, pending supersession by Spec 013)
+- [`docs/trace-model.md`](../docs/trace-model.md) (legacy v0.x, superseded by Spec 013)
 - [`docs/versioning.md`](../docs/versioning.md)
 - [`docs/glossary.md`](../docs/glossary.md)
 - [`specs/000-index.md`](../specs/000-index.md)

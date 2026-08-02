@@ -187,8 +187,9 @@ An envelope never implies byte fidelity unless `byte_faithful` is recorded.
 
 - **Run** — a derived, session-level grouping of interactions. The legacy
   `AgentRun` is a projection over evidence, not a canonical container.
-- **Legacy trace view** — the v0.x `Trace`/`TraceEvent` shape will become a
-  compatibility projection over evidence once Spec 013 is accepted (see
+- **Legacy trace view** — the v0.x `Trace`/`TraceEvent` shape is a legacy
+  record; its target-architecture expression is a compatibility projection
+  over evidence. Spec 013 (accepted) supersedes the legacy trace spec (see
   Spec 013 §11).
 - **Redacted exports** — projections under an export policy; they never
   overwrite authoritative evidence.

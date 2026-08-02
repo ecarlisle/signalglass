@@ -2,7 +2,10 @@
 
 ## Status
 
-Implemented
+Superseded — replaced by [Spec 013 — Evidence model](013-evidence-model.md)
+(accepted). This document is retained as a historical record of the
+implemented v0.x behavior; it is no longer authoritative for the target
+architecture.
 
 ## Purpose
 
