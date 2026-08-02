@@ -82,6 +82,12 @@ The declared scope of what a capture surface could and could not observe, record
 ## Evidence status
 The state of an evidence payload: `captured`, `redacted`, `truncated`, `missing`, `unknown`, or `not_applicable`. `inferred` appears only on derived records. Statuses are never collapsed into `null` or omitted fields.
 
+## Content hash
+A SHA-256 digest (`sha256:` + 64 lowercase hex) over the UTF-8 canonical serialization of an artifact's retained payload content. JSON content uses RFC 8785 (JCS) by schema default; non-JSON formats declare a `contentCanonicalizer` (name + version) or must not emit a hash. It hashes only retained payload content, never metadata, and never implies possession of discarded original content.
+
+## Native content hash
+A SHA-256 digest (`sha256:` + 64 lowercase hex) over the exact native byte sequence observed by a capture surface, before decoding, normalization, envelope construction, or serialization. Recorded on an envelope; required when fidelity is `byte_faithful` and the bytes were captured, optional on `structurally_faithful` envelopes when a transparent surface observed and retained the exact bytes, and forbidden when the exact bytes were not observed or retained (missing/unknown/not applicable/redacted/truncated). Distinct from `contentHash`, which hashes the retained representation per fidelity and canonicalization rules.
+
 ## Measurement record
 A deterministic derivation over evidence (token counts, latency, duration, cost) with algorithm/version, input references, and configuration versions. Cost is a derivation, not evidence.
 
@@ -89,7 +95,7 @@ A deterministic derivation over evidence (token counts, latency, duration, cost)
 A labeled, optional, versioned judgment derived from measurements and evidence (for example, a smell or recommendation), with a checkable claim and an explicitly subjective confidence.
 
 ## Capture profile
-A named, versioned bundle of one setting from each of the three independent policies: collection, persistence, and export. See [capture profiles](capture-profiles.md).
+A named, versioned bundle of policy references and configuration settings that selects collection rules, persistence rules, and export defaults or permitted export profiles (redaction, retention, and overrides included). It is a convenience bundling; collection, persistence, and export remain three independent policies. See [capture profiles](capture-profiles.md).
 
 ## Projection
 A derived representation of evidence (for example, a Run, a legacy `Trace`/`AgentRun` shape, or a redacted export). Projections never alter or overwrite authoritative evidence.

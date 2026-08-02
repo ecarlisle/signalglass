@@ -282,9 +282,45 @@ declared fidelity:
   equivalent to what was observed. Field order, raw bytes, original
   whitespace, lexical formatting, and transport encoding are not preserved;
   byte-for-byte equivalence is not claimed.
-- `byte_faithful` (optional) — the raw bytes or text are preserved. This
-  requires recording `nativeEncoding` and `nativeContentType` on the envelope;
-  `nativeContentHash` SHOULD also be recorded.
+- `byte_faithful` (optional) — the exact native byte sequence observed by the
+  capture surface is preserved: the raw bytes or text as they crossed the
+  boundary, before any decoding, normalization, envelope construction, or
+  serialization. This requires recording `nativeEncoding` and
+  `nativeContentType` on the envelope, and `nativeContentHash` when the native
+  bytes were captured (see below).
+
+**Native content hash.** `nativeContentHash` is an envelope-level field (a
+sibling of `providerNativeFidelity`): a SHA-256 digest over exactly the native
+byte sequence observed by the capture surface, before any transformation.
+Representation: `sha256:<64 lowercase hexadecimal characters>`.
+
+- **Required** when the envelope declares `byte_faithful` fidelity and the
+  native bytes were captured (`evidenceStatus: "captured"`). A `byte_faithful`
+  claim with no `nativeContentHash` is incomplete: the hash is what lets a
+  consumer verify the retained bytes against the observed stream.
+- **Optional** for `structurally_faithful` evidence when the capture surface
+  also observed and retained the exact native bytes (for example, a
+  transparent ingress proxy). It then verifies the observed stream without
+  claiming the canonical record is byte-exact.
+- **Forbidden** when the exact byte sequence was not observed or not retained
+  sufficiently to compute it honestly: `missing`, `unknown`, and
+  `not_applicable` native payloads cannot claim a native content hash, and
+  `redacted` or `truncated` native payloads retained bytes that differ from
+  what was observed, so a hash over the observed sequence would misrepresent
+  the retained evidence.
+- **Difference from `contentHash`:** `contentHash` (artifact-level, §6.1)
+  hashes the retained representation according to the declared fidelity and
+  canonicalization rules — for `structurally_faithful`, a canonical
+  serialization of the parsed structure, which is not byte-for-byte the
+  observed stream. `nativeContentHash` hashes the exact observed bytes and
+  never implies a canonical form. For the same payload the two values may
+  differ.
+- **External payload references:** an external reference to a native payload
+  may carry `nativeContentHash` only when the hash was computed at capture
+  time over the exact byte sequence the capture surface observed, and the
+  reference records that the payload was captured
+  (`evidenceStatus: "captured"`). A reference to content that was never
+  observed, or only partially retained, MUST NOT carry the hash.
 
 The envelope MUST record `providerNativeFidelity` and MUST NOT imply byte
 fidelity unless `byte_faithful` is recorded. A provider-specific shape (for
@@ -419,6 +455,10 @@ A context artifact is a referenceable unit of context:
   or `contentHash`;
 - `contentHash` — top-level artifact field; a deterministic SHA-256 digest
   (see hash semantics below). It is never nested inside `payloadRef`;
+- `contentCanonicalizer` — optional canonicalizer identifier
+  (`{ name, version }`) recorded when a non-default canonicalizer is used or
+  the default RFC 8785 (JCS) canonicalizer is pinned to a registry version
+  (see hash semantics below);
 - `provenance` — source locator: path, URI, retrieval query, range, or hash.
 
 **Standalone artifacts are self-describing.** An artifact serialized inside a
@@ -430,14 +470,30 @@ resolve to a known trace. Validators and readers MUST NOT rely on an unstated
 enclosing context.
 
 **Hash semantics.** `contentHash` is a SHA-256 digest over the UTF-8 encoding
-of the content representation that was actually retained at the declared
-fidelity: for `structurally_faithful`, the canonical serialization of the
-parsed structure; for `byte_faithful`, the raw bytes or text (`nativeEncoding`
-and `nativeContentType` describe that representation). `contentHash` always
-hashes the **retained representation**; it never implies possession,
-verification, or reconstruction of discarded original content. The algorithm
-and encoding are fixed by the schema version. Presence rules by
-`evidenceStatus`:
+of the **canonical serialization of the retained payload content**:
+
+- **Logical value.** For `structurally_faithful`, the retained parsed
+  structure's logical value (for example, a JSON object with values equivalent
+  to what was observed); for `byte_faithful`, the retained raw bytes or text
+  (`nativeEncoding` and `nativeContentType` describe that representation).
+- **Canonicalization.** JSON and JSON-compatible content are canonicalized
+  with RFC 8785 (JCS). The schema version fixes this default, so
+  cross-implementation reproduction needs no per-record metadata. A non-JSON
+  format MUST select its canonicalizer from the versioned canonicalizer
+  registry by content type/kind and MUST record it on the artifact as
+  `contentCanonicalizer: { name, version }`; the default JCS canonicalizer MAY
+  be recorded explicitly to pin its registry version.
+- **Byte encoding.** The canonicalized value is hashed as UTF-8.
+- **Hash input.** Only retained payload content is hashed — never artifact or
+  envelope metadata (`artifactId`, `kind`, `provenance`, `traceId`,
+  `evidenceSchemaVersion`, `providerNativeFidelity`, and so on).
+- **No supported canonicalizer.** If no deterministic canonicalizer exists for
+  the content's format, `contentHash` MUST NOT be emitted: reproducibility
+  cannot be claimed without declaring every input needed to reproduce the
+  bytes.
+- `contentHash` always hashes the **retained representation**; it never
+  implies possession, verification, or reconstruction of discarded original
+  content. Presence rules by `evidenceStatus`:
 
 - `captured` — hash of the retained representation; required for inline
   content.

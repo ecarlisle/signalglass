@@ -18,10 +18,19 @@
 //     errorEventId referencing an error event)
 //   - missing status carries an explicit `missing` declaration
 //   - request/response envelopes declare providerNativeFidelity, and the
-//     declared fidelity matches the stored representation
+//     declared fidelity matches the stored representation; nativeContentHash
+//     (exact observed native bytes) is checked for representation, required
+//     with byte_faithful, and forbidden when the event is not captured
 //   - declared completeness counts match the events
 //   - cross-record references resolve (traceId, eventId, measurementId,
 //     artifactId)
+//   - administrative policy fields (persistence/export policy versions) are
+//     rejected on every canonical record type; standalone artifacts are
+//     self-describing (traceId + evidenceSchemaVersion); contentHash
+//     representation and per-status presence; contentCanonicalizer shape
+//   - --self-test runs negative fixtures proving the administrative-policy
+//     checks fire for traces, events, artifacts, measurements, and
+//     interpretations
 
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -114,13 +123,24 @@ function checkTraceRef(ref, label) {
   }
 }
 
+// Administrative policy fields (persistence/export policy versions) belong on
+// storage/export metadata, never on canonical evidence records (Spec 013
+// §9.2). Runs for every canonical record type — trace, event, artifact,
+// measurement, interpretation — independently of record-type classification,
+// so no branch can skip it.
+function checkAdminPolicyFields(rec, label) {
+  for (const key of Object.keys(rec)) {
+    if (ADMIN_POLICY_KEY_RE.test(key)) {
+      errors.push(`${label}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
+    }
+  }
+}
+
 // ---- Trace invariants ----
 for (const { i, b } of traces) {
   const label = `[trace ${i}] ${b.traceId}`;
   if (b.interactionId !== b.traceId) errors.push(`${label}: interactionId !== traceId`);
-  for (const key of Object.keys(b)) {
-    if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${label}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
-  }
+  checkAdminPolicyFields(b, label);
 
   const events = b.events;
   const eventIds = new Set();
@@ -172,9 +192,7 @@ for (const { i, b } of traces) {
         errors.push(`${el}: observationRole 'unobservable' but usage declares captured values — unobservable content cannot be captured`);
       }
     }
-    for (const key of Object.keys(ev)) {
-      if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${el}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
-    }
+    checkAdminPolicyFields(ev, el);
 
     for (const envKey of ["requestEnvelope", "responseEnvelope"]) {
       const env = ev[envKey];
@@ -183,9 +201,24 @@ for (const { i, b } of traces) {
         errors.push(`${el}: ${envKey} missing required providerNativeFidelity`);
       } else if (!FIDELITIES.has(env.providerNativeFidelity)) {
         errors.push(`${el}: ${envKey} invalid providerNativeFidelity ${env.providerNativeFidelity}`);
-      } else if (env.providerNativeFidelity === "byte_faithful") {
+      }
+      // nativeContentHash (Spec 013 §3.2): hashes the exact observed native
+      // bytes; required with byte_faithful, forbidden when the event is not
+      // captured, and always 'sha256:' + 64 lowercase hex.
+      if (env.nativeContentHash !== undefined) {
+        if (!/^sha256:[0-9a-f]{64}$/.test(env.nativeContentHash)) {
+          errors.push(`${el}: ${envKey} nativeContentHash '${env.nativeContentHash}' is not 'sha256:' + 64 lowercase hex characters (Spec 013 §3.2)`);
+        }
+        if (ev.evidenceStatus !== "captured") {
+          errors.push(`${el}: ${envKey} carries nativeContentHash but event evidenceStatus is ${ev.evidenceStatus} — a native content hash claims observed, retained bytes (Spec 013 §3.2)`);
+        }
+      }
+      if (env.providerNativeFidelity === "byte_faithful") {
         if (!env.nativeEncoding || !env.nativeContentType) {
           errors.push(`${el}: ${envKey} byte_faithful requires nativeEncoding and nativeContentType`);
+        }
+        if (env.nativeContentHash === undefined) {
+          errors.push(`${el}: ${envKey} byte_faithful with a captured native payload requires nativeContentHash over the observed native bytes (Spec 013 §3.2)`);
         }
       }
     }
@@ -286,6 +319,8 @@ for (const { i, b } of traces) {
 parsed.forEach((b, i) => {
   if (!b || b.interactionId !== undefined) return;
   const label = `[record ${i}]`;
+  checkAdminPolicyFields(b, label); // independent pass: runs for artifacts,
+                                    // measurements, and interpretations alike
   if (b.measurementId !== undefined) {
     if (!b.kind) errors.push(`${label}: measurement ${b.measurementId} missing kind`);
     for (const inp of b.inputs || []) {
@@ -333,16 +368,10 @@ parsed.forEach((b, i) => {
       errors.push(`${label}: standalone artifact ${b.artifactId} is missing evidenceSchemaVersion (must serialize it explicitly)`);
     }
     if (b.observedAt !== undefined) errors.push(`${label}: artifact ${b.artifactId} uses 'observedAt', which is not a defined observation field`);
-    for (const key of Object.keys(b)) {
-      if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${label}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
-    }
-  } else if (b.measurementId !== undefined) {
-    for (const key of Object.keys(b)) {
-      if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${label}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
-    }
-  } else if (b.interpretationId !== undefined) {
-    for (const key of Object.keys(b)) {
-      if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${label}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
+    if (b.contentCanonicalizer !== undefined) {
+      if (!b.contentCanonicalizer.name || !b.contentCanonicalizer.version) {
+        errors.push(`${label}: artifact ${b.artifactId} contentCanonicalizer must carry { name, version } (Spec 013 §6.1)`);
+      }
     }
   }
 });
@@ -357,7 +386,32 @@ for (const f of ["docs/capture-profiles.md", "docs/model-versioning.md"]) {
   }
 }
 
+// ---- Self-test (--self-test): negative fixtures ----
+// Demonstrates that forbidden administrative policy fields are rejected on
+// every canonical record type, including standalone measurements and
+// interpretations. Runs the same checkAdminPolicyFields used by the real
+// pass; fixture errors are discarded so they do not surface as main failures.
+function selfTest() {
+  const baseline = errors.length;
+  const fixtures = [
+    ["measurement", { measurementId: "msr-st", kind: "token_count", persistencePolicyVersion: "1.0.0" }],
+    ["interpretation", { interpretationId: "int-st", kind: "smell", exportPolicyVersion: "2.0.0" }],
+    ["artifact", { artifactId: "art-st", evidenceStatus: "captured", persistencePolicy: "1.0.0" }],
+    ["event", { eventId: "evt-st", traceId: "t", spanId: null, seq: 0, kind: "model_request", capturedAt: "2025-01-01T00:00:00.000Z", evidenceStatus: "captured", observationRole: "client_sent", exportPolicyVersion: "1.0.0" }],
+    ["trace", { interactionId: "t", traceId: "t", evidenceSchemaVersion: "1.0.0", status: "completed", exportPolicy: "1.0.0", events: [] }],
+  ];
+  for (const [name, rec] of fixtures) checkAdminPolicyFields(rec, `[self-test ${name}]`);
+  const rejected = errors.length - baseline;
+  errors.length = baseline;
+  console.log(`Self-test: ${rejected}/${fixtures.length} negative fixtures rejected forbidden administrative policy fields on ${fixtures.map((f) => f[0]).join(", ")} records.`);
+  return rejected === fixtures.length;
+}
+
 console.log(`\nValidated ${rawBlocks.length} JSON blocks in docs/evidence-model.md (${traces.length} traces) and ${extra} JSON block(s) in capture-profiles/model-versioning docs.\n`);
+if (process.argv.includes("--self-test") && !selfTest()) {
+  console.log("Self-test failed: at least one forbidden administrative policy field was not rejected.");
+  process.exit(1);
+}
 if (errors.length) {
   console.log(`ERRORS (${errors.length}):`);
   for (const e of errors) console.log(`  - ${e}`);
