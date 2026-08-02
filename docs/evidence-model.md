@@ -101,23 +101,29 @@ proves what the client sent, not what the provider did internally.
   retrieval result, context-provider result, repository content, manual),
   `payloadRef` (payload-reference fields only — never `evidenceStatus` or
   `contentHash`), a top-level `evidenceStatus`, a top-level `contentHash`
-  (never nested inside `payloadRef`), an optional `contentCanonicalizer`
-  (`{ name, version }`) when a non-default canonicalizer is used, and
-  `provenance` (source path/URI/query/range). Hash presence depends on
-  evidence status: required for `captured` inline content, hashing only the
-  retained prefix when `truncated`, permitted over the retained redacted
-  representation when `redacted`, and forbidden for
-  `missing`/`unknown`/`not_applicable` (§6.1 of Spec 013). `contentHash`
-  always hashes the retained representation and never implies possession of
-  discarded original content. The `contentHash` input depends on the retained
-  representation: `byte_faithful` retained bytes are hashed directly as bytes
-  (never treated as UTF-8 text); `structurally_faithful` JSON is canonicalized
-  with RFC 8785 (JCS) (the schema-fixed default) and hashed as UTF-8; other
-  structured formats use their declared versioned canonicalizer and its
-  specified output encoding; if no deterministic canonicalizer exists, no
-  hash is emitted. A **standalone artifact** (not provably enclosed by
-  its trace) MUST serialize `traceId` and `evidenceSchemaVersion` explicitly,
-  and its `traceId` MUST resolve to a known trace.
+  (never nested inside `payloadRef`), `contentFidelity` and `contentType`
+  (the artifact-local description of the retained representation that
+  selects the hashing path), `contentCanonicalizer` (`{ name, version }`),
+  `contentHashUnavailableReason` (when retained content exists but no
+  supported deterministic canonicalizer is available), and `provenance`
+  (source path/URI/query/range). The hashing path is decided from the
+  artifact's own serialized fields, so a standalone artifact is
+  self-describing: `byte_faithful` retained bytes are hashed directly as
+  bytes (never treated as UTF-8 text); `structurally_faithful` JSON is
+  canonicalized with RFC 8785 (JCS) (the schema-fixed default) and hashed as
+  UTF-8; other structured formats hash only with their declared versioned
+  canonicalizer and its specified output encoding; if no deterministic
+  canonicalizer exists, no hash is emitted and
+  `contentHashUnavailableReason: "unsupported_canonicalizer"` is recorded.
+  `contentHash` presence depends on evidence status: required for `captured`
+  content with a reproducible hashing path, hashing only the retained prefix
+  when `truncated`, permitted over the retained redacted representation when
+  `redacted`, and forbidden for `missing`/`unknown`/`not_applicable` (§6.1 of
+  Spec 013). `contentHash` always hashes the retained representation and
+  never implies possession of discarded original content. A **standalone
+  artifact** (not provably enclosed by its trace) MUST serialize `traceId`
+  and `evidenceSchemaVersion` explicitly, and its `traceId` MUST resolve to
+  a known trace.
 - A **context contribution** records that an artifact entered a model request:
   artifact reference, deterministic locator (`whole` | `range` | `fragment` |
   `hash`), position in the assembled context, and provenance state
@@ -338,7 +344,9 @@ usage:
 ```
 
 The artifact contributed into the request (`contextContributions` on
-`evt-2-0003`) is recorded beside the trace:
+`evt-2-0003`) is recorded beside the trace. Its retained content is the file's
+raw bytes (`byte_faithful`), so the bytes are hashed directly with no
+canonicalizer:
 
 ```json
 {
@@ -347,8 +355,9 @@ The artifact contributed into the request (`contextContributions` on
   "evidenceStatus": "captured",
   "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
   "evidenceSchemaVersion": "1.0.0",
+  "contentFidelity": "byte_faithful",
+  "contentType": "text/markdown",
   "contentHash": "sha256:2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e",
-  "contentCanonicalizer": { "name": "rfc8785-jcs", "version": "1.0.0" },
   "payloadRef": {
     "excerpt": "project-instruction: fix the failing TypeScript build"
   },
@@ -695,7 +704,10 @@ retrieved fragment entered the model request's assembled context:
 }
 ```
 
-The retrieved fragment is a context artifact with provenance:
+The retrieved fragment is a context artifact with provenance. Its retained
+content is structurally faithful JSON, so the hash is computed by RFC 8785
+(JCS) canonicalization followed by UTF-8 encoding; the canonicalizer is pinned
+to a registry version:
 
 ```json
 {
@@ -704,16 +716,65 @@ The retrieved fragment is a context artifact with provenance:
   "evidenceStatus": "captured",
   "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6",
   "evidenceSchemaVersion": "1.0.0",
-  "contentHash": "sha256:9f2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+  "contentFidelity": "structurally_faithful",
+  "contentType": "application/json",
   "contentCanonicalizer": { "name": "rfc8785-jcs", "version": "1.0.0" },
+  "contentHash": "sha256:9f2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
   "payloadRef": {
-    "excerpt": "Keep the context window small..."
+    "excerpt": "{\"guideline\": \"Keep the context window small\", \"source\": \"context-window-best-practices\"}"
   },
   "provenance": {
     "source": "retrieval",
     "query": "context window best practices",
     "uri": "https://example.com/docs/context-window"
   }
+}
+```
+
+### Artifact hash selection
+
+The hashing path is always selected from the artifact's own serialized fields
+— `contentFidelity`, `contentType`, and `contentCanonicalizer` — never from an
+enclosing event or envelope. Two more cases complete the matrix. A
+structurally faithful non-JSON structured payload (here canonical XML) hashes
+only with a declared versioned canonicalizer:
+
+```json
+{
+  "artifactId": "art-6-0002",
+  "kind": "tool_result",
+  "evidenceStatus": "captured",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6",
+  "evidenceSchemaVersion": "1.0.0",
+  "contentFidelity": "structurally_faithful",
+  "contentType": "application/xml",
+  "contentCanonicalizer": { "name": "xml-c14n-1.1", "version": "1.0.0" },
+  "contentHash": "sha256:3d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e",
+  "payloadRef": {
+    "excerpt": "<rule id=\"r-1\">Keep the context window small</rule>"
+  },
+  "provenance": { "source": "tool", "name": "rules-loader" }
+}
+```
+
+Captured retained content for which no supported deterministic canonicalizer
+exists is declared explicitly — no `contentHash`, and an unavailable-hash
+reason instead (the hash is never fabricated):
+
+```json
+{
+  "artifactId": "art-2-0002",
+  "kind": "document",
+  "evidenceStatus": "captured",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+  "evidenceSchemaVersion": "1.0.0",
+  "contentFidelity": "structurally_faithful",
+  "contentType": "text/html",
+  "contentHashUnavailableReason": "unsupported_canonicalizer",
+  "payloadRef": {
+    "excerpt": "<html><body><h1>Release notes</h1></body></html>"
+  },
+  "provenance": { "source": "web", "uri": "https://example.com/release-notes" }
 }
 ```
 

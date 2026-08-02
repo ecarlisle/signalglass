@@ -28,12 +28,17 @@
 //     artifactId)
 //   - administrative policy fields (persistence/export policy versions) are
 //     rejected on every canonical record type; standalone artifacts are
-//     self-describing (traceId + evidenceSchemaVersion); contentHash
-//     representation and per-status presence; contentCanonicalizer shape
+//     self-describing (traceId + evidenceSchemaVersion); artifact hash
+//     selection is driven by the artifact's own contentFidelity/contentType/
+//     contentCanonicalizer/contentHashUnavailableReason fields (Spec 013
+//     §6.1 decision table), never an enclosing event or envelope
 //   - --self-test runs negative fixtures proving the administrative-policy
 //     checks fire for traces, events, artifacts, measurements, and
-//     interpretations, and that invalid envelope status/fidelity/hash
-//     combinations are rejected (with a positive byte_faithful control)
+//     interpretations, that invalid envelope status/fidelity/hash
+//     combinations are rejected (with a positive byte_faithful control), and
+//     that the artifact-level hash-selection branches fire (with positive
+//     controls for every reproducible hashing path and for declared
+//     unsupported-canonicalizer unavailability)
 
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -72,6 +77,18 @@ const EVENT_KINDS = new Set([
   "error", "cancelled", "retry",
 ]);
 const REQUEST_KIND_RE = /_(request|call)$/;
+// Artifact-level content representation (Spec 013 §6.1). The hashing path is
+// selected from the artifact's own serialized fields; these values are the
+// closed vocabularies the validator accepts.
+const ARTIFACT_FIDELITIES = new Set(["byte_faithful", "structurally_faithful"]);
+const HASH_UNAVAILABLE_REASONS = new Set(["unsupported_canonicalizer"]);
+const MEDIA_TYPE_RE = /^[^\s/]+\/[^\s/]+$/;
+
+function isJsonContentType(ct) {
+  if (typeof ct !== "string") return false;
+  const base = ct.split(";")[0].trim().toLowerCase();
+  return base === "application/json" || base.endsWith("+json");
+}
 
 function walk(obj, fn) {
   if (Array.isArray(obj)) { for (const v of obj) walk(v, fn); return; }
@@ -335,6 +352,141 @@ for (const { i, b } of traces) {
   }
 }
 
+// Artifact-level content hashing contract (Spec 013 §6.1). The hashing path
+// is selected from the artifact's own serialized fields — contentFidelity,
+// contentType, contentCanonicalizer — never from an enclosing event or
+// envelope, so a standalone artifact is self-describing:
+//   - byte_faithful bytes are hashed directly (contentHash required when
+//     captured; contentCanonicalizer forbidden)
+//   - structurally_faithful JSON uses RFC 8785/JCS + UTF-8 (contentHash
+//     required when captured; contentCanonicalizer optional pin)
+//   - structurally_faithful non-JSON structured content hashes only with a
+//     declared contentCanonicalizer { name, version } (required when captured)
+//   - structurally_faithful content with no supported canonicalizer declares
+//     contentHashUnavailableReason: "unsupported_canonicalizer" and must not
+//     carry contentHash
+//   - missing/unknown/not_applicable: contentHash, contentFidelity, and
+//     contentHashUnavailableReason are all forbidden
+function checkArtifact(b, label) {
+  if (!STATUSES.has(b.evidenceStatus)) errors.push(`${label}: artifact ${b.artifactId} invalid evidenceStatus ${b.evidenceStatus}`);
+  if (!b.payloadRef) errors.push(`${label}: artifact ${b.artifactId} missing payloadRef`);
+  // evidenceStatus / contentHash placement (Spec 013 §6.1): top-level only.
+  if (b.payloadRef) {
+    if (b.payloadRef.evidenceStatus !== undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} has evidenceStatus nested inside payloadRef — it must be a top-level artifact field`);
+    }
+    if (b.payloadRef.contentHash !== undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} has contentHash nested inside payloadRef — it must be a top-level artifact field`);
+    }
+  }
+
+  const retainedExists = ["captured", "redacted", "truncated"].includes(b.evidenceStatus);
+  const noRetained = ["missing", "unknown", "not_applicable"].includes(b.evidenceStatus);
+
+  // contentHash representation (Spec 013 §6.1): sha256: + 64 lowercase hex.
+  if (b.contentHash !== undefined && !/^sha256:[0-9a-f]{64}$/.test(b.contentHash)) {
+    errors.push(`${label}: artifact ${b.artifactId} contentHash '${b.contentHash}' is not 'sha256:' + 64 lowercase hex characters (Spec 013 §6.1)`);
+  }
+
+  // contentFidelity: closed vocabulary; required when retained content exists
+  // or a hash/unavailability claim is made; forbidden when no retained
+  // content exists (fidelity describes retained content, never discarded
+  // originals).
+  if (b.contentFidelity !== undefined && !ARTIFACT_FIDELITIES.has(b.contentFidelity)) {
+    errors.push(`${label}: artifact ${b.artifactId} invalid contentFidelity '${b.contentFidelity}' (valid: ${[...ARTIFACT_FIDELITIES].join(", ")}) (Spec 013 §6.1)`);
+  }
+  if (noRetained) {
+    if (b.contentFidelity !== undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} declares contentFidelity ${b.contentFidelity} but evidenceStatus is ${b.evidenceStatus} — fidelity describes retained content, which does not exist here (Spec 013 §6.1)`);
+    }
+  } else if (b.contentFidelity === undefined) {
+    if (b.contentHash !== undefined || b.contentHashUnavailableReason !== undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} carries ${b.contentHash !== undefined ? "contentHash" : "contentHashUnavailableReason"} but no contentFidelity — the hashing path cannot be selected (Spec 013 §6.1)`);
+    } else {
+      errors.push(`${label}: artifact ${b.artifactId} has retained content (evidenceStatus ${b.evidenceStatus}) but no contentFidelity — artifacts must declare the retained representation (Spec 013 §6.1)`);
+    }
+  }
+
+  // contentType: usable media-type declaration required when retained content
+  // exists or a hash/unavailability claim is made.
+  if (b.contentType !== undefined && !MEDIA_TYPE_RE.test(b.contentType)) {
+    errors.push(`${label}: artifact ${b.artifactId} contentType '${b.contentType}' is not a usable media type (expected type/subtype, e.g. application/json) (Spec 013 §6.1)`);
+  }
+  if ((retainedExists || b.contentHash !== undefined || b.contentHashUnavailableReason !== undefined) && b.contentType === undefined) {
+    errors.push(`${label}: artifact ${b.artifactId} has retained content / hash claim but no contentType — the hashing path cannot be selected (Spec 013 §6.1)`);
+  }
+
+  // contentHashUnavailableReason: closed vocabulary; mutually exclusive with
+  // contentHash; impossible when a reproducible hashing path exists.
+  if (b.contentHashUnavailableReason !== undefined && !HASH_UNAVAILABLE_REASONS.has(b.contentHashUnavailableReason)) {
+    errors.push(`${label}: artifact ${b.artifactId} invalid contentHashUnavailableReason '${b.contentHashUnavailableReason}' (valid: ${[...HASH_UNAVAILABLE_REASONS].join(", ")}) (Spec 013 §6.1)`);
+  }
+  if (b.contentHash !== undefined && b.contentHashUnavailableReason !== undefined) {
+    errors.push(`${label}: artifact ${b.artifactId} carries both contentHash and contentHashUnavailableReason — unavailable hashing and a hash are mutually exclusive (Spec 013 §6.1)`);
+  }
+  if (noRetained && b.contentHashUnavailableReason !== undefined) {
+    errors.push(`${label}: artifact ${b.artifactId} declares contentHashUnavailableReason but evidenceStatus is ${b.evidenceStatus} — no retained content exists to hash (Spec 013 §6.1)`);
+  }
+  if (b.contentHashUnavailableReason !== undefined &&
+      (b.contentFidelity === "byte_faithful" ||
+       (b.contentFidelity === "structurally_faithful" &&
+        ((b.contentType !== undefined && isJsonContentType(b.contentType)) || b.contentCanonicalizer !== undefined)))) {
+    errors.push(`${label}: artifact ${b.artifactId} declares contentHashUnavailableReason but a reproducible hashing path exists (raw bytes hashed directly, JSON via RFC 8785 (JCS), or a declared canonicalizer) (Spec 013 §6.1)`);
+  }
+
+  // contentCanonicalizer: { name, version } shape; forbidden for byte_faithful
+  // (bytes are hashed directly) and alongside an unavailable-hash reason.
+  if (b.contentCanonicalizer !== undefined) {
+    if (!b.contentCanonicalizer.name || !b.contentCanonicalizer.version) {
+      errors.push(`${label}: artifact ${b.artifactId} contentCanonicalizer must carry { name, version } (Spec 013 §6.1)`);
+    }
+    if (b.contentFidelity === "byte_faithful") {
+      errors.push(`${label}: artifact ${b.artifactId} is byte_faithful but declares contentCanonicalizer — raw retained bytes are hashed directly, a canonicalizer does not apply (Spec 013 §6.1)`);
+    }
+    if (b.contentHashUnavailableReason !== undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} declares contentHashUnavailableReason but also contentCanonicalizer — a declared canonicalizer is a supported deterministic hashing path (Spec 013 §6.1)`);
+    }
+  }
+
+  // Conditional contentHash selection (Spec 013 §6.1 decision table).
+  const jsonType = b.contentType !== undefined && isJsonContentType(b.contentType);
+  if (b.contentFidelity === "byte_faithful") {
+    if (b.evidenceStatus === "captured" && b.contentHash === undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} is captured with byte_faithful retained bytes but has no contentHash — the retained bytes are hashed directly (required, Spec 013 §6.1)`);
+    }
+  } else if (b.contentFidelity === "structurally_faithful") {
+    if (b.contentHash !== undefined && !jsonType && b.contentCanonicalizer === undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} is structurally_faithful ${b.contentType ?? "unknown-type"} with contentHash but no contentCanonicalizer — non-JSON structured content hashes only with a declared versioned canonicalizer (Spec 013 §6.1)`);
+    }
+    if (b.evidenceStatus === "captured" && b.contentHash === undefined && b.contentHashUnavailableReason === undefined) {
+      if (jsonType || b.contentCanonicalizer !== undefined) {
+        errors.push(`${label}: artifact ${b.artifactId} is captured with a reproducible hashing path (${jsonType ? "JSON via RFC 8785 (JCS)" : `declared canonicalizer ${b.contentCanonicalizer.name}`}) but has no contentHash (required, Spec 013 §6.1)`);
+      }
+    }
+    if (b.contentHash === undefined && b.contentHashUnavailableReason === undefined && b.contentCanonicalizer === undefined && !jsonType && retainedExists) {
+      errors.push(`${label}: artifact ${b.artifactId} has structurally_faithful retained ${b.contentType ?? "unknown-type"} content with neither contentHash nor contentHashUnavailableReason — unsupported deterministic hashing must be declared explicitly (Spec 013 §6.1)`);
+    }
+  }
+
+  // Hash forbidden for unavailable content (Spec 013 §6.1): SignalGlass
+  // cannot hash content that does not exist.
+  if (noRetained && b.contentHash !== undefined) {
+    errors.push(`${label}: artifact ${b.artifactId} has contentHash but evidenceStatus is ${b.evidenceStatus} — SignalGlass cannot hash unavailable content (Spec 013 §6.1)`);
+  }
+
+  // Standalone artifacts are self-describing (Spec 013 §6.1): traceId and
+  // evidenceSchemaVersion must be explicit, and traceId must resolve.
+  if (b.traceId === undefined) {
+    errors.push(`${label}: standalone artifact ${b.artifactId} is missing traceId (must serialize it explicitly — validators must not rely on enclosing context)`);
+  } else if (!index.traces.has(b.traceId)) {
+    errors.push(`${label}: standalone artifact ${b.artifactId} references unknown traceId ${b.traceId}`);
+  }
+  if (b.evidenceSchemaVersion === undefined) {
+    errors.push(`${label}: standalone artifact ${b.artifactId} is missing evidenceSchemaVersion (must serialize it explicitly)`);
+  }
+  if (b.observedAt !== undefined) errors.push(`${label}: artifact ${b.artifactId} uses 'observedAt', which is not a defined observation field`);
+}
+
 // ---- Record references ----
 parsed.forEach((b, i) => {
   if (!b || b.interactionId !== undefined) return;
@@ -357,42 +509,7 @@ parsed.forEach((b, i) => {
       else errors.push(`${label}: interpretation input has neither measurementId nor traceId`);
     }
   } else if (b.artifactId !== undefined) {
-    if (!STATUSES.has(b.evidenceStatus)) errors.push(`${label}: artifact ${b.artifactId} invalid evidenceStatus ${b.evidenceStatus}`);
-    if (!b.payloadRef) errors.push(`${label}: artifact ${b.artifactId} missing payloadRef`);
-    // evidenceStatus / contentHash placement (Spec 013 §6.1): top-level only.
-    if (b.payloadRef) {
-      if (b.payloadRef.evidenceStatus !== undefined) {
-        errors.push(`${label}: artifact ${b.artifactId} has evidenceStatus nested inside payloadRef — it must be a top-level artifact field`);
-      }
-      if (b.payloadRef.contentHash !== undefined) {
-        errors.push(`${label}: artifact ${b.artifactId} has contentHash nested inside payloadRef — it must be a top-level artifact field`);
-      }
-    }
-    if (b.evidenceStatus === "captured" && b.contentHash === undefined) {
-      errors.push(`${label}: artifact ${b.artifactId} is captured with inline content but has no top-level contentHash (required, Spec 013 §6.1)`);
-    }
-    if (["missing", "unknown", "not_applicable"].includes(b.evidenceStatus) && b.contentHash !== undefined) {
-      errors.push(`${label}: artifact ${b.artifactId} has contentHash but evidenceStatus is ${b.evidenceStatus} — SignalGlass cannot hash unavailable content (Spec 013 §6.1)`);
-    }
-    if (b.contentHash !== undefined && !/^sha256:[0-9a-f]{64}$/.test(b.contentHash)) {
-      errors.push(`${label}: artifact ${b.artifactId} contentHash '${b.contentHash}' is not 'sha256:' + 64 lowercase hex characters (Spec 013 §6.1)`);
-    }
-    // Standalone artifacts are self-describing (Spec 013 §6.1): traceId and
-    // evidenceSchemaVersion must be explicit, and traceId must resolve.
-    if (b.traceId === undefined) {
-      errors.push(`${label}: standalone artifact ${b.artifactId} is missing traceId (must serialize it explicitly — validators must not rely on enclosing context)`);
-    } else if (!index.traces.has(b.traceId)) {
-      errors.push(`${label}: standalone artifact ${b.artifactId} references unknown traceId ${b.traceId}`);
-    }
-    if (b.evidenceSchemaVersion === undefined) {
-      errors.push(`${label}: standalone artifact ${b.artifactId} is missing evidenceSchemaVersion (must serialize it explicitly)`);
-    }
-    if (b.observedAt !== undefined) errors.push(`${label}: artifact ${b.artifactId} uses 'observedAt', which is not a defined observation field`);
-    if (b.contentCanonicalizer !== undefined) {
-      if (!b.contentCanonicalizer.name || !b.contentCanonicalizer.version) {
-        errors.push(`${label}: artifact ${b.artifactId} contentCanonicalizer must carry { name, version } (Spec 013 §6.1)`);
-      }
-    }
+    checkArtifact(b, label);
   }
 });
 
@@ -463,9 +580,60 @@ function selfTest() {
   const positiveOK = errors.length === posBefore;
   if (!positiveOK) console.log("SELF-TEST FAIL: valid byte_faithful + captured envelope was rejected");
 
+  // Artifact-level hash-selection fixtures (Spec 013 §6.1). Negative fixtures
+  // must each be rejected (proving the new branches fire); positive fixtures
+  // must be accepted (proving the rejections are not over-strict). The
+  // fixtures exercise the artifact's own serialized fields — contentFidelity,
+  // contentType, contentCanonicalizer, contentHashUnavailableReason — with no
+  // reliance on an enclosing event or envelope. traceId "t" is registered in
+  // the index so the standalone-artifact self-description checks pass.
+  index.traces.add("t");
+  const artifactNegatives = [
+    ["structured JSON missing its required contentHash",
+      { artifactId: "art-st-json", kind: "fragment", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "application/json", payloadRef: { excerpt: "{}" } }],
+    ["non-JSON structured content with contentHash but no contentCanonicalizer",
+      { artifactId: "art-st-xml", kind: "tool_result", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "application/xml", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "<x/>" } }],
+    ["contentHash without contentFidelity",
+      { artifactId: "art-st-nofid", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentType: "text/markdown", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["contentHash without contentType",
+      { artifactId: "art-st-noct", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["byte_faithful content with inapplicable contentCanonicalizer",
+      { artifactId: "art-st-bfcanon", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: "text/markdown", contentCanonicalizer: { name: "rfc8785-jcs", version: "1.0.0" }, contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["contentHash combined with contentHashUnavailableReason",
+      { artifactId: "art-st-both", kind: "document", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "text/html", contentHashUnavailableReason: "unsupported_canonicalizer", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "<p>x</p>" } }],
+    ["contentHashUnavailableReason where a reproducible path exists (JSON via JCS)",
+      { artifactId: "art-st-jsonreason", kind: "fragment", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "application/json", contentHashUnavailableReason: "unsupported_canonicalizer", payloadRef: { excerpt: "{}" } }],
+    ["unsupported contentHashUnavailableReason value",
+      { artifactId: "art-st-badreason", kind: "document", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "text/html", contentHashUnavailableReason: "no_sha256_available", payloadRef: { excerpt: "<p>x</p>" } }],
+  ];
+  const artifactPositives = [
+    ["valid byte_faithful retained bytes with a hash",
+      { artifactId: "art-st-bf", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: "text/markdown", contentHash: `sha256:${'cd'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["valid structurally_faithful JSON with a hash",
+      { artifactId: "art-st-jsonok", kind: "fragment", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "application/json", contentCanonicalizer: { name: "rfc8785-jcs", version: "1.0.0" }, contentHash: `sha256:${'cd'.repeat(32)}`, payloadRef: { excerpt: "{}" } }],
+    ["valid non-JSON structured content with a declared canonicalizer",
+      { artifactId: "art-st-xmlok", kind: "tool_result", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "application/xml", contentCanonicalizer: { name: "xml-c14n-1.1", version: "1.0.0" }, contentHash: `sha256:${'cd'.repeat(32)}`, payloadRef: { excerpt: "<x/>" } }],
+    ["valid unsupported-canonicalizer unavailability (no contentHash required)",
+      { artifactId: "art-st-unavail", kind: "document", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "text/html", contentHashUnavailableReason: "unsupported_canonicalizer", payloadRef: { excerpt: "<p>x</p>" } }],
+  ];
+  let artRejected = 0;
+  for (const [name, art] of artifactNegatives) {
+    const before = errors.length;
+    checkArtifact(art, "[self-test artifact]");
+    if (errors.length > before) artRejected++;
+    else console.log(`SELF-TEST FAIL: '${name}' was not rejected`);
+  }
+  let artAccepted = 0;
+  for (const [name, art] of artifactPositives) {
+    const before = errors.length;
+    checkArtifact(art, "[self-test artifact]");
+    if (errors.length === before) artAccepted++;
+    else console.log(`SELF-TEST FAIL: '${name}' was rejected: ${errors.slice(before).join("; ")}`);
+  }
+
   errors.length = baseline;
-  console.log(`Self-test: admin-policy ${adminRejected}/${fixtures.length} rejected; envelope status/fidelity ${envRejected}/${envFixtures.length} rejected; positive byte_faithful control ${positiveOK ? "accepted" : "FAILED"}.`);
-  return adminRejected === fixtures.length && envRejected === envFixtures.length && positiveOK;
+  console.log(`Self-test: admin-policy ${adminRejected}/${fixtures.length} rejected; envelope status/fidelity ${envRejected}/${envFixtures.length} rejected; artifact hash-selection ${artRejected}/${artifactNegatives.length} rejected, ${artAccepted}/${artifactPositives.length} positive controls accepted; positive byte_faithful control ${positiveOK ? "accepted" : "FAILED"}.`);
+  return adminRejected === fixtures.length && envRejected === envFixtures.length && artRejected === artifactNegatives.length && artAccepted === artifactPositives.length && positiveOK;
 }
 
 console.log(`\nValidated ${rawBlocks.length} JSON blocks in docs/evidence-model.md (${traces.length} traces) and ${extra} JSON block(s) in capture-profiles/model-versioning docs.\n`);

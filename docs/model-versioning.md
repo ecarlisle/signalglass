@@ -15,7 +15,7 @@ normative contract is [Spec 013 §10](../specs/013-evidence-model.md). The goal:
 | Measurement algorithm | Algorithm name + version | Every measurement (`algorithm`) |
 | Tokenizer registry | Registry id + version | Measurements that count tokens |
 | Pricing table | Table id + version | Cost measurements |
-| Canonicalizer registry | Canonicalizer name + version | Artifacts that hash content (`contentCanonicalizer`; RFC 8785/JCS is the schema-fixed default for JSON, non-JSON formats MUST declare their canonicalizer) |
+| Canonicalizer registry | Canonicalizer name + version | Artifacts that hash content: `contentFidelity` + `contentType` select the path; `contentCanonicalizer` is required for non-JSON structured formats (RFC 8785/JCS is the schema-fixed default for JSON, optionally pinned to a registry version). Structurally faithful retained content with no supported canonicalizer records `contentHashUnavailableReason` instead of a hash |
 | Interpretation labels | Label id + version | Every interpretation |
 | Export shape | Export/projection version | Every export |
 

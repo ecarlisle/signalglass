@@ -465,13 +465,42 @@ A context artifact is a referenceable unit of context:
   content, the retained representation or excerpt; for external content, a
   locator. It contains only payload-reference fields, never `evidenceStatus`
   or `contentHash`;
+- `contentFidelity` — artifact-level fidelity of the **retained**
+  representation: `byte_faithful` or `structurally_faithful` (§3.2).
+  Required whenever retained content exists (`captured`, `redacted`,
+  `truncated`) or a `contentHash`/`contentHashUnavailableReason` is present;
+  forbidden when no retained content exists (`missing`, `unknown`,
+  `not_applicable`). It describes the retained representation, never
+  discarded originals;
+- `contentType` — the media type / format of the retained representation (an
+  IANA media type such as `application/json` or `text/markdown`, or an
+  equivalent registry name). Required whenever retained content exists or a
+  `contentHash`/`contentHashUnavailableReason` is present; it is the
+  artifact-local input that selects the hashing path;
 - `contentHash` — top-level artifact field; a deterministic SHA-256 digest
   (see hash semantics below). It is never nested inside `payloadRef`;
-- `contentCanonicalizer` — optional canonicalizer identifier
-  (`{ name, version }`) recorded when a non-default canonicalizer is used or
-  the default RFC 8785 (JCS) canonicalizer is pinned to a registry version
-  (see hash semantics below);
+- `contentCanonicalizer` — canonicalizer identifier (`{ name, version }`):
+  required when `structurally_faithful` retained content of a non-JSON
+  format carries `contentHash`; optional when the RFC 8785 (JCS) default for
+  JSON is pinned to a registry version; forbidden when `contentFidelity` is
+  `byte_faithful` (bytes are hashed directly, no canonicalizer applies) and
+  forbidden alongside `contentHashUnavailableReason`;
+- `contentHashUnavailableReason` — closed vocabulary
+  (`unsupported_canonicalizer`): declares that retained content exists but
+  no supported deterministic canonicalizer is available for its format.
+  Required when `structurally_faithful` retained content exists and no
+  canonicalizer applies; forbidden together with `contentHash` (the two
+  states are mutually exclusive), forbidden when `contentFidelity` is
+  `byte_faithful` (raw bytes are always directly hashable), and forbidden
+  when no retained content exists (`missing`, `unknown`, `not_applicable`);
 - `provenance` — source locator: path, URI, retrieval query, range, or hash.
+
+An artifact declaration describes the **retained content**, never discarded
+originals, and works identically for inline payloads and external payload
+references. A standalone artifact (see below) serializes everything needed to
+select its hashing path — `contentFidelity`, `contentType`, and `contentHash`
+or `contentHashUnavailableReason` — without relying on an enclosing event or
+envelope.
 
 **Standalone artifacts are self-describing.** An artifact serialized inside a
 trace may inherit `traceId` and `evidenceSchemaVersion` only when the enclosing
@@ -482,22 +511,20 @@ resolve to a known trace. Validators and readers MUST NOT rely on an unstated
 enclosing context.
 
 **Hash semantics.** `contentHash` is a SHA-256 digest whose input is the
-**retained representation**, hashed as bytes:
+**retained representation**, hashed as bytes. The hashing path is selected
+**from the artifact's own serialized fields** — `contentFidelity`,
+`contentType`, and `contentCanonicalizer` — never from an unstated enclosing
+context:
 
-- **`byte_faithful`** — hash the retained byte sequence directly: the exact
-  bytes observed by the capture surface, without decoding, normalization,
-  canonicalization, or character-set conversion. Raw bytes are hashed as
-  bytes; they are never treated as UTF-8 text.
-- **`structurally_faithful` JSON** — canonicalize the retained logical value
-  with RFC 8785 (JCS) (the schema-fixed default), encode the canonicalized
-  value as UTF-8, and hash those bytes.
-- **Other structured formats** — canonicalize with the declared versioned
-  canonicalizer (`contentCanonicalizer: { name, version }`), encoded as that
-  canonicalizer's specified output encoding.
-- **No supported canonicalizer** — if no deterministic canonicalizer exists
-  for the content's format, `contentHash` MUST NOT be emitted:
-  reproducibility cannot be claimed without declaring every input needed to
-  reproduce the bytes.
+| Retained representation | Hashing path | `contentHash` |
+|---|---|---|
+| `byte_faithful` bytes | Hash the retained byte sequence directly: the exact bytes observed by the capture surface, without decoding, normalization, canonicalization, or character-set conversion. Raw bytes are hashed as bytes; never treated as UTF-8 text. | **Required** (when `captured`) / MAY (when `redacted`/`truncated`, hashing only the retained representation) |
+| `structurally_faithful` JSON | Canonicalize the retained logical value with RFC 8785 (JCS) (the schema-fixed default), encode the canonicalized value as UTF-8, and hash those bytes. | **Required** (when `captured`) / MAY (when `redacted`/`truncated`) |
+| `structurally_faithful` other structured format with a supported canonicalizer | Canonicalize with the declared `contentCanonicalizer: { name, version }`, encoded as that canonicalizer's specified output encoding. | **Required** (when `captured`) / MAY (when `redacted`/`truncated`) |
+| `structurally_faithful` structured content with **no** supported deterministic canonicalizer | No canonical form exists; reproducibility cannot be claimed without declaring every input needed to reproduce the bytes. | **Forbidden.** Declare `contentHashUnavailableReason: "unsupported_canonicalizer"` instead. |
+| `missing` / `unknown` / `not_applicable` | No retained content exists to hash. | **Forbidden.** `contentFidelity` and `contentHashUnavailableReason` are forbidden too; claiming otherwise would imply content existed. |
+| `redacted` / `truncated` | MAY hash only the retained representation (what remains after removal/masking, or the retained prefix) per the selected path above. | MAY (see rows above); never implies access to discarded content. |
+
 - **Hash input** — only retained payload content is hashed; metadata and
   envelope fields are excluded unless they are explicitly part of the
   retained payload.
@@ -510,8 +537,9 @@ enclosing context.
   implies possession, verification, or reconstruction of discarded original
   content. Presence rules by `evidenceStatus`:
 
-- `captured` — hash of the retained representation; required for inline
-  content.
+- `captured` — hash of the retained representation; required when a
+  deterministic hashing path exists (the first three rows above), never when
+  `contentHashUnavailableReason` is declared.
 - `truncated` — MAY be present, hashing only the retained prefix or retained
   truncated representation, as explicitly declared (the truncation boundary
   declares the extent).
