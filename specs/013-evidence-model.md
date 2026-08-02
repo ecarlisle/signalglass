@@ -473,11 +473,14 @@ A context artifact is a referenceable unit of context:
   `not_applicable`). It describes the retained representation, never
   discarded originals;
 - `contentType` — the media type of the retained representation, in RFC 6838
-  type/subtype syntax: standard types such as `application/json`,
+  type/subtype **restricted-name** syntax: standard types such as
+  `application/json`,
   `application/xml`, `text/markdown`, and `text/html`; vendor-specific types
   such as `application/vnd.example+json`; and structured-suffix types such as
   `application/example+json`. The same syntax covers text and binary
-  representations; there is no separate content-type registry. Required
+  representations; there is no separate content-type registry. Media-type
+  parameters (for example `;charset=utf-8`) are not part of `contentType`.
+  Required
   whenever retained content exists or a
   `contentHash`/`contentHashUnavailableReason` is present; it is the
   artifact-local input that selects the hashing path;

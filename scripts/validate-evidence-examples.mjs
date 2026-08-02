@@ -82,7 +82,13 @@ const REQUEST_KIND_RE = /_(request|call)$/;
 // closed vocabularies the validator accepts.
 const ARTIFACT_FIDELITIES = new Set(["byte_faithful", "structurally_faithful"]);
 const HASH_UNAVAILABLE_REASONS = new Set(["unsupported_canonicalizer"]);
-const MEDIA_TYPE_RE = /^[^\s/]+\/[^\s/]+$/;
+// RFC 6838 restricted-name syntax for media types: exactly one '/' separating
+// type and subtype; each name starts with an ASCII alphanumeric and continues
+// with restricted-name characters, max 127 characters per name. Parameters
+// (e.g. ;charset=utf-8), whitespace, wildcards, empty components, additional
+// slashes, and non-ASCII characters are rejected — contentType is the media
+// type only.
+const MEDIA_TYPE_RE = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$/;
 
 function isJsonContentType(ct) {
   if (typeof ct !== "string") return false;
@@ -410,7 +416,7 @@ function checkArtifact(b, label) {
   // contentType: usable media-type declaration required when retained content
   // exists or a hash/unavailability claim is made.
   if (b.contentType !== undefined && !MEDIA_TYPE_RE.test(b.contentType)) {
-    errors.push(`${label}: artifact ${b.artifactId} contentType '${b.contentType}' is not a usable media type (expected type/subtype, e.g. application/json) (Spec 013 §6.1)`);
+    errors.push(`${label}: artifact ${b.artifactId} contentType '${b.contentType}' is not a valid RFC 6838 media type (type/subtype restricted-name syntax, e.g. application/json, application/vnd.example+json; no parameters, whitespace, wildcards, or empty components) (Spec 013 §6.1)`);
   }
   if ((retainedExists || b.contentHash !== undefined || b.contentHashUnavailableReason !== undefined) && b.contentType === undefined) {
     errors.push(`${label}: artifact ${b.artifactId} has retained content / hash claim but no contentType — the hashing path cannot be selected (Spec 013 §6.1)`);
@@ -618,6 +624,35 @@ function selfTest() {
     ["valid unsupported-canonicalizer unavailability (no contentHash required)",
       { artifactId: "art-st-unavail", kind: "document", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "text/html", contentHashUnavailableReason: "unsupported_canonicalizer", payloadRef: { excerpt: "<p>x</p>" } }],
   ];
+  // contentType domain fixtures (Spec 013 §6.1, RFC 6838 restricted-name
+  // syntax). Negatives must each be rejected by the media-type check; the
+  // 127-character boundary positives must be accepted.
+  const contentTypeNegatives = [
+    ["invalid starting characters (@/!)",
+      { artifactId: "art-st-ct-at", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: "@/!", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["parameterized media type (application/json;charset=utf-8)",
+      { artifactId: "art-st-ct-param", kind: "fragment", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "application/json;charset=utf-8", contentCanonicalizer: { name: "rfc8785-jcs", version: "1.0.0" }, contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "{}" } }],
+    ["missing subtype (application/)",
+      { artifactId: "art-st-ct-nosub", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: "application/", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["missing type (/json)",
+      { artifactId: "art-st-ct-notype", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: "/json", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["extra slash (application/example/json)",
+      { artifactId: "art-st-ct-slash", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: "application/example/json", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["whitespace (application /json)",
+      { artifactId: "art-st-ct-ws", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: "application /json", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["wildcard (application/*)",
+      { artifactId: "art-st-ct-star", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: "application/*", contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["type exceeding 127 characters",
+      { artifactId: "art-st-ct-longtype", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: `${'a'.repeat(128)}/json`, contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["subtype exceeding 127 characters",
+      { artifactId: "art-st-ct-longsub", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: `application/${'b'.repeat(128)}`, contentHash: `sha256:${'ab'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+  ];
+  const contentTypePositives = [
+    ["127-character type boundary",
+      { artifactId: "art-st-ct-bndtype", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: `${'a'.repeat(127)}/json`, contentHash: `sha256:${'cd'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+    ["127-character subtype boundary",
+      { artifactId: "art-st-ct-bndsub", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: `application/${'b'.repeat(127)}`, contentHash: `sha256:${'cd'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
+  ];
   let artRejected = 0;
   for (const [name, art] of artifactNegatives) {
     const before = errors.length;
@@ -632,10 +667,24 @@ function selfTest() {
     if (errors.length === before) artAccepted++;
     else console.log(`SELF-TEST FAIL: '${name}' was rejected: ${errors.slice(before).join("; ")}`);
   }
+  let ctRejected = 0;
+  for (const [name, art] of contentTypeNegatives) {
+    const before = errors.length;
+    checkArtifact(art, "[self-test artifact]");
+    if (errors.length > before) ctRejected++;
+    else console.log(`SELF-TEST FAIL: '${name}' was not rejected`);
+  }
+  let ctAccepted = 0;
+  for (const [name, art] of contentTypePositives) {
+    const before = errors.length;
+    checkArtifact(art, "[self-test artifact]");
+    if (errors.length === before) ctAccepted++;
+    else console.log(`SELF-TEST FAIL: '${name}' was rejected: ${errors.slice(before).join("; ")}`);
+  }
 
   errors.length = baseline;
-  console.log(`Self-test: admin-policy ${adminRejected}/${fixtures.length} rejected; envelope status/fidelity ${envRejected}/${envFixtures.length} rejected; artifact hash-selection ${artRejected}/${artifactNegatives.length} rejected, ${artAccepted}/${artifactPositives.length} positive controls accepted; positive byte_faithful control ${positiveOK ? "accepted" : "FAILED"}.`);
-  return adminRejected === fixtures.length && envRejected === envFixtures.length && artRejected === artifactNegatives.length && artAccepted === artifactPositives.length && positiveOK;
+  console.log(`Self-test: admin-policy ${adminRejected}/${fixtures.length} rejected; envelope status/fidelity ${envRejected}/${envFixtures.length} rejected; artifact hash-selection ${artRejected}/${artifactNegatives.length} rejected, ${artAccepted}/${artifactPositives.length} positive controls accepted; contentType domain ${ctRejected}/${contentTypeNegatives.length} rejected, ${ctAccepted}/${contentTypePositives.length} boundary positives accepted; positive byte_faithful control ${positiveOK ? "accepted" : "FAILED"}.`);
+  return adminRejected === fixtures.length && envRejected === envFixtures.length && artRejected === artifactNegatives.length && artAccepted === artifactPositives.length && ctRejected === contentTypeNegatives.length && ctAccepted === contentTypePositives.length && positiveOK;
 }
 
 console.log(`\nValidated ${rawBlocks.length} JSON blocks in docs/evidence-model.md (${traces.length} traces) and ${extra} JSON block(s) in capture-profiles/model-versioning docs.\n`);
