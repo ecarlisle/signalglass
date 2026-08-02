@@ -723,18 +723,22 @@ observed lifecycle state and is tightly scoped evidence/administrative state,
 never a quality judgment.
 
 - **Values.** `completed` — the capture surface observed a normal terminal
-  lifecycle event (`interaction_end`/`span_end`) with no observed failure or
-  cancellation claiming the record. It records that the lifecycle was
-  observed to end normally; it is **not** proof of success of the underlying
-  work: absence of an observed error is not evidence of success. `failed` —
-  an `error` event was observed that declares the failure of the trace/span
-  (with its declared actor and observation role, Spec 013 §3.3); the status
-  records the observed failure, never provider-internal failure. `cancelled`
-  — a `cancelled` event was observed for the trace/span (recording who/what
-  requested cancellation, Spec 013 §3.3). `unknown` — the terminal state
-  could not be observed (for example capture ended before the terminal event,
-  or the boundary could not observe completion); `unknown` is an honest
-  representation of unavailability and MUST NOT be defaulted to `completed`.
+  lifecycle event (`interaction_end`/`span_end`) as the record's final
+  applicable event, with no prior event in the record's applicable scope
+  explicitly declaring terminal failure or cancellation of that same record.
+  It records that the lifecycle was observed to end normally; it is **not**
+  proof of success of the underlying work: absence of an observed error is
+  not evidence of success. `failed` — an `error` event was observed that
+  explicitly declares failure of the trace or span (with its declared `actor`
+  and observation role, Spec 013 §3.3) as the record's final applicable
+  event. The status records the observed failure, never provider-internal
+  failure. `cancelled` — a `cancelled` event was observed that explicitly
+  declares cancellation of the trace or span (recording who/what requested
+  cancellation, Spec 013 §3.3) as the record's final applicable event.
+  `unknown` — the terminal state could not be observed (for example capture
+  ended before the terminal event, or the boundary could not observe
+  completion); `unknown` is an honest representation of unavailability and
+  MUST NOT be defaulted to `completed`.
 - **Terminal-state availability contract.** Finish fields are present exactly
   when a terminal state was observed — never fabricated. The internal type
   MUST represent the terminal state as this discriminated union (or an
@@ -774,16 +778,28 @@ type SpanTerminalState =
   at capture and MUST be coherent with the observed lifecycle events (the
   validator checks this).
   - `completed` (trace/span) requires the observed normal terminal event
-    (`interaction_end`/`span_end`) as the record's final observed event;
-    validators MUST NOT accept `completed` without it.
-  - `failed` requires an observed `error` event declaring the failure as the
-    record's final observed event; `cancelled` requires an observed
-    `cancelled` event as the final observed event. Validators MUST NOT
-    fabricate a later normal end event (`interaction_end`/`span_end`) for a
-    `failed` or `cancelled` record, and MUST NOT require one. Mid-lifecycle
-    `error`/`cancelled` events do not by themselves set the status — the
-    record's final observed event does (a tool error followed by
-    `interaction_end` is a `completed` trace).
+    (`interaction_end`/`span_end`) as the record's final applicable event;
+    validators MUST NOT accept `completed` without it. A `completed` status
+    is valid only when no prior event in the record's applicable scope
+    explicitly declared terminal failure or cancellation of that same record.
+  - `failed` requires an observed `error` event explicitly declaring failure
+    of that trace or span (with its declared `actor` and observation role,
+    Spec 013 §3.3) as the record's final applicable event. Such a terminal
+    failure declaration MUST be the final applicable event for that record;
+    a later `interaction_end`/`span_end` for the same record contradicts the
+    earlier terminal declaration and MUST fail validation. A recoverable
+    `error` that does not declare failure of the containing trace or span
+    does not set its lifecycle status. An `error` terminating a child span
+    (tool, MCP, retrieval, etc.) does not automatically fail the containing
+    trace or parent spans.
+  - `cancelled` requires an observed `cancelled` event explicitly declaring
+    cancellation of that trace or span as the record's final applicable
+    event. Such a terminal cancellation declaration MUST be the final
+    applicable event for that record; a later `interaction_end`/`span_end`
+    for the same record contradicts the earlier terminal declaration and MUST
+    fail validation. A `cancelled` event observed at another scope (e.g.,
+    a child span or unrelated trace) does not automatically cancel this
+    record.
   - `unknown` requires no terminal event; validators MUST NOT require
     `interaction_end`/`span_end` when the lifecycle was not observed to
     finish.
@@ -796,15 +812,17 @@ type SpanTerminalState =
     `finishedAt`/`endSeq` not equal to the cited terminal event's
     `capturedAt`/`seq`) is rejected.
   - **Final observed event scope.**
-    - For a trace terminal state, the final observed event is the event with
-      the greatest canonical `seq` in the trace; the required terminal event
-      (`interaction_end` for `completed`, the terminal `error` for `failed`,
-      the terminal `cancelled` for `cancelled`) MUST be that event.
-    - For a span terminal state, the final observed event is the event with
-      the greatest canonical `seq` among events attached to that span
-      (`spanId` match); the required terminal event (`span_end` for
-      `completed`, the terminal `error` for `failed`, the terminal `cancelled`
+    - For a trace terminal state, the final applicable event is the event
+      with the greatest canonical `seq` in the trace; the required terminal
+      event (`interaction_end` for `completed`, the terminal failure-declaring
+      `error` for `failed`, the terminal cancellation-declaring `cancelled`
       for `cancelled`) MUST be that event.
+    - For a span terminal state, the final applicable event is the event
+      with the greatest canonical `seq` among events attached to that span
+      (`spanId` match); the required terminal event (`span_end` for
+      `completed`, the terminal failure-declaring `error` for `failed`, the
+      terminal cancellation-declaring `cancelled` for `cancelled`) MUST be
+      that event.
     - Later events belonging to unrelated spans must not invalidate a failed,
       cancelled, or completed span.
     - An `error` only terminates a span when it explicitly declares failure
@@ -813,6 +831,11 @@ type SpanTerminalState =
       terminate the whole trace.
     - Timestamps never determine which event is final; `seq` is the sole
       authority.
+  - **Preserved example.** A tool-span `error` declaring failure of the tool
+    span, followed by the trace's `interaction_end`, yields a `failed`
+    tool span and a `completed` trace — the child span's terminal declaration
+    does not propagate to the trace. A trace-level `error` declaring failure
+    of the trace, followed by `interaction_end`, is contradictory and invalid.
 - **Completeness.** Unobserved termination is missing lifecycle evidence and
   MUST be reported: the completeness record's boundary statement (or an
   explicit `missing` record) discloses that termination was not observed
@@ -1037,26 +1060,31 @@ Required directions (implemented in `@signalglass/core`'s
 1. **Canonical evidence → legacy `Trace`/`TraceEvent` view** — lets the
    dashboard, storage, and reports keep consuming the v0.x shape from
    canonical evidence.
-2. **Canonical evidence → legacy `AgentRun` / offline-analysis view** — lets
-   the existing offline analyzer and reports run over canonical evidence.
-3. **Legacy `Trace`/`TraceEvent` → canonical evidence** — the **inverse
-   projection required by Spec 013 §11.2**.
+2. **Legacy `Trace`/`TraceEvent` view → legacy `AgentRun` view** — lets the
+   existing offline analyzer and reports run over canonical evidence via the
+   documented legacy chain; this is the `Trace → AgentRun` conversion
+   required by Spec 013 §11.2.
+3. **Canonical evidence → legacy `AgentRun` view** — a convenience projection
+   that MUST be equivalent to composing (1) then (2) for all representable
+   `AgentRun` fields. Implementations MAY provide this as a direct function
+   or as an explicit composition; either way the projection report MUST
+   reflect the composed loss metadata (see §6.5).
 
 The authoritative direction is **canonical evidence**. Projections are
 derived views; they never alter or overwrite authoritative evidence, and
 redacted/missing/unknown evidence is never fabricated into false certainty
 during projection.
 
-Legacy `AgentRun` → canonical evidence (parsing legacy offline run files into
-evidence) is **deferred** — the single open item in §12: Spec 013 §11.2
-requires only the trace inverse; the offline-run direction is not needed for
-the first implementation increment because no collector, adapter, or ingress
-converts to canonical evidence in Spec 014's slices (§8), and legacy offline
-run consumers are served by the evidence → `AgentRun` view. A later
-collector/adapter-ingress specification will decide whether legacy offline run
-files are parsed into evidence or remain legacy inputs. This deferral does
-not weaken the required legacy `Trace` → canonical inverse projection (§6.3,
-§6.6).
+**Legacy `Trace`/`TraceEvent` → canonical evidence is NOT required.**
+Spec 013 §11.2 requires legacy `Trace`/`TraceEvent` to be expressed as a
+compatibility view *projected from* canonical evidence, and the legacy
+`Trace → AgentRun` conversion to be expressed as a documented projection.
+It does not require importing legacy traces into canonical evidence. A
+future migration/import specification may define a legacy-import process,
+but it must address provenance, inferred fields, observation boundaries,
+and whether imported records are canonical evidence or a distinct
+compatibility/import representation. That contract is out of scope for
+Spec 014.
 
 ### 6.2 Projection function contracts
 
@@ -1084,8 +1112,8 @@ type ProjectionResult<T> =
   | { ok: false; report: ProjectionReport; issues: ProjectionIssue[] };
 
 type EvidenceToLegacyTrace = (evidence: EvidenceTrace) => ProjectionResult<LegacyTraceView>;
+type LegacyTraceToAgentRun = (trace: LegacyTrace) => ProjectionResult<AgentRunView>;
 type EvidenceToAgentRun = (evidence: EvidenceTrace) => ProjectionResult<AgentRunView>;
-type LegacyTraceToEvidence = (trace: LegacyTrace) => ProjectionResult<EvidenceTrace>;
 ```
 
 - Projections return an explicit `ProjectionResult` and never throw on
@@ -1095,11 +1123,10 @@ type LegacyTraceToEvidence = (trace: LegacyTrace) => ProjectionResult<EvidenceTr
   `partial`/`inferred`/`unavailable` report entries — loss from otherwise
   valid input always returns a successful view, never a failure), and
   **failure** (`ok: false` with structured `ProjectionIssue[]`) when a valid
-  target record cannot be constructed — for example the inverse projection
-  cannot establish a canonical sequence from an absent, non-array, or
-  otherwise invalid legacy `events` collection (§6.6). A projection never
-  emits an invalid `EvidenceTrace` (or legacy view): every `ok: true` view
-  satisfies its target contract's invariants.
+  target record cannot be constructed — for example the `LegacyTraceToAgentRun`
+  projection cannot process an absent, non-array, or otherwise invalid legacy
+  `events` collection. A projection never emits an invalid view: every
+  `ok: true` view satisfies its target contract's invariants.
 - Callers distinguish **exact**, **partial**, **inferred**, and
   **unavailable** mappings from the report. `partial` means a field was
   mapped with documented loss; `inferred` means the projection derived a
@@ -1107,6 +1134,14 @@ type LegacyTraceToEvidence = (trace: LegacyTrace) => ProjectionResult<EvidenceTr
   converted to an `estimated` measurement placeholder — never presented as
   observed); `unavailable` means the target field cannot be populated and
   the mapping is explicit.
+- The `EvidenceToAgentRun` projection MAY be implemented as a direct function
+  or as an explicit composition of `EvidenceToLegacyTrace` followed by
+  `LegacyTraceToAgentRun`. If composed, the resulting `ProjectionReport`
+  MUST concatenate the mappings from both stages (preserving order and
+  loss metadata) so that the composed report is indistinguishable from a
+  direct projection's report for the same input. Implementations MUST
+  document which approach is used and ensure semantic equivalence for all
+  representable `AgentRun` fields.
 
 ### 6.3 Loss, missing, and unavailable values
 
@@ -1118,30 +1153,26 @@ type LegacyTraceToEvidence = (trace: LegacyTrace) => ProjectionResult<EvidenceTr
   table; kinds with no legacy equivalent are reported `unavailable` and are
   either dropped from the view (with a report entry) or represented as a
   control/metadata event — never mapped to the wrong legacy kind.
+- **Legacy `Trace` → `AgentRun`:** this is the documented legacy conversion
+  required by Spec 013 §11.2. The projection applies the same `ContentPhase`
+  mapping and loss metadata rules; it operates on the legacy `Trace` view,
+  not on canonical evidence directly.
 - **Canonical → `AgentRun`:** token values are only present when a
   measurement exists; until the measurement layer lands, token fields are
   `unavailable`, never invented from text length. Smells/recommendations are
-  interpretations and MUST NOT appear in a projection as evidence.
-- **Inverse (legacy `Trace` → evidence):** legacy events without `seq`
-  receive derived canonical `seq` values by the fixed deterministic rule of
-  §6.6 (legacy array order is primary; contiguous from 0; timestamps never
-  reorder). The projection MUST record the derivation as `inferred` and MUST
-  NOT claim observation-time assignment. Legacy `ContentPhase`
-  values map to `observationRole` per §11.2 with the same boundary discipline
-  (a phase label describes where content was observed, never provider-internal
-  state). Legacy redacted excerpts map to `redacted` artifacts with
-  `contentFidelity`/`contentType` recorded only when the retained
-  representation actually exists; no hash is fabricated when the bytes were
-  not retained.
+  interpretations and MUST NOT appear in a projection as evidence. If
+  implemented as a composition of canonical→legacy Trace then legacy
+  Trace→AgentRun, the report MUST reflect the composed loss metadata (see
+  §6.5).
 - Projections never fabricate evidence and never convert `unknown`/`missing`
   into content.
 
 ### 6.4 Round-trip expectations and known non-equivalences
 
 - No byte-for-byte or full semantic round-trip equivalence is claimed:
-  canonical evidence → legacy view → canonical evidence is NOT identity, and
-  legacy → canonical → legacy is NOT identity. The projections are one-way
-  compatibility views, not invertible bijections.
+  canonical evidence → legacy `Trace` → legacy `AgentRun` is NOT identity,
+  and legacy `Trace` → `AgentRun` is NOT identity. The projections are
+  one-way compatibility views, not invertible bijections.
 - Documented non-equivalences include: `seq` (canonical-only), the full
   canonical event-kind vocabulary (legacy has a smaller, differently named
   set), `evidenceStatus` vs. legacy excerpt semantics, `contentHash` and
@@ -1152,7 +1183,7 @@ type LegacyTraceToEvidence = (trace: LegacyTrace) => ProjectionResult<EvidenceTr
   (the report's `partial`/`unavailable` entries), and callers MUST NOT
   present a projected view as authoritative evidence.
 
-### 6.5 Determinism and versioning
+### 6.5 Determinism, versioning, and report composition
 
 - Projection functions are pure: identical input records and identical
   projection version produce identical views and identical reports. No
@@ -1161,57 +1192,21 @@ type LegacyTraceToEvidence = (trace: LegacyTrace) => ProjectionResult<EvidenceTr
   (`report.projectionVersion`), and the output carries the schema version it
   was produced from (model-versioning: "Projection output carries its own
   projection version and the schema version it was produced from").
+- **Report composition for `EvidenceToAgentRun`:** when `EvidenceToAgentRun`
+  is implemented as a composition of `EvidenceToLegacyTrace` followed by
+  `LegacyTraceToAgentRun`, the composed `ProjectionReport` MUST be
+  constructed by concatenating the `mappings` arrays from both stages in
+  order (canonical→legacy Trace mappings first, then legacy Trace→AgentRun
+  mappings). The composed report's `projectionVersion` records the
+  `EvidenceToAgentRun` projection version; its `sourceSchemaVersion` records
+  the `EvidenceTrace` schema version. A direct `EvidenceToAgentRun`
+  implementation MUST produce a report that is semantically equivalent to
+  this composed report for all representable `AgentRun` fields.
 - Projections create **ephemeral views by default**: they are computed on
   demand and are not stored records. Persisting a projection (for caching,
   export, or redacted export) is a later storage/export concern and MUST
   record provenance linking it to its source records, projection version,
   and policy context — never authoritative evidence.
-
-### 6.6 Inverse-projection sequence derivation
-
-The deterministic rule for deriving canonical `seq` values from legacy
-`TraceEvent` arrays (used by the inverse projection of §6.1, required by Spec
-013 §11.2):
-
-1. **Primary authority: original legacy array order.** A legacy `Trace`
-   serializes `events: TraceEvent[]`; the order in which events appear in
-   that array is the order the legacy contract itself records and is the
-   only ordering authority for the derived sequence.
-2. **Contiguous from 0.** Canonical `seq` values are assigned contiguously
-   starting at `0` (Spec 013 §2.2: the first event has `seq` 0 and each
-   subsequent event is exactly one greater) in array order.
-3. **Timestamps are evidence fields, never an ordering authority.** Legacy
-   `timestamp` values are mapped to canonical `capturedAt` and MUST NOT
-   reorder the source: array order governs even when timestamps are out of
-   order, missing, or duplicated. Missing or duplicate timestamps never
-   change `seq`; they are reported as `partial`/`unavailable` entries for
-   the timestamp field in the projection report.
-4. **Empty arrays are ordered.** An empty legacy `events` array is a valid
-   ordered collection: it requires zero `seq` assignments (contiguity from 0
-   holds vacuously) and yields a canonical trace whose lifecycle is
-   `unknown` per §4.7 — a valid but incomplete trace whose completeness
-   record reports that no lifecycle events were observed.
-5. **Unavailable legacy ordering.** Only an absent, non-array, or otherwise
-   invalid event collection (for example `events: null` or a non-array
-   shape) lacks usable array ordering. The projection then MUST return an
-   explicit failure (`ok: false` with a structured issue, §6.2) and MUST NOT
-   synthesize an order — a guessed order or a fabricated view is never
-   produced.
-6. **Inferred, never observed.** The derived `seq` values are recorded as
-   `inferred` in the projection report; the projection MUST NOT claim the
-   sequence was assigned at observation time.
-7. **Deterministic and versioned.** The rule is pure and deterministic
-   (identical input + identical projection version → identical output,
-   §6.5); the projection version records the rule version, and any change
-   to the rule bumps the projection version.
-
-Why this rule: array order is the only order the legacy contract itself
-records; using timestamps as an ordering authority would reorder events
-relative to the recorded legacy trace and require tie handling; contiguity
-from 0 matches Spec 013's sequence invariant so downstream canonical
-consumers (validators, completeness) treat the derived trace consistently.
-The rule defines behavior for every case — including missing ordering — so no
-implementation decision is left to the projection author.
 
 ## 7. Deterministic ordering and identity decisions
 
@@ -1241,8 +1236,6 @@ For implementers, the decisions of §3–§4 are normative and summarized here:
 10. Trace/span status is a defined vocabulary — `completed` | `failed` |
     `cancelled` | `unknown` — describing observed lifecycle state, never a
     quality judgment (§4.7).
-11. The inverse projection derives canonical `seq` from legacy array order,
-    contiguous from 0, recorded `inferred` (§6.6).
 
 ## 8. Additive implementation sequence
 
@@ -1272,9 +1265,10 @@ projection parity and loss verification — nothing more.
    unknown MAJOR refused).
 3. **Compatibility projections beside legacy types.** Add
    `packages/core/src/evidenceProjections/` (canonical → legacy trace,
-   canonical → `AgentRun` view, legacy trace → canonical) with projection
-   reports and explicit loss metadata; add `@signalglass/core`'s workspace
-   dependency on `@signalglass/evidence`. Legacy modules are untouched.
+   legacy trace → `AgentRun` view, canonical → `AgentRun` view as composition
+   or direct convenience projection) with projection reports and explicit
+   loss metadata; add `@signalglass/core`'s workspace dependency on
+   `@signalglass/evidence`. Legacy modules are untouched.
 4. **Projection parity and loss verification.** Run the existing analyzer
    and report tests against projected views; verify deterministic outputs;
    explicitly document projection loss and backfill mapping cases; confirm
@@ -1343,16 +1337,18 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
 - completeness and unavailable-value handling (missing/unknown/not_applicable
   never carry content, fidelity, or hashes);
 - canonical → legacy `Trace` projection and its report;
-- legacy `Trace` → canonical inverse projection (derived `seq` from legacy
-  array order, contiguous from 0, labeled `inferred`; missing or duplicate
-  timestamps never reorder; absent/invalid array → `unavailable`);
+- legacy `Trace` → `AgentRun` projection and its report (the documented
+  legacy conversion required by Spec 013 §11.2);
 - canonical → `AgentRun` projection (token fields `unavailable` until the
-  measurement layer exists);
+  measurement layer exists); equivalence with composed canonical→legacy Trace
+  then legacy Trace→`AgentRun` verified;
 - projection results: successful exact, successful lossy/partial (report
   entries), and explicit failure (`ok: false`) for absent, non-array, or
   invalid legacy event collections; an empty legacy `events` array succeeds
   with zero `seq` assignments; no projection returns an invalid canonical
   view and none throws on expected invalid or lossy input;
+- projection report composition: composed `EvidenceToAgentRun` report
+  concatenates mappings from both stages with correct ordering;
 - explicitly lossy projections (report entries for `partial`/`unavailable`);
 - projection determinism (same input + version → same view and report);
 - no fabrication of unavailable evidence (projections never invent content or
@@ -1451,33 +1447,16 @@ Narrow and explicit:
 ## 12. Open questions and decision discipline
 
 Decisions necessary for the first slice that the repository can already
-settle are settled in this spec (§1–§8). Four questions previously reported
+settle are settled in this spec (§1–§8). Three questions previously reported
 as open are now **resolved in this Draft** and removed from this section:
 identifier generation (§3.2 — caller-supplied ids; generation is outside the
 evidence core), retained-byte serialization (§5.7 — RFC 4648 §4 Base64,
 padded, canonical), trace/span status vocabulary (§4.7 — `completed` |
-`failed` | `cancelled` | `unknown`), and inverse-projection `seq` derivation
-(§6.6 — legacy array order, contiguous from 0, `inferred`). No implementation
-decision essential to the first slice remains delegated to implementers or
-fixture authors.
+`failed` | `cancelled` | `unknown`). No implementation decision essential
+to the first slice remains delegated to implementers or fixture authors.
 
-One question genuinely remains open, stated precisely with why it cannot be
-settled now and where it will be resolved:
-
-1. **Legacy `AgentRun` → canonical evidence direction.** Spec 013 §11.2
-   requires only the legacy `Trace` → canonical inverse projection; it does
-   not require parsing legacy offline run files into evidence. The direction
-   is not needed for the first implementation increment because no
-   collector, adapter, or ingress converts to canonical evidence in Spec
-   014's slices (§8), and legacy offline run consumers are served by the
-   evidence → `AgentRun` view (§6.1). **Resolved by:** the later
-   collector/adapter-ingress specification, which will decide whether
-   legacy offline run files are parsed into evidence or remain legacy
-   inputs. This deferral does not weaken the required legacy `Trace` →
-   canonical inverse projection (§6.3, §6.6).
-
-This is the only open question. There are no broad "TBD" entries: every other
-decision needed to implement the first slice is specified above.
+There are no broad "TBD" entries and no open questions remaining for the
+first slice; every decision needed to implement it is specified above.
 
 ## 13. Acceptance criteria
 
@@ -1498,16 +1477,17 @@ decision needed to implement the first slice is specified above.
   discriminants are refused with structured errors; unknown additive
   fields are preserved on round trips at equivalent JSON values (never
   claimed as lexical byte preservation); no silent coercion (§5.3–§5.5).
-- [ ] Compatibility projections are specified in both required directions:
-  canonical evidence → legacy `Trace`/`TraceEvent` and → legacy `AgentRun`
-  views, plus the Spec 013-required inverse (legacy `Trace` → canonical
-  evidence) (§6).
+- [ ] Compatibility projections are specified in the required directions:
+  canonical evidence → legacy `Trace`/`TraceEvent` view, legacy
+  `Trace`/`TraceEvent` view → legacy `AgentRun` view, and canonical evidence
+  → legacy `AgentRun` view (as composition or direct convenience projection
+  with equivalent loss metadata) (§6).
 - [ ] Projection loss and unavailable values are explicit through a
   projection report (`exact`/`partial`/`inferred`/`unavailable`),
   projections never fabricate evidence, and projection results distinguish
   successful exact, successful lossy/partial, and explicit failure
   (`ok: false`) outcomes — a projection never returns an invalid canonical
-  view and never throws on expected invalid or lossy input (§6.2, §6.6).
+  view and never throws on expected invalid or lossy input (§6.2).
 - [ ] Deterministic ordering and identity behavior is defined: `seq` is the
   only ordering key; ids are opaque, capture-time, and never
   ordering-significant; ties resolve by `seq`; monotonic durations declare a
@@ -1551,9 +1531,6 @@ decision needed to implement the first slice is specified above.
   matching their terminal event and never fabricate `interaction_end`;
   present `finishedAt`/`endSeq` are supported by observed evidence (§2.2,
   §4.7, §5.4).
-- [ ] The inverse projection's `seq` derivation is deterministic: legacy
-  array order is primary, contiguous from 0, timestamps never reorder, and
-  inferred/lossy status is recorded in the projection report (§6.6).
 - [ ] Completeness is classified per Spec 013 as a derived record;
   `deriveCompleteness` is pure, deterministic, and free of measurement,
   cost, interpretation, or optimization logic (§2.1, §2.2.9).
@@ -1567,8 +1544,8 @@ records, all union variants, version-compatibility acceptance and
 unknown-discriminant/breaking-version refusal, reference integrity, timing,
 deterministic ordering, incomplete-lifecycle representation, serialization
 and retained-byte Base64 canonicality, hash selection, media types,
-completeness, both projection directions, the deterministic inverse `seq`
-rule, projection success/failure results, explicit loss, projection
+completeness, both projection directions, projection report composition,
+projection success/failure results, explicit loss, projection
 determinism, no fabrication, and package-boundary checks).
 
 ## References
