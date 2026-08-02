@@ -158,6 +158,20 @@ for (const { i, b } of traces) {
       errors.push(`${el}: invalid observationRole '${ev.observationRole}' (valid: ${[...OBSERVATION_ROLES].join(", ")})`);
     }
     if (ev.observedAt !== undefined) errors.push(`${el}: 'observedAt' is not a defined observation field; use observationRole + evidenceStatus + captureSurface/observationBoundary (Spec 013 §5.2)`);
+    // Provider-reported claims must be actual provider assertions (Spec 013
+    // §5.2): role provider_reported contradicts an unknown/missing usage state.
+    if (ev.kind === "model_usage" && ev.observationRole === "provider_reported") {
+      const u = ev.usage || {};
+      if (ev.evidenceStatus !== "captured" || u.evidenceStatus === "unknown" || u.reason === "not_reported_by_provider") {
+        errors.push(`${el}: observationRole 'provider_reported' but usage state is ${ev.evidenceStatus}/${u.evidenceStatus ?? "captured"} (${u.reason ?? "values"}) — the provider did not report usage here; use a role that describes what was actually observed (e.g. 'unobservable' or 'returned')`);
+      }
+    }
+    if (ev.kind === "model_usage" && ev.observationRole === "unobservable") {
+      const u = ev.usage || {};
+      if (u.evidenceStatus === "captured" || (u.inputTokens && u.inputTokens.evidenceStatus === "captured")) {
+        errors.push(`${el}: observationRole 'unobservable' but usage declares captured values — unobservable content cannot be captured`);
+      }
+    }
     for (const key of Object.keys(ev)) {
       if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${el}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
     }
@@ -290,15 +304,33 @@ parsed.forEach((b, i) => {
   } else if (b.artifactId !== undefined) {
     if (!STATUSES.has(b.evidenceStatus)) errors.push(`${label}: artifact ${b.artifactId} invalid evidenceStatus ${b.evidenceStatus}`);
     if (!b.payloadRef) errors.push(`${label}: artifact ${b.artifactId} missing payloadRef`);
-    // contentHash (Spec 013 §6.1): top-level only; presence depends on status.
-    if (b.payloadRef && b.payloadRef.contentHash !== undefined) {
-      errors.push(`${label}: artifact ${b.artifactId} has contentHash nested inside payloadRef — it must be a top-level artifact field`);
+    // evidenceStatus / contentHash placement (Spec 013 §6.1): top-level only.
+    if (b.payloadRef) {
+      if (b.payloadRef.evidenceStatus !== undefined) {
+        errors.push(`${label}: artifact ${b.artifactId} has evidenceStatus nested inside payloadRef — it must be a top-level artifact field`);
+      }
+      if (b.payloadRef.contentHash !== undefined) {
+        errors.push(`${label}: artifact ${b.artifactId} has contentHash nested inside payloadRef — it must be a top-level artifact field`);
+      }
     }
     if (b.evidenceStatus === "captured" && b.contentHash === undefined) {
       errors.push(`${label}: artifact ${b.artifactId} is captured with inline content but has no top-level contentHash (required, Spec 013 §6.1)`);
     }
     if (["missing", "unknown", "not_applicable"].includes(b.evidenceStatus) && b.contentHash !== undefined) {
       errors.push(`${label}: artifact ${b.artifactId} has contentHash but evidenceStatus is ${b.evidenceStatus} — SignalGlass cannot hash unavailable content (Spec 013 §6.1)`);
+    }
+    if (b.contentHash !== undefined && !/^sha256:[0-9a-f]{64}$/.test(b.contentHash)) {
+      errors.push(`${label}: artifact ${b.artifactId} contentHash '${b.contentHash}' is not 'sha256:' + 64 lowercase hex characters (Spec 013 §6.1)`);
+    }
+    // Standalone artifacts are self-describing (Spec 013 §6.1): traceId and
+    // evidenceSchemaVersion must be explicit, and traceId must resolve.
+    if (b.traceId === undefined) {
+      errors.push(`${label}: standalone artifact ${b.artifactId} is missing traceId (must serialize it explicitly — validators must not rely on enclosing context)`);
+    } else if (!index.traces.has(b.traceId)) {
+      errors.push(`${label}: standalone artifact ${b.artifactId} references unknown traceId ${b.traceId}`);
+    }
+    if (b.evidenceSchemaVersion === undefined) {
+      errors.push(`${label}: standalone artifact ${b.artifactId} is missing evidenceSchemaVersion (must serialize it explicitly)`);
     }
     if (b.observedAt !== undefined) errors.push(`${label}: artifact ${b.artifactId} uses 'observedAt', which is not a defined observation field`);
     for (const key of Object.keys(b)) {

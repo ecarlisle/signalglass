@@ -66,7 +66,7 @@ Every payload carries exactly one `evidenceStatus`:
 | Status | Meaning |
 |---|---|
 | `captured` | Content present at its declared fidelity (`structurally_faithful` or `byte_faithful`). |
-| `redacted` | Content existed; removed/masked per a recorded policy. Original hash may remain. |
+| `redacted` | Content existed; removed/masked per a recorded policy. A hash may remain only over the retained redacted representation; it never implies possession of the original. |
 | `truncated` | Content existed; only a declared prefix/excerpt stored. |
 | `missing` | Capture failed or didn't happen; no claim about content. |
 | `unknown` | Cannot determine whether the content existed (e.g., provider internals). |
@@ -99,12 +99,18 @@ proves what the client sent, not what the provider did internally.
 - A **context artifact** is a referenceable unit of content: `artifactId`,
   `kind` (message, file, document, fragment, tool result, MCP response,
   retrieval result, context-provider result, repository content, manual),
-  `payloadRef`, a top-level `contentHash` (never nested inside `payloadRef`),
-  and `provenance` (source path/URI/query/range). Hash presence depends on
-  evidence status: required for `captured` inline content, hashing only the
-  captured prefix when `truncated`, permitted for non-sensitive content when
+  `payloadRef` (payload-reference fields only — never `evidenceStatus` or
+  `contentHash`), a top-level `evidenceStatus`, a top-level `contentHash`
+  (never nested inside `payloadRef`), and `provenance` (source
+  path/URI/query/range). Hash presence depends on evidence status: required
+  for `captured` inline content, hashing only the retained prefix when
+  `truncated`, permitted over the retained redacted representation when
   `redacted`, and forbidden for `missing`/`unknown`/`not_applicable` (§6.1 of
-  Spec 013).
+  Spec 013). `contentHash` always hashes the retained representation and never
+  implies possession of discarded original content. A **standalone artifact**
+  (not provably enclosed by its trace) MUST serialize `traceId` and
+  `evidenceSchemaVersion` explicitly, and its `traceId` MUST resolve to a
+  known trace.
 - A **context contribution** records that an artifact entered a model request:
   artifact reference, deterministic locator (`whole` | `range` | `fragment` |
   `hash`), position in the assembled context, and provenance state
@@ -317,7 +323,9 @@ The artifact contributed into the request (`contextContributions` on
   "artifactId": "art-2-0001",
   "kind": "file",
   "evidenceStatus": "captured",
-  "contentHash": "sha256:2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+  "evidenceSchemaVersion": "1.0.0",
+  "contentHash": "sha256:2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e",
   "payloadRef": {
     "excerpt": "project-instruction: fix the failing TypeScript build"
   },
@@ -671,7 +679,9 @@ The retrieved fragment is a context artifact with provenance:
   "artifactId": "art-6-0001",
   "kind": "fragment",
   "evidenceStatus": "captured",
-  "contentHash": "sha256:9f2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6",
+  "evidenceSchemaVersion": "1.0.0",
+  "contentHash": "sha256:9f2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
   "payloadRef": {
     "excerpt": "Keep the context window small..."
   },
@@ -854,8 +864,12 @@ path to the caller). The retry references the **original request event**
 ### 9. Mixed evidence statuses with an explicit `missing` record
 
 One payload is redacted (secrets policy), one is explicitly missing (capture
-failure at the observation boundary), and one is unknown (provider internals).
-The completeness record reflects all three without inventing anything:
+failure at the observation boundary), and one is unknown (provider internals:
+usage was not reported by the provider, so the usage event is recorded with
+`evidenceStatus: "unknown"` and `observationRole: "unobservable"` — the
+capture surface could not observe provider-internal usage, and it would be
+wrong to claim the provider reported it). The completeness record reflects all
+three without inventing anything:
 
 ```json
 {
@@ -907,7 +921,7 @@ The completeness record reflects all three without inventing anything:
       "kind": "model_usage",
       "capturedAt": "2025-06-02T09:30:12.600Z",
       "evidenceStatus": "unknown",
-      "observationRole": "provider_reported",
+      "observationRole": "unobservable",
       "usage": {
         "evidenceStatus": "unknown",
         "reason": "not_reported_by_provider",

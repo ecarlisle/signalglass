@@ -321,7 +321,7 @@ Every evidence payload (event content, envelope, artifact payload) carries an
 | Status | Meaning |
 |---|---|
 | `captured` | Content is present at its declared fidelity (§3.2: `structurally_faithful` or `byte_faithful`). |
-| `redacted` | Content existed; it was removed or masked per a recorded policy. A hash of the original content MAY be retained only where the content is not sensitive and policy permits (§6.1 hash semantics); hashes of secrets MUST NOT be retained. |
+| `redacted` | Content existed; it was removed or masked per a recorded policy. A hash MAY be present only over the retained redacted representation when policy permits (§6.1 hash semantics); it never implies possession of the original content. Hashes of secrets MUST NOT be retained. |
 | `truncated` | Content existed; only a declared prefix or excerpt is stored. The truncation boundary MUST be recorded. |
 | `missing` | Capture failed or did not occur; no claim is made about the content. |
 | `unknown` | It cannot be determined whether the content existed (for example, provider internals). |
@@ -410,28 +410,45 @@ A context artifact is a referenceable unit of context:
 - `kind` — `message`, `file`, `document`, `fragment`, `tool_result`,
   `mcp_response`, `retrieval_result`, `context_provider_result`,
   `repository_content`, or `manual`;
-- `payloadRef` — reference to the content (inline or external), with
-  `evidenceStatus`;
+- `evidenceStatus` — top-level artifact field: the state of the artifact's
+  payload (`captured`, `redacted`, `truncated`, `missing`, `unknown`, or
+  `not_applicable`; see §4.1). It is never nested inside `payloadRef`;
+- `payloadRef` — reference to the content (inline or external): for inline
+  content, the retained representation or excerpt; for external content, a
+  locator. It contains only payload-reference fields, never `evidenceStatus`
+  or `contentHash`;
 - `contentHash` — top-level artifact field; a deterministic SHA-256 digest
   (see hash semantics below). It is never nested inside `payloadRef`;
 - `provenance` — source locator: path, URI, retrieval query, range, or hash.
+
+**Standalone artifacts are self-describing.** An artifact serialized inside a
+trace may inherit `traceId` and `evidenceSchemaVersion` only when the enclosing
+representation makes that inheritance unambiguous. A standalone artifact — any
+artifact record that is not provably enclosed by its trace — MUST serialize
+both `traceId` and `evidenceSchemaVersion` explicitly, and its `traceId` MUST
+resolve to a known trace. Validators and readers MUST NOT rely on an unstated
+enclosing context.
 
 **Hash semantics.** `contentHash` is a SHA-256 digest over the UTF-8 encoding
 of the content representation that was actually retained at the declared
 fidelity: for `structurally_faithful`, the canonical serialization of the
 parsed structure; for `byte_faithful`, the raw bytes or text (`nativeEncoding`
-and `nativeContentType` describe that representation). The algorithm and
-encoding are fixed by the schema version. Presence rules by `evidenceStatus`:
+and `nativeContentType` describe that representation). `contentHash` always
+hashes the **retained representation**; it never implies possession,
+verification, or reconstruction of discarded original content. The algorithm
+and encoding are fixed by the schema version. Presence rules by
+`evidenceStatus`:
 
 - `captured` — hash of the retained representation; required for inline
   content.
-- `truncated` — MAY be present, hashing only the captured prefix (the
-  truncation boundary already declares the extent).
-- `redacted` — a hash of the original observed content MAY be retained only
-  where the content is not sensitive and policy permits. **Hashes are not a
-  privacy mechanism:** a digest of low-entropy or secret content
-  (authorization headers, tokens, API keys) is brute-forceable and MUST NOT be
-  retained; the original-hash convention MUST NOT be applied to secrets.
+- `truncated` — MAY be present, hashing only the retained prefix or retained
+  truncated representation, as explicitly declared (the truncation boundary
+  declares the extent).
+- `redacted` — MAY be present when policy permits, hashing only the retained
+  redacted representation (what remains after removal/masking); it never
+  implies possession of the discarded original. **Hashes are not a privacy
+  mechanism:** a digest of low-entropy or secret content (authorization
+  headers, tokens, API keys) is brute-forceable and MUST NOT be retained.
 - `missing`, `unknown`, `not_applicable` — MUST NOT carry a content hash:
   SignalGlass cannot hash unavailable content, and claiming otherwise would
   imply content existed.
@@ -619,8 +636,15 @@ This spec requires:
   projection; it MUST NOT silently misread.
 - **Projections and migrations never rewrite authoritative evidence.**
   Projections are derived views of evidence; migration changes storage layout
-  or indices, not the meaning of the records. Evidence is only rewritten when
-  the schema version changes and a recorded migration is applied to it.
+  or indices, not the meaning of the records. Evidence is append-only:
+  authoritative source records are not mutated in place. A schema migration
+  produces a new version or a compatible projection and MAY store it, with
+  provenance linking the new representation to its source records, the
+  migration procedure, and the schema versions involved; the original remains
+  preserved where retention policy permits. Deletion and retention
+  requirements remain authoritative and MAY limit preservation. A reader that
+  cannot safely interpret a breaking version MUST refuse it or use an explicit
+  compatibility projection (§10).
 - Evidence MUST remain interpretable without the current application version:
   records are self-describing and MUST NOT require the exporting application's
   code to decode them.

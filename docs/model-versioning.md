@@ -36,8 +36,14 @@ normative contract is [Spec 013 §10](../specs/013-evidence-model.md). The goal:
   MUST NOT silently misread.
 - **Projections and migrations never rewrite authoritative evidence.**
   Projections are derived views; migration changes storage layout or indices,
-  not the meaning of the records. Evidence is only rewritten when the schema
-  version changes and a recorded migration is applied to it.
+  not the meaning of the records. Evidence is append-only: authoritative
+  source records are not mutated in place. A schema migration produces a new
+  version or a compatible projection and MAY store it, with provenance linking
+  the new representation to its source records, the migration procedure, and
+  the schema versions involved; the original remains preserved where retention
+  policy permits. Deletion and retention requirements remain authoritative and
+  MAY limit preservation. A reader that cannot safely interpret a breaking
+  version MUST refuse it or use an explicit compatibility projection.
 - Readers MUST NOT fail on unknown fields (forward tolerance); unknown fields
   are preserved, not dropped, when evidence is re-serialized.
 - Records MUST be self-describing: the schema version is on the record, so
