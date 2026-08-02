@@ -11,9 +11,10 @@ SignalGlass follows SemVer and is currently pre-1.0. Minor versions represent mi
 Ratify the architectural foundation (done in the realignment docs PR); write
 and accept the evidence-model specification (done — [Spec 013](../specs/013-evidence-model.md)
 is accepted): interactions, spans, events, capture profiles, and versioning.
-The next implementation spec, `spec/014-evidence-primitives`, will define the
-additive TypeScript evidence primitives and compatibility projections before
-any storage or capture migration.
+[Spec 014 — Evidence primitives](../specs/014-evidence-primitives.md)
+(Draft) defines the additive TypeScript evidence primitives and
+compatibility projections before any storage or capture migration;
+implementation begins only after Spec 014 is accepted.
 
 - Interaction/span/event model with span parentage (`parentSpanId`) and events attached to spans (`spanId`).
 - Evidence records carry an evidence-schema version; derived measurement records carry an algorithm/derivation version plus references to their inputs.

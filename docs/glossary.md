@@ -67,6 +67,9 @@ A rule-of-thumb detection that is useful but not certain. SignalGlass labels heu
 ## Evidence
 An observed, recorded fact about an AI interaction (a payload, event, or envelope), with an explicit evidence status and observation boundary. Evidence is the unit of truth for the target architecture; see [Spec 013](../specs/013-evidence-model.md).
 
+## Evidence primitive
+A canonical TypeScript representation of a Spec 013 evidence record (trace envelope, span, event, request/response envelope, context artifact, context contribution, completeness record, or their vocabulary types), as defined by [Spec 014 — Evidence primitives](../specs/014-evidence-primitives.md) (Draft). Evidence primitives are added beside the existing v0.x runtime models, are provider-neutral, and carry runtime validation and JSON-safe serialization; they are not measurements or interpretations.
+
 ## Interaction
 The enclosing logical AI exchange or task execution being observed (one agent step, one user turn). The domain entity whose evidence is recorded; each interaction is serialized as exactly one trace.
 
