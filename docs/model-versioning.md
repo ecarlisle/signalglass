@@ -8,8 +8,10 @@ normative contract is [Spec 013 §10](../specs/013-evidence-model.md). The goal:
 
 | Artifact | Versioned by | Recorded where |
 |---|---|---|
-| Evidence record schema | `evidenceSchemaVersion` (semantic) | Every trace and record |
-| Capture profile | Profile name + version | Every trace (`captureProfile`) |
+| Evidence record schema | `evidenceSchemaVersion` (semantic) | Every evidence record — directly, or inherited through its trace reference (child records that reference a trace inherit its schema version; standalone records without a trace reference carry their own) |
+| Collection (capture) policy | Profile name + version | Trace capture context (`captureProfile`); records inherit unless overridden |
+| Persistence policy | Policy version | Stored-record / storage-manifest metadata, never canonical raw evidence |
+| Export policy | Policy version | Export package / export manifest, never canonical raw evidence |
 | Measurement algorithm | Algorithm name + version | Every measurement (`algorithm`) |
 | Tokenizer registry | Registry id + version | Measurements that count tokens |
 | Pricing table | Table id + version | Cost measurements |
@@ -21,9 +23,21 @@ normative contract is [Spec 013 §10](../specs/013-evidence-model.md). The goal:
 - **Additive by default.** Adding fields with defined defaults MUST NOT break
   readers of older records. Older fields MUST NOT change meaning in the same
   schema version.
+- **Compatibility runs both directions.** Older readers MUST tolerate unknown
+  additive fields in newer records without failing. Newer readers MUST apply
+  the defined default for fields absent from older records.
+- **Round-trip preservation.** Unknown fields MUST be preserved on
+  read-modify-write round trips: "ignore unknown fields" never permits
+  discarding them when evidence is re-serialized.
 - **Breaking changes** — removing a field, changing its semantics, or changing
   `evidenceStatus` semantics — require a new `evidenceSchemaVersion` and a
-  documented projection from the old version to the new.
+  documented projection from the old version to the new. A reader that cannot
+  safely interpret a breaking version MUST refuse or require a projection; it
+  MUST NOT silently misread.
+- **Projections and migrations never rewrite authoritative evidence.**
+  Projections are derived views; migration changes storage layout or indices,
+  not the meaning of the records. Evidence is only rewritten when the schema
+  version changes and a recorded migration is applied to it.
 - Readers MUST NOT fail on unknown fields (forward tolerance); unknown fields
   are preserved, not dropped, when evidence is re-serialized.
 - Records MUST be self-describing: the schema version is on the record, so
@@ -31,9 +45,13 @@ normative contract is [Spec 013 §10](../specs/013-evidence-model.md). The goal:
 
 ## Measurement determinism
 
-- The same measurement over the same evidence, algorithm version, and
-  configuration MUST produce the same value. Changing any input changes the
-  result — and the versions of all three MUST be recorded.
+- A measurement is a **deterministic function of its declared evidence inputs,
+  algorithm version, configuration, and applicable registries or tables**
+  (tokenizer registry, pricing table, thresholds). The same inputs, algorithm
+  version, and configuration MUST produce the same value.
+- Different inputs MAY produce the same value (collisions are not a defect).
+  Changed inputs MUST be recorded with the result so it stays reproducible;
+  determinism never requires that a changed input produce a changed result.
 - Token counts reference the tokenizer registry version used. Comparing counts
   across tokenizer versions is only valid when the versions are recorded and
   accounted for.

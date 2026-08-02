@@ -1,10 +1,14 @@
 # Capture profiles and policy separation
 
 Collection, persistence, and export are **three independent policies**. A
-capture profile is a named, versioned bundle of one setting from each policy,
-recorded at every capture point so evidence stays interpretable in the policy
-context it was captured under. The normative contract is
-[Spec 013 §9](../specs/013-evidence-model.md).
+capture profile is a named, versioned **bundle of policy references and
+configuration settings**: it selects collection rules, persistence rules, and
+export defaults or permitted export profiles, and may carry redaction
+configuration, retention configuration, and environment-appropriate overrides.
+It is a convenience bundling — it MUST NOT collapse the three policies into
+one — and it is recorded at every capture point so evidence stays
+interpretable in the policy context it was captured under. The normative
+contract is [Spec 013 §9](../specs/013-evidence-model.md).
 
 Why separate the three policies? Because they answer different questions:
 
@@ -54,14 +58,24 @@ Rules:
 - Administrative deletion MUST produce a deletion record (tombstone) with a
   reason and scope, so completeness remains honest. Deleting evidence silently
   erases the ability to explain what happened.
+- A deletion record is an **administrative record**, not evidence: it documents
+  what was deleted, when, and under which policy; it does not reconstruct
+  deleted evidence or restore trace completeness.
+- The tombstone MUST NOT live only inside the deleted trace, which may itself
+  be purged. Where policy and law permit, it is retained separately, outside
+  the deleted trace, as a non-sensitive administrative record containing no
+  deleted content, no sensitive payload data, no recoverable content hashes
+  that would create disclosure risk, and no identifiers the applicable
+  deletion requirement prohibits retaining.
 - A tombstone MUST NOT retain the deleted content or any sensitive payload
   data.
 - Where legal or privacy requirements demand deletion without retaining
   identifying metadata, the tombstone itself MUST be deleted; the persistence
-  policy MUST acknowledge that the record is then permanently unrecoverable and
-  completeness cannot be fully reconstructed.
+  policy MUST state explicitly that no audit evidence and no later completeness
+  reconstruction survives.
 - Purging by policy MUST be recorded in the affected traces' completeness
-  records.
+  records where those traces survive; where the trace is purged entirely, the
+  administrative deletion record carries the statement of the purge.
 
 ## Export policy
 
@@ -85,9 +99,23 @@ Rules:
 - Profiles are versioned (`name` + semantic version). A profile definition is
   immutable once used: changing a setting creates a new profile version so old
   traces remain interpretable in the context they were captured under.
-- Every trace records `captureProfile: { name, version }`.
+- **Where policy versions are recorded** (Spec 013 §9.2):
+  - The **collection** profile in effect is recorded on the trace
+    (`captureProfile: { name, version }`) and inherited by its records unless
+    a record-level override is declared.
+  - The **persistence** policy version is recorded on stored-record or
+    storage-manifest metadata written by the storage layer at storage time —
+    never on canonical raw evidence.
+  - The **export** policy version is recorded on the export package or export
+    manifest — never on canonical raw evidence records; the trace is not an
+    export projection.
 - Profile definitions SHOULD be stored alongside evidence (or in a versioned
   registry) so a trace can be re-read without the current application build.
+- **Evidence vs administrative metadata:** collection context (what was
+  observed, under which profile, by which surface) is evidence metadata;
+  persistence/export versions, storage timestamps, and deletion records are
+  administrative metadata about operations on evidence and are recorded beside
+  the evidence, never merged into payload status.
 
 ## Example profile
 

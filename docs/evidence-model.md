@@ -96,10 +96,15 @@ proves what the client sent, not what the provider did internally.
 
 ## Context provenance
 
-- A **context artifact** is a referenceable unit of context: `artifactId`,
+- A **context artifact** is a referenceable unit of content: `artifactId`,
   `kind` (message, file, document, fragment, tool result, MCP response,
   retrieval result, context-provider result, repository content, manual),
-  `payloadRef`, `contentHash`, and `provenance` (source path/URI/query/range).
+  `payloadRef`, a top-level `contentHash` (never nested inside `payloadRef`),
+  and `provenance` (source path/URI/query/range). Hash presence depends on
+  evidence status: required for `captured` inline content, hashing only the
+  captured prefix when `truncated`, permitted for non-sensitive content when
+  `redacted`, and forbidden for `missing`/`unknown`/`not_applicable` (§6.1 of
+  Spec 013).
 - A **context contribution** records that an artifact entered a model request:
   artifact reference, deterministic locator (`whole` | `range` | `fragment` |
   `hash`), position in the assembled context, and provenance state
@@ -312,9 +317,9 @@ The artifact contributed into the request (`contextContributions` on
   "artifactId": "art-2-0001",
   "kind": "file",
   "evidenceStatus": "captured",
+  "contentHash": "sha256:2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a",
   "payloadRef": {
-    "excerpt": "project-instruction: fix the failing TypeScript build",
-    "contentHash": "sha256:2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a"
+    "excerpt": "project-instruction: fix the failing TypeScript build"
   },
   "provenance": { "source": "repository", "path": ".signalglass/project-instruction.md" }
 }
@@ -666,9 +671,9 @@ The retrieved fragment is a context artifact with provenance:
   "artifactId": "art-6-0001",
   "kind": "fragment",
   "evidenceStatus": "captured",
+  "contentHash": "sha256:9f2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f",
   "payloadRef": {
-    "excerpt": "Keep the context window small...",
-    "contentHash": "sha256:9f2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f"
+    "excerpt": "Keep the context window small..."
   },
   "provenance": {
     "source": "retrieval",
@@ -745,9 +750,11 @@ per the collection policy, with the truncation boundary recorded:
 
 ### 8. Errors, cancellation, and retries
 
-An error is scoped to the boundary where it was observed. The retry references
-the **original request event** (`originalRequestEventId`); the associated error
-is referenced separately (`errorEventId`):
+An error is scoped to the role under which it was observed; the error event
+carries a top-level `observationRole` (the failure was observed on the return
+path to the caller). The retry references the **original request event**
+(`originalRequestEventId`); the associated error is referenced separately
+(`errorEventId`):
 
 ```json
 {
@@ -755,8 +762,8 @@ is referenced separately (`errorEventId`):
   "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
   "evidenceSchemaVersion": "1.0.0",
   "captureProfile": { "name": "dev-basic", "version": "1.2.0" },
-  "captureSurface": "ingress_proxy",
-  "observationBoundary": "client_sent",
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
   "startedAt": "2025-06-01T14:00:00.123Z",
   "finishedAt": "2025-06-01T14:00:05.600Z",
   "status": "completed",
@@ -785,7 +792,7 @@ is referenced separately (`errorEventId`):
       "kind": "model_request",
       "capturedAt": "2025-06-01T14:00:00.200Z",
       "evidenceStatus": "captured",
-      "observationRole": "client_sent",
+      "observationRole": "application_constructed",
       "requestEnvelope": {
         "model": "claude-sonnet-4",
         "provider": "anthropic",
@@ -802,11 +809,11 @@ is referenced separately (`errorEventId`):
       "kind": "error",
       "capturedAt": "2025-06-01T14:00:04.500Z",
       "evidenceStatus": "captured",
+      "observationRole": "returned",
       "actor": "model",
       "error": {
         "type": "timeout",
-        "message": "Upstream request timed out after 30000ms (observed at the ingress proxy).",
-        "observedAt": "ingress_proxy"
+        "message": "No upstream response was received within 30000ms; the failure was observed at the client boundary when the response did not arrive."
       }
     },
     {
@@ -817,6 +824,7 @@ is referenced separately (`errorEventId`):
       "kind": "retry",
       "capturedAt": "2025-06-01T14:00:05.100Z",
       "evidenceStatus": "captured",
+      "observationRole": "application_constructed",
       "retry": {
         "originalRequestEventId": "evt-8-0003",
         "errorEventId": "evt-8-0004",
@@ -832,9 +840,9 @@ is referenced separately (`errorEventId`):
       "kind": "cancelled",
       "capturedAt": "2025-06-01T14:00:05.400Z",
       "evidenceStatus": "captured",
+      "observationRole": "application_constructed",
       "cancellation": {
-        "requestedBy": "user",
-        "observedAt": "client_side"
+        "requestedBy": "user"
       }
     },
     { "eventId": "evt-8-0007", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": "span-8-0001", "seq": 6, "kind": "span_end", "capturedAt": "2025-06-01T14:00:05.500Z", "evidenceStatus": "captured" },
@@ -873,8 +881,7 @@ The completeness record reflects all three without inventing anything:
       "observationRole": "client_sent",
       "redaction": {
         "policy": "secrets-v1",
-        "reasons": ["authorization-header"],
-        "originalHash": "sha256:ab12cd34ef56ab12cd34ef56ab12cd34"
+        "reasons": ["authorization-header"]
       }
     },
     {
@@ -990,9 +997,10 @@ confidence is explicitly a judgment:
   "labelVersion": "1.0.0",
   "inputs": [
     { "measurementId": "msr-2-0001" },
-    { "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2" }
+    { "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2", "eventId": "evt-2-0003" },
+    { "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2", "artifactId": "art-2-0001" }
   ],
-  "claim": "The project-instruction artifact was contributed into the model request context in this interaction; the cited measurement and trace support this judgment.",
+  "claim": "The project-instruction artifact (art-2-0001) was contributed into the model request context (evt-2-0003) in this interaction; the cited event, artifact, measurement, and trace support this judgment.",
   "confidence": "medium"
 }
 ```

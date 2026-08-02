@@ -2,7 +2,10 @@
 
 ## Status
 
-Draft — current authority for the target architecture.
+Draft — current authority for the target architecture. While Draft, this spec
+is the target-architecture contract for design and implementation planning; it
+does not override the accepted Architectural Foundation or ADR 0004, which
+remain authoritative on any conflict until this spec is accepted.
 
 ## Purpose
 
@@ -162,14 +165,22 @@ at observation time. `seq` is the **only** deterministic ordering key. All other
 ordering constructs (timestamps, hierarchy) are derived views over `seq`.
 
 - Two events MUST NOT share a `seq` within one trace.
-- `seq` values MUST be contiguous: the first event has `seq` 0, and every
-  subsequent event's `seq` is exactly one greater than its predecessor's.
+- `seq` values MUST be contiguous **as assigned at the sequencing surface**:
+  the first event has `seq` 0, and every subsequent event's `seq` is exactly
+  one greater than its predecessor's at the point of assignment. A retained
+  trace that lost an event therefore shows a gap and MUST be marked incomplete
+  (§2.4, §4.3); the contiguity invariant is never satisfied by silently
+  renumbering retained events.
 - `seq` is assigned by the trace's **authoritative sequencing surface** — the
   capture component that observes the event — at the point of observation,
   before the event is persisted or forwarded. Persistence and replay never
   assign `seq`.
 - Spans reference their start/end `seq` range (`startSeq`, `endSeq`).
 - Total order is `seq`; partial order is the `parentSpanId` hierarchy.
+  Hierarchy is independent structural metadata: parentage is never derived
+  from `seq` ranges, and `seq` ranges only describe when span boundaries were
+  observed (§2.4: seq gaps may remove events from a range without changing
+  parentage).
 - Concurrency: two spans are concurrent when their `seq` ranges overlap and
   neither is an ancestor of the other.
 
@@ -221,9 +232,11 @@ survives replay.
 
 - **Duplicates:** the same `eventId` appearing twice in one trace is a
   duplicate. Persistence MUST detect it and record a single event plus a
-  completeness note (`duplicateDetected`), never two distinct events.
-  Collapsing a duplicate does not create a sequence gap; the retained
-  sequence stays contiguous.
+  completeness note (`duplicateDetected`), never two distinct events. The
+  first observed copy wins (the one assigned the lowest `seq`); a conflicting
+  later copy MUST be reported in the completeness record, never silently
+  merged or resolved. Collapsing a duplicate does not create a sequence gap;
+  the retained sequence stays contiguous.
 - **Dropped events:** a `seq` gap (§2.2) proves that an assigned sequence
   position is absent from the retained evidence: at least one event that
   reached the sequencing surface was dropped before persistence or removed
@@ -286,11 +299,13 @@ evidence complete and falsifiable without overstating what was stored.
 ### 3.3 Errors, cancellation, and retries
 
 - `error` events MUST declare the failing actor (`agent`, `model`, `tool`,
-  `mcp`, `retrieval`, `context_provider`, or `capture`), the observed error, and
-  the observation boundary at which the error was observed. An error claimed at
-  one boundary MUST NOT be attributed to another boundary without evidence.
-- `cancelled` events MUST identify who or what requested cancellation and when
-  the cancellation was observed.
+  `mcp`, `retrieval`, `context_provider`, or `capture`), the observed error,
+  and the observation role under which the error was observed (§5.1). An error
+  claimed at one boundary MUST NOT be attributed to another boundary without
+  evidence; the error payload describes what the declaring surface observed,
+  not provider-internal state.
+- `cancelled` events MUST identify who or what requested cancellation and
+  carry the observation role under which the cancellation was observed.
 - `retry` events MUST reference the original request's `eventId` and record the
   retry policy inputs observed (attempt count, delay) without asserting the
   provider's internal policy. The associated error event MAY be referenced
@@ -306,7 +321,7 @@ Every evidence payload (event content, envelope, artifact payload) carries an
 | Status | Meaning |
 |---|---|
 | `captured` | Content is present at its declared fidelity (§3.2: `structurally_faithful` or `byte_faithful`). |
-| `redacted` | Content existed; it was removed or masked per a recorded policy. The original content hash MAY be present. |
+| `redacted` | Content existed; it was removed or masked per a recorded policy. A hash of the original content MAY be retained only where the content is not sensitive and policy permits (§6.1 hash semantics); hashes of secrets MUST NOT be retained. |
 | `truncated` | Content existed; only a declared prefix or excerpt is stored. The truncation boundary MUST be recorded. |
 | `missing` | Capture failed or did not occur; no claim is made about the content. |
 | `unknown` | It cannot be determined whether the content existed (for example, provider internals). |
@@ -351,8 +366,12 @@ invent events to fill gaps.
 
 ### 5.1 Boundary-scoped observation roles
 
-Each envelope and event payload records the **observation role** under which it
-was captured:
+**Rule:** Every envelope and every **payload-bearing event** declares the
+`observationRole` under which its content was captured. Lifecycle control
+events (`interaction_start`, `interaction_end`, `span_start`, `span_end`) are
+capture-surface control records: they inherit the capture surface's declared
+boundary and carry no payload, so they do not need an `observationRole` of
+their own.
 
 | Role | Meaning |
 |---|---|
@@ -370,8 +389,16 @@ was captured:
 - Provider internals MUST be represented as `unobservable` with
   `evidenceStatus: "unknown"` and a boundary declaration; they MUST NOT be
   guessed.
-- Each capture surface declares its boundary in every record it emits
-  (`captureSurface` and `observationBoundary` fields).
+- Each capture surface declares its boundary on the trace and on records that
+  need to override it (`captureSurface` and `observationBoundary` fields);
+  records inherit the trace's declaration unless they declare an override.
+- `observedAt` is not a defined observation field. Observation context is
+  expressed by `observationRole` (the role under which the event was observed,
+  §5.1), `evidenceStatus` (what state the payload is in, §4.1), and the
+  record's `captureSurface`/`observationBoundary` (the declared scope of the
+  capturing surface). These are independent axes: a `returned` payload may be
+  `captured`, `redacted`, `truncated`, or `missing`, and the role never
+  implies the status or vice versa.
 
 ## 6. Context provenance
 
@@ -385,8 +412,29 @@ A context artifact is a referenceable unit of context:
   `repository_content`, or `manual`;
 - `payloadRef` — reference to the content (inline or external), with
   `evidenceStatus`;
-- `contentHash` — deterministic hash of the payload;
+- `contentHash` — top-level artifact field; a deterministic SHA-256 digest
+  (see hash semantics below). It is never nested inside `payloadRef`;
 - `provenance` — source locator: path, URI, retrieval query, range, or hash.
+
+**Hash semantics.** `contentHash` is a SHA-256 digest over the UTF-8 encoding
+of the content representation that was actually retained at the declared
+fidelity: for `structurally_faithful`, the canonical serialization of the
+parsed structure; for `byte_faithful`, the raw bytes or text (`nativeEncoding`
+and `nativeContentType` describe that representation). The algorithm and
+encoding are fixed by the schema version. Presence rules by `evidenceStatus`:
+
+- `captured` — hash of the retained representation; required for inline
+  content.
+- `truncated` — MAY be present, hashing only the captured prefix (the
+  truncation boundary already declares the extent).
+- `redacted` — a hash of the original observed content MAY be retained only
+  where the content is not sensitive and policy permits. **Hashes are not a
+  privacy mechanism:** a digest of low-entropy or secret content
+  (authorization headers, tokens, API keys) is brute-forceable and MUST NOT be
+  retained; the original-hash convention MUST NOT be applied to secrets.
+- `missing`, `unknown`, `not_applicable` — MUST NOT carry a content hash:
+  SignalGlass cannot hash unavailable content, and claiming otherwise would
+  imply content existed.
 
 ### 6.2 Context contributions
 
@@ -436,8 +484,14 @@ contain:
 
 ### 7.2 Determinism and scope
 
-- The same measurement over the same evidence, algorithm version, and
-  configuration MUST produce the same value.
+- A measurement is a **deterministic function of its declared evidence
+  inputs, algorithm version, configuration, and applicable registries or
+  tables** (tokenizer registry, pricing table, thresholds). The same inputs,
+  algorithm version, and configuration MUST produce the same value.
+- Different inputs MAY produce the same value (collisions are not a defect),
+  so the input evidence and versions MUST be recorded with the result to keep
+  it reproducible; changed inputs MUST be recorded, not asserted to produce a
+  changed result.
 - **Cost is a derivation, not evidence.** Cost records MUST reference the
   measurement(s) they multiply (token counts) and the pricing table version
   used. A cost record MUST NOT be written as if the provider billed it unless it
@@ -480,9 +534,13 @@ judgment derived from measurements and evidence:
 ### 9.1 Three independent policies
 
 Collection, persistence, and export are **three independent policies**. A
-change to one MUST NOT silently change another. A capture profile is a named
-bundle of one setting from each policy, versioned, and recorded at every capture
-point so evidence remains interpretable in its original policy context.
+change to one MUST NOT silently change another. A capture profile is a named,
+versioned **bundle of policy references and configuration settings**: it
+selects collection rules, persistence rules, and export defaults or permitted
+export profiles, and may carry redaction configuration, retention
+configuration, and environment-appropriate overrides. A profile is a
+convenience bundling; it MUST NOT collapse the three policies into one, and
+each policy keeps its own version and its own recording location (§9.2).
 
 - **Collection policy** — what is observed and how: surfaces (client-side,
   ingress proxy, tool/MCP boundaries), boundaries, payload capture
@@ -494,18 +552,45 @@ point so evidence remains interpretable in its original policy context.
 
 ### 9.2 Rules
 
+- **Where policy versions are recorded.** The collection policy version belongs
+  to the capture context: the collection profile (or capture-surface
+  declaration) in effect MUST be recorded on the trace, and records inherit it
+  unless a record-level override is declared. The persistence policy version
+  belongs to stored-record or storage-manifest metadata written by the storage
+  layer at storage time — never to canonical raw evidence. The export policy
+  version belongs to the export package or export manifest — never on
+  canonical raw evidence records; the trace is not an export projection.
+- **Evidence vs administrative metadata.** Collection context (what was
+  observed, under which profile, by which surface) is evidence metadata.
+  Persistence and export policy versions, storage timestamps, and deletion
+  records are administrative metadata that describe operations on evidence,
+  not observations; they are recorded beside the evidence, never merged into
+  payload status.
+- **Redaction stages stay distinct.** Collection-time redaction yields
+  `evidenceStatus: "redacted"` at capture and is part of the evidence.
+  Persistence-time removal is a deletion/tombstone operation (administrative)
+  and the affected trace's completeness record notes it. Export-time
+  sanitization is a projection under the export policy and MUST NOT overwrite
+  authoritative evidence.
 - The capture profile in effect MUST be recorded on the trace (profile name and
   version).
 - Redacted exports are projections; they MUST NOT overwrite authoritative
   evidence.
 - Administrative deletion MUST be recorded as a deletion record (a tombstone
   with reason and scope) rather than silently removed from the authoritative
-  record, so completeness remains honest. A tombstone MUST NOT retain the
-  deleted content or any sensitive payload data. Where legal or privacy
-  requirements demand deletion without retaining identifying metadata, the
-  tombstone itself MUST be deleted, and the persistence policy MUST acknowledge
-  that the record is then permanently unrecoverable and completeness cannot be
-  fully reconstructed.
+  record, so completeness remains honest. A deletion record is an
+  administrative record: it documents what was deleted, when, and under which
+  policy; it does not reconstruct deleted evidence or restore trace
+  completeness.
+  - The tombstone MUST NOT live only inside the deleted trace, which may
+    itself be purged. Where policy and law permit, it is retained separately,
+    outside the deleted trace, as a non-sensitive administrative record that
+    contains no deleted content, no sensitive payload data, no recoverable
+    content hashes where those would create disclosure risk, and no
+    identifiers the applicable deletion requirement prohibits retaining.
+  - Where retaining even that record is prohibited, it is deleted as well, and
+    the persistence policy MUST state explicitly that no audit evidence and no
+    later completeness reconstruction survives.
 - Exports and reports MUST label their policy context and MUST NOT claim to
   show evidence that the policy excluded.
 
@@ -514,11 +599,28 @@ point so evidence remains interpretable in its original policy context.
 Versioning rules are detailed in [`docs/model-versioning.md`](../docs/model-versioning.md).
 This spec requires:
 
-- Every evidence record carries `evidenceSchemaVersion` and the capture profile
-  version; derived records carry their algorithm and configuration versions.
+- Every evidence record carries `evidenceSchemaVersion`, either directly or
+  inherited through its trace reference; child records (events, artifacts,
+  measurements, interpretations) that reference a trace inherit its schema
+  version, and a record that does not reference a trace carries its own.
+- The collection profile in effect is recorded on the trace (§9.2); derived
+  records carry their algorithm and configuration versions. Persistence and
+  export policy versions are recorded on storage and export metadata (§9.2),
+  never on canonical evidence records.
 - Schema evolution is **additive** by default: adding fields with defined
   defaults MUST NOT break readers of older records. Reinterpreting or removing
   fields is a **breaking change** requiring a new schema version and a projection.
+- **Compatibility runs both directions.** Older readers MUST tolerate unknown
+  additive fields in newer records without failing; newer readers MUST apply
+  the defined default for fields absent from older records. Unknown fields
+  MUST be preserved on read-modify-write round trips: "ignore unknown fields"
+  never permits discarding them when evidence is re-serialized. A reader that
+  cannot safely interpret a breaking version MUST refuse or require a
+  projection; it MUST NOT silently misread.
+- **Projections and migrations never rewrite authoritative evidence.**
+  Projections are derived views of evidence; migration changes storage layout
+  or indices, not the meaning of the records. Evidence is only rewritten when
+  the schema version changes and a recorded migration is applied to it.
 - Evidence MUST remain interpretable without the current application version:
   records are self-describing and MUST NOT require the exporting application's
   code to decode them.

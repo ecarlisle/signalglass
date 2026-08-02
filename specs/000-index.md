@@ -13,6 +13,12 @@ Provide a single directory of implementation specifications for SignalGlass. Eac
 - **Draft** — proposed but not ready for implementation.
 - **Accepted** — ready to implement.
 - **Implemented** — implemented and passing tests/build.
+- **Legacy/current-state (v0.x)** — an accurate record of the implemented or
+  planned v0.x behavior that is no longer authoritative for the target
+  architecture and is pending supersession by a newer spec; it is not formally
+  Superseded until the replacing spec is accepted. A legacy spec may describe
+  implemented behavior (the acceptance criteria are not re-checked) without
+  claiming the **Implemented** status definition above.
 - **Superseded** — replaced by another spec.
 
 ## Spec implementation rules
@@ -48,9 +54,9 @@ Infrastructure specifications ([001](001-workspace.md), [005](005-provider-adapt
 | Spec | Title | Status |
 |---|---|---|
 | [001](001-workspace.md) | Workspace and package layout | Implemented |
-| [002](002-core-domain.md) | Core domain model | Implemented — legacy v0.x, pending supersession by [013](013-evidence-model.md) (acceptance criteria unchecked) |
-| [003](003-offline-analysis.md) | Offline Run Analysis | Implemented — legacy v0.x, pending supersession by [013](013-evidence-model.md) (acceptance criteria unchecked) |
-| [004](004-trace-model.md) | Trace and timeline model | Implemented — legacy v0.x, pending supersession by [013](013-evidence-model.md) |
+| [002](002-core-domain.md) | Core domain model | Legacy/current-state (v0.x) — pending supersession by [013](013-evidence-model.md) (acceptance criteria unchecked) |
+| [003](003-offline-analysis.md) | Offline Run Analysis | Legacy/current-state (v0.x) — pending supersession by [013](013-evidence-model.md) (acceptance criteria unchecked) |
+| [004](004-trace-model.md) | Trace and timeline model | Legacy/current-state (v0.x) — pending supersession by [013](013-evidence-model.md) |
 | [005](005-provider-adapters.md) | Provider adapters | Implemented (OpenAI-compatible), Draft (others) |
 | [006](006-ingress-openai-compatible.md) | OpenAI-compatible ingress | Implemented |
 | [007](007-storage-and-privacy.md) | Storage and privacy | Implemented |

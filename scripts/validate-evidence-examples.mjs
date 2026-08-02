@@ -39,6 +39,18 @@ const STATUSES = new Set([
   "captured", "redacted", "truncated", "missing", "unknown", "not_applicable",
 ]);
 const FIDELITIES = new Set(["structurally_faithful", "byte_faithful"]);
+const OBSERVATION_ROLES = new Set([
+  "application_constructed", "client_sent", "provider_reported", "returned",
+  "unobservable",
+]);
+// Lifecycle control events carry no payload and inherit the capture surface's
+// declared boundary; they are the only kinds that need no observationRole.
+const CONTROL_KINDS = new Set([
+  "interaction_start", "interaction_end", "span_start", "span_end",
+]);
+// Keys that belong on storage/export metadata, never on canonical evidence
+// records (Spec 013 §9.2).
+const ADMIN_POLICY_KEY_RE = /^(persistence|export)(Policy|Version)/i;
 const EVENT_KINDS = new Set([
   "interaction_start", "interaction_end", "span_start", "span_end",
   "model_request", "model_response", "model_response_chunk", "model_usage",
@@ -97,12 +109,18 @@ function checkTraceRef(ref, label) {
       errors.push(`${label}: eventId ${ref.eventId} belongs to trace ${ev.traceId}, not ${ref.traceId}`);
     }
   }
+  if (ref.artifactId !== undefined && !index.artifacts.has(ref.artifactId)) {
+    errors.push(`${label}: references unknown artifactId ${ref.artifactId}`);
+  }
 }
 
 // ---- Trace invariants ----
 for (const { i, b } of traces) {
   const label = `[trace ${i}] ${b.traceId}`;
   if (b.interactionId !== b.traceId) errors.push(`${label}: interactionId !== traceId`);
+  for (const key of Object.keys(b)) {
+    if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${label}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
+  }
 
   const events = b.events;
   const eventIds = new Set();
@@ -126,6 +144,23 @@ for (const { i, b } of traces) {
     if (ev.kind === "interaction_end") terminalSeen = true;
     if (ev.kind === "interaction_start" && ev.seq !== 0) errors.push(`${el}: interaction_start must be seq 0`);
     kinds[ev.kind] = (kinds[ev.kind] || 0) + 1;
+
+    // observationRole (Spec 013 §5.1): every payload-bearing event declares it;
+    // lifecycle control events are exempt. `observedAt` is not a defined field
+    // (Spec 013 §5.2).
+    if (CONTROL_KINDS.has(ev.kind)) {
+      if (ev.observationRole !== undefined) {
+        errors.push(`${el}: control event kind '${ev.kind}' must not carry observationRole (it inherits the capture surface boundary)`);
+      }
+    } else if (!ev.observationRole) {
+      errors.push(`${el}: payload-bearing event (kind '${ev.kind}') missing required observationRole (Spec 013 §5.1)`);
+    } else if (!OBSERVATION_ROLES.has(ev.observationRole)) {
+      errors.push(`${el}: invalid observationRole '${ev.observationRole}' (valid: ${[...OBSERVATION_ROLES].join(", ")})`);
+    }
+    if (ev.observedAt !== undefined) errors.push(`${el}: 'observedAt' is not a defined observation field; use observationRole + evidenceStatus + captureSurface/observationBoundary (Spec 013 §5.2)`);
+    for (const key of Object.keys(ev)) {
+      if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${el}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
+    }
 
     for (const envKey of ["requestEnvelope", "responseEnvelope"]) {
       const env = ev[envKey];
@@ -160,6 +195,14 @@ for (const { i, b } of traces) {
 
     if (ev.evidenceStatus === "missing" && !ev.missing) {
       errors.push(`${el}: evidenceStatus missing but no 'missing' declaration`);
+    }
+
+    if (ev.redaction) {
+      const secretReason = (ev.redaction.reasons || []).some((r) =>
+        /authorization[- ]?header|api[- ]?key|secret|token/i.test(String(r)));
+      if (secretReason && ev.redaction.originalHash !== undefined) {
+        errors.push(`${el}: redaction reason includes a secret but retains originalHash — hashes of secrets must not be retained (Spec 013 §6.1 hash semantics)`);
+      }
     }
 
     for (const c of ev.contextContributions || []) {
@@ -247,6 +290,28 @@ parsed.forEach((b, i) => {
   } else if (b.artifactId !== undefined) {
     if (!STATUSES.has(b.evidenceStatus)) errors.push(`${label}: artifact ${b.artifactId} invalid evidenceStatus ${b.evidenceStatus}`);
     if (!b.payloadRef) errors.push(`${label}: artifact ${b.artifactId} missing payloadRef`);
+    // contentHash (Spec 013 §6.1): top-level only; presence depends on status.
+    if (b.payloadRef && b.payloadRef.contentHash !== undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} has contentHash nested inside payloadRef — it must be a top-level artifact field`);
+    }
+    if (b.evidenceStatus === "captured" && b.contentHash === undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} is captured with inline content but has no top-level contentHash (required, Spec 013 §6.1)`);
+    }
+    if (["missing", "unknown", "not_applicable"].includes(b.evidenceStatus) && b.contentHash !== undefined) {
+      errors.push(`${label}: artifact ${b.artifactId} has contentHash but evidenceStatus is ${b.evidenceStatus} — SignalGlass cannot hash unavailable content (Spec 013 §6.1)`);
+    }
+    if (b.observedAt !== undefined) errors.push(`${label}: artifact ${b.artifactId} uses 'observedAt', which is not a defined observation field`);
+    for (const key of Object.keys(b)) {
+      if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${label}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
+    }
+  } else if (b.measurementId !== undefined) {
+    for (const key of Object.keys(b)) {
+      if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${label}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
+    }
+  } else if (b.interpretationId !== undefined) {
+    for (const key of Object.keys(b)) {
+      if (ADMIN_POLICY_KEY_RE.test(key)) errors.push(`${label}: disallowed administrative policy field '${key}' on a canonical evidence record (Spec 013 §9.2)`);
+    }
   }
 });
 

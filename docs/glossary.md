@@ -41,6 +41,8 @@ A live-captured session representing a complete provider exchange. A trace can b
 ## TraceEvent
 A single event in a trace. Current event types include `message`, `instruction`, `context`, `transformation`, `tool_call`, `tool_result`, `provider_request`, `provider_response`, `provider_error`, `inference`, and `egress_response`.
 
+> **Legacy v0.x.** Pending supersession by [Spec 013 — Evidence model](../specs/013-evidence-model.md) upon acceptance: under the evidence model, the canonical event vocabulary is the provider-neutral `Event` (kinds in Spec 013 §3.1) with `observationRole` and `evidenceStatus`; `TraceEvent` describes the current v0.x runtime vocabulary and is not changed by this spec's Draft status.
+
 ## Content phase
 A label describing the role of content in an exchange: said, sent, transformed, requested, observed, generated, or returned.
 
