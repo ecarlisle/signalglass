@@ -74,7 +74,10 @@ Spec 014 explicitly does not cover, and its implementation must not include:
 - Switching collectors, the ingress, or provider adapters to the new
   primitives.
 - Modifying provider requests or responses.
-- Graphify, MCP, retrieval, or provider-specific instrumentation.
+- Graphify, MCP, retrieval, or provider-specific instrumentation — and, in
+  particular, MCP/tool capture, adapters, lifecycle integration, and runtime
+  emission. Defining provider-neutral record kinds for MCP/tool activity
+  (Spec 013 §3.1) is type-system vocabulary (§2.2), not MCP observation.
 - Dashboards or visualization.
 - Measurement or interpretation algorithms (token counting, latency,
   duration, cost, smells, recommendations).
@@ -134,7 +137,10 @@ gains one workspace dependency on `@signalglass/evidence`.
 
 `@signalglass/evidence` exports, from `src/index.ts`:
 
-- the evidence record types and vocabulary types of §2;
+- the evidence record types and vocabulary types of §2 — canonical
+  evidence primitives plus the narrowly coupled, deterministic completeness
+  contract Spec 013 §4.3 requires (`CompletenessRecord` and the pure
+  `deriveCompleteness` derivation, §2.2.9);
 - the discriminant and identifier rules of §3 as types and constants;
 - runtime validators and the parse result type (§5);
 - `serializeEvidence` / `parseEvidenceTrace` JSON-safe round-trip functions
@@ -153,8 +159,10 @@ provider, storage, dashboard, or analysis API.
 Implementation helpers that are not part of the public contract live in
 `src/internal/` and MUST NOT be re-exported: low-level guard combinators
 (`src/internal/guards.ts`), JSON canonicalization and hashing
-(`src/internal/hash.ts`), time and id helpers (`src/internal/time.ts`,
-`src/internal/id.ts`), and the RFC 6838 media-type and hash-format checks
+(`src/internal/hash.ts`), time helpers and id syntax/validation helpers
+(`src/internal/time.ts`, `src/internal/id.ts` — the package validates
+caller-supplied ids; it does not generate them, §3.2), and the RFC 6838
+media-type and hash-format checks
 (`src/internal/formats.ts`). The media-type and hash rules are already
 implemented in the repository's dependency-free semantic validator
 (`scripts/validate-evidence-examples.mjs`); the package validators MUST stay
@@ -169,8 +177,9 @@ artifact-hash, and completeness rules are the baseline to port (see §5.4).
   package — including `@signalglass/core`.
 - **Prohibited:** `@signalglass/core`, `@signalglass/providers`,
   `@signalglass/storage`, `@signalglass/parsers`, `@signalglass/reports`,
-  `@signalglass/cli`, `apps/*`, and any external validation, schema, or
-  serialization library. The repository has no established validation
+  `@signalglass/cli`, `apps/*`, any external validation, schema, or
+  serialization library, and any MCP protocol or tool-runtime library
+  (record kinds are vocabulary only, §2.2). The repository has no established validation
   library; the established approach is dependency-free hand-rolled guards
   (as in `scripts/validate-evidence-examples.mjs`), and Spec 014 keeps that
   approach rather than introducing a competing validation system.
@@ -206,7 +215,8 @@ Node-only imports (`node:*`, `fs`, `crypto` is allowed only via a
 dependency-free SHA-256 implementation or a guarded injection point, and
 `crypto` availability MUST be injectable so browsers are not required to
 polyfill it), no DOM types, no provider types, no storage types, no UI
-types. Provider-, storage-, and UI-specific logic lives in their existing
+types, and no MCP protocol or tool-runtime types. Provider-, storage-, and
+UI-specific logic lives in their existing
 packages (`@signalglass/providers`, `@signalglass/storage`, `apps/*`) and is
 out of scope here.
 
@@ -220,12 +230,17 @@ Every primitive carries one classification, mirroring Spec 013 §1.1:
 - **measurement** — a deterministic derivation over evidence (deferred, §2.3);
 - **interpretation** — a labeled judgment (deferred, §2.3);
 - **administrative metadata** — a record about operations on evidence, never
-  merged into payload status (deferred where possible, §2.3).
+  merged into payload status (deferred where possible, §2.3);
+- **derived** — a description computed from evidence (Spec 013 §1.1
+  classifies trace completeness as *Derived*).
 
 The evidence core contains only **evidence** primitives plus the
-vocabulary/value types they need. Derived and administrative types are
-referenced by id or field where Spec 013 requires, but are not implemented in
-the first slice.
+vocabulary/value types they need, with one exception: the `CompletenessRecord`
+and its deterministic derivation (§2.2.9) are in the first slice because Spec
+013 §4.3 requires each trace to carry a derived completeness record and
+validators must verify serialized completeness. Derived and administrative
+types are otherwise referenced by id or field where Spec 013 requires, but are
+not implemented in the first slice.
 
 ### 2.2 In-slice primitives
 
@@ -233,6 +248,15 @@ For each primitive: **category**, **responsibility**, **key fields**,
 **discriminant/id rules**, **append-only expectation**, **observation
 boundary**, **serialization**, **validation**, **relationships**, and
 **slice**.
+
+**Record kinds versus instrumentation.** Including provider-neutral
+span/event/artifact kinds for tool, MCP, retrieval, and context-provider
+activity (the Spec 013 §3.1 vocabulary) defines record types; it does **not**
+implement MCP/tool observation. Capture, instrumentation, adapters, lifecycle
+integration, and runtime emission for those systems are deferred to later
+specifications (§8.2), and `@signalglass/evidence` MUST NOT depend on any MCP
+implementation, MCP protocol library, tool runtime, or provider API. Merely
+defining a provider-neutral record kind does not implement MCP observation.
 
 #### 2.2.1 Trace envelope (`EvidenceTrace`)
 
@@ -438,7 +462,9 @@ boundary**, **serialization**, **validation**, **relationships**, and
 
 #### 2.2.9 Completeness record (`CompletenessRecord`)
 
-- **Category:** derived (computed from evidence; not itself evidence).
+- **Category:** derived — Spec 013 §1.1 classifies trace completeness as
+  **Derived**; it is not recorded evidence, not a measurement, and not an
+  interpretation, and it must never become a general-purpose analysis layer.
 - **Responsibility:** a derived description of which evidence was captured,
   redacted, truncated, missing, or unknown, plus sequence gaps, duplicates,
   and the boundary statement (Spec 013 §4.3). Never invents evidence.
@@ -448,6 +474,13 @@ boundary**, **serialization**, **validation**, **relationships**, and
 - **Append-only:** derived; recomputable by a deterministic pure function
   `deriveCompleteness(trace)`; MAY be serialized on the trace (the docs'
   examples do), MUST be consistent with the trace when present.
+- **Derivation contract (`deriveCompleteness`):** MUST be pure and
+  deterministic; MUST operate only on explicit evidence and capture-boundary
+  declarations; MUST NOT fabricate observations (it never invents missing
+  events or statuses); MUST report unavailable or incomplete inputs (for
+  example, a trace whose boundary cannot be determined yields an incomplete
+  completeness record, not an invented boundary statement); and MUST NOT
+  calculate quality, cost, recommendations, smells, or optimization claims.
 - **Validation:** counts match the events; gaps and duplicates match the seq
   analysis; a serialized completeness record that disagrees with its trace is
   rejected.
@@ -464,7 +497,9 @@ boundary**, **serialization**, **validation**, **relationships**, and
   `captureSurface` ∈ {`client_side`, `ingress_proxy`, `tool`, `mcp`,
   `context_provider`} (the surface list already used by
   `docs/capture-profiles.md`); trace-level `observationBoundary` is one of
-  the roles.
+  the roles. Including `tool` and `mcp` in this vocabulary is type-system
+  vocabulary, not tool/MCP instrumentation (§2.2, “Record kinds versus
+  instrumentation”).
 - **Validation:** role and surface vocabularies; `unobservable` requires
   `evidenceStatus: "unknown"`; a claim is scoped to the boundary where it was
   observed.
@@ -499,14 +534,17 @@ boundary**, **serialization**, **validation**, **relationships**, and
   observationBoundary } }` (shape as in the docs' example 9).
 - `RedactionDeclaration` — `{ policy, reasons[] }`.
 - `TruncationDeclaration` — `{ maxLength, originalLength }`.
-- `ClockBasis` — declared basis for monotonic `durationMs`; initial slice
-  defines the value `monotonic-performance-now-ms` (see §4.3 and §12).
+- `ClockBasis` — declared basis for monotonic `durationMs`; the initial
+  slice defines the value `monotonic-performance-now-ms` (§4.3).
 - `CapturedAt` / timestamps — ISO 8601 UTC with millisecond precision.
-- `EvidenceSchemaVersion` — semantic version string, recorded directly or
-  inherited through the trace reference (Spec 013 §10).
-- `TraceStatus` / `SpanStatus` — initial closed vocabulary derived from the
-  lifecycle events and the normative examples: `completed` | `failed` |
-  `cancelled` (see §12, open question 3).
+- `EvidenceSchemaVersion` — semantic-version string (`MAJOR.MINOR.PATCH`,
+  as in the normative examples' `1.0.0`), recorded directly or inherited
+  through the trace reference (Spec 013 §10, `docs/versioning.md`).
+- `TraceStatus` / `SpanStatus` — an explicit Draft decision ratified with
+  this spec (§4.7): `completed` | `failed` | `cancelled` | `unknown`,
+  with the meanings and validator rules in §4.7. Status is evidence-scoped
+  lifecycle state, never a quality judgment; absence of an observed error is
+  not proof of success; `unknown` represents an unobservable terminal state.
 
 ### 2.3 Explicitly deferred primitives and capabilities
 
@@ -526,7 +564,8 @@ as part of Spec 014:
   records.
 - **Distributed trace federation** (Spec 013 §1.2, deferred by Spec 013
   itself).
-- **Streaming-native capture**, **native byte capture**, **MCP/tool spans**,
+- **Streaming-native capture**, **native byte capture**, **MCP/tool capture
+  and instrumentation** (adapters, lifecycle integration, runtime emission),
   **Graphify provenance**, **deterministic measurements**, **dashboard
   migration**, and **privacy/retention/redaction workflows** — each requires
   its own later specification (§8.2).
@@ -555,18 +594,29 @@ as part of Spec 014:
   globally unique; ULID-style values recommended. The equality invariant is
   validated.
 - `spanId`, `eventId`, `artifactId`: unique within the trace; opaque.
-- The exact generation scheme (ULID vs. UUIDv7 vs. capture-surface-owned
-  prefixed counters) is **not settled by Spec 013 or the repository**; it is
-  open question 1 (§12). Until resolved, the primitives accept any opaque
-  string satisfying uniqueness and immutability, and the eventual scheme MUST
-  NOT make ids ordering-significant.
+- **Generation is the caller's responsibility, not the evidence core's.** The
+  evidence package does not generate ids: constructors and parsers accept
+  caller-supplied opaque ids; validators verify syntax (non-empty opaque
+  string), uniqueness within the trace, and reference integrity; ids carry
+  no ordering semantics (§4.1). This resolves the previously reported
+  id-generation question: no ULID/UUIDv7/counter choice is made here because
+  generation belongs to the capture surface (or the caller), not to the
+  evidence core.
+- **Projections preserve valid legacy ids where possible** (§6.3). When a
+  synthesized id is unavoidable in a projection, it MUST be produced by an
+  explicitly versioned deterministic projection rule and reported as
+  `inferred` in the projection report; it is never presented as observed.
 - Identifiers MUST NOT be used for ordering; only `seq` orders events (§4.1).
 
 ### 3.3 Versions
 
 - Every evidence record carries `evidenceSchemaVersion` directly or inherits
   it through its trace reference (Spec 013 §10). Standalone records (for
-  example a standalone artifact) carry it explicitly.
+  example a standalone artifact) carry it explicitly. The format is
+  semantic-version syntax (`MAJOR.MINOR.PATCH`, as in the normative examples'
+  `1.0.0`), per Spec 013 §10 and `docs/versioning.md`; **MAJOR is the
+  compatibility boundary** (§5.3): compatible additive minor/patch revisions
+  within a supported MAJOR are accepted, and an unknown MAJOR is breaking.
 - Schema evolution is additive by default: adding fields with defined
   defaults MUST NOT break readers of older records; removing or reinterpreting
   fields is a breaking change requiring a new version and a projection
@@ -657,6 +707,33 @@ as part of Spec 014:
   output (§6.5). Object-property order, generated ids, and wall-clock
   timestamps alone never determine output order.
 
+### 4.7 Trace and span status
+
+Status is an explicit Draft decision ratified with this spec; it describes
+observed lifecycle state and is tightly scoped evidence/administrative state,
+never a quality judgment.
+
+- **Values.** `completed` — the capture surface observed a normal terminal
+  lifecycle event (`interaction_end`/`span_end`) with no observed failure or
+  cancellation claiming the record. It records that the lifecycle was
+  observed to end normally; it is **not** proof of success of the underlying
+  work: absence of an observed error is not evidence of success. `failed` —
+  an `error` event was observed that declares the failure of the trace/span
+  (with its declared actor and observation role, Spec 013 §3.3); the status
+  records the observed failure, never provider-internal failure. `cancelled`
+  — a `cancelled` event was observed for the trace/span (recording who/what
+  requested cancellation, Spec 013 §3.3). `unknown` — the terminal state
+  could not be observed (for example capture ended before the terminal event,
+  or the boundary could not observe completion); `unknown` is an honest
+  representation of unavailability and MUST NOT be defaulted to `completed`.
+- **Rules.** The status MUST be declared by the capture surface at capture
+  and MUST be coherent with the observed lifecycle events (the validator
+  checks this). Validators MUST NOT infer status from incomplete evidence: a
+  trace with no observed terminal event and no observed error/cancellation
+  cannot claim `completed` — its status is `unknown` or the trace is
+  incomplete (§4.4). Status MUST NOT be derived from wall-clock absence, and
+  `completed` never implies outcome quality.
+
 ## 5. TypeScript and runtime-validation contract
 
 ### 5.1 Compile-time types versus runtime validation
@@ -710,13 +787,30 @@ type ParseResult<T> =
   **error**, because the record's semantics cannot be safely interpreted.
   The error identifies the field path and the unknown value's presence
   without echoing content.
-- **Newer schema versions:** a record whose `evidenceSchemaVersion` the
-  validator does not support MUST be refused with a version error (or
-  accepted only through an explicit, versioned projection); it MUST NOT be
-  silently misread. This is the boundary between forward compatibility and
-  strict validation, and it is explicit: **unknown additive fields are
-  tolerated and preserved; unknown discriminants and unsupported versions
-  are refused.**
+- **Compatible version policy (Spec 013 §10 additive evolution).** The
+  validator:
+  - accepts the exact supported `evidenceSchemaVersion`;
+  - accepts later additive **minor/patch revisions within a supported MAJOR
+    version** when all required known fields and known discriminants remain
+    valid — additive evolution means older readers MUST tolerate unknown
+    additive fields in newer records (Spec 013 §10, `docs/model-versioning.md`);
+  - preserves unknown additive fields during parse/serialize round trips
+    (below);
+  - rejects an **unknown or breaking MAJOR version** — removing or
+    reinterpreting fields is a breaking change requiring a new version and a
+    projection, never silent misreading (Spec 013 §10);
+  - rejects **unknown discriminants** when their semantics are required to
+    interpret the record safely (below);
+  - never silently discards unknown fields;
+  - returns **structured compatibility or validation errors** (the
+    `ParseResult` of §5.2) whenever safe interpretation is impossible.
+  Four situations are deliberately distinguished: **unknown additive
+  fields** (tolerated and preserved), **unknown discriminants** (refused
+  when semantics are required), **compatible newer revisions** (accepted
+  within a supported MAJOR), and **breaking or unsupported revisions**
+  (refused with a structured version error, or accepted only through an
+  explicit versioned projection). A record whose version cannot be handled
+  is refused with a version error; it MUST NOT be silently misread.
 - Unknown fields MUST NOT be interpreted as evidence fields: an unknown field
   named like a known field is still validated per the known field's rules if
   it occupies that position, and preserved otherwise.
@@ -779,10 +873,24 @@ everything that must survive verbatim:
 
 - `serializeEvidence(record)` produces the JSON-safe form: plain objects,
   arrays, strings, numbers, booleans, and `null` for structural absence only.
-- Retained byte payloads (`byte_faithful`) are represented in memory as
-  `Uint8Array` and serialized as base64 with `nativeEncoding` declared; the
-  exact base64 representation is pinned in the fixture contract (slice 2,
-  §12 open question 2). Fidelity claims are to the retained bytes only.
+- **Retained-byte representation (`byte_faithful`) — pinned contract.**
+  Retained byte payloads are represented in memory as `Uint8Array` and
+  serialized in JSON as **Base64 per RFC 4648 §4**: the standard alphabet
+  (`A–Z`, `a–z`, `0–9`, `+`, `/`), **`=` padding required**, emitted as one
+  contiguous string with no whitespace or line breaks. The exact spelling of
+  the encoding name is `base64`. Emission is canonical: the single padded
+  standard-alphabet encoding. Validators reject noncanonical forms —
+  URL-safe alphabet (`-`/`_`), missing or incorrect padding, and embedded
+  whitespace or line breaks — and decoders MUST accept only the canonical
+  form (strictness keeps round trips lossless and deterministic); unpadded,
+  URL-safe, or whitespace-containing variants are never accepted.
+  `nativeEncoding` records the observed bytes' original character encoding
+  (for example `utf-8`), a field separate from the JSON transport encoding.
+  Hashes relate to the **decoded** retained byte sequence: `nativeContentHash`
+  is computed over the exact native byte sequence observed at the boundary,
+  and `byte_faithful` `contentHash` over the retained bytes — never over the
+  Base64-encoded text (§4.5; Spec 013 §3.2, §6.1). Fidelity claims are to
+  the retained bytes only.
 - No canonical-JSON requirement for storage serialization; deterministic
   canonicalization exists only where Spec 013 requires it (content hashing,
   §4.5). The serialized form is self-describing (schema version present) and
@@ -824,9 +932,15 @@ redacted/missing/unknown evidence is never fabricated into false certainty
 during projection.
 
 Legacy `AgentRun` → canonical evidence (parsing legacy offline run files into
-evidence) is **deferred**: Spec 013 requires the trace inverse only, and the
-offline run files are legacy inputs whose consumers will be migrated via the
-evidence → `AgentRun` view first (§8, §12 open question 4).
+evidence) is **deferred** — the single open item in §12: Spec 013 §11.2
+requires only the trace inverse; the offline-run direction is not needed for
+the first implementation increment because no collector, adapter, or ingress
+converts to canonical evidence in Spec 014's slices (§8), and legacy offline
+run consumers are served by the evidence → `AgentRun` view. A later
+collector/adapter-ingress specification will decide whether legacy offline run
+files are parsed into evidence or remain legacy inputs. This deferral does
+not weaken the required legacy `Trace` → canonical inverse projection (§6.3,
+§6.6).
 
 ### 6.2 Projection function contracts
 
@@ -883,9 +997,10 @@ type LegacyTraceToEvidence = (trace: LegacyTrace) => {
   `unavailable`, never invented from text length. Smells/recommendations are
   interpretations and MUST NOT appear in a projection as evidence.
 - **Inverse (legacy `Trace` → evidence):** legacy events without `seq`
-  receive a derived sequence only by an explicit, documented rule (open
-  question 5, §12); the projection MUST record the derivation as `inferred`
-  and MUST NOT claim observation-time assignment. Legacy `ContentPhase`
+  receive derived canonical `seq` values by the fixed deterministic rule of
+  §6.6 (legacy array order is primary; contiguous from 0; timestamps never
+  reorder). The projection MUST record the derivation as `inferred` and MUST
+  NOT claim observation-time assignment. Legacy `ContentPhase`
   values map to `observationRole` per §11.2 with the same boundary discipline
   (a phase label describes where content was observed, never provider-internal
   state). Legacy redacted excerpts map to `redacted` artifacts with
@@ -926,6 +1041,47 @@ type LegacyTraceToEvidence = (trace: LegacyTrace) => {
   record provenance linking it to its source records, projection version,
   and policy context — never authoritative evidence.
 
+### 6.6 Inverse-projection sequence derivation
+
+The deterministic rule for deriving canonical `seq` values from legacy
+`TraceEvent` arrays (used by the inverse projection of §6.1, required by Spec
+013 §11.2):
+
+1. **Primary authority: original legacy array order.** A legacy `Trace`
+   serializes `events: TraceEvent[]`; the order in which events appear in
+   that array is the order the legacy contract itself records and is the
+   only ordering authority for the derived sequence.
+2. **Contiguous from 0.** Canonical `seq` values are assigned contiguously
+   starting at `0` (Spec 013 §2.2: the first event has `seq` 0 and each
+   subsequent event is exactly one greater) in array order.
+3. **Timestamps are evidence fields, never an ordering authority.** Legacy
+   `timestamp` values are mapped to canonical `capturedAt` and MUST NOT
+   reorder the source: array order governs even when timestamps are out of
+   order, missing, or duplicated. Missing or duplicate timestamps never
+   change `seq`; they are reported as `partial`/`unavailable` entries for
+   the timestamp field in the projection report.
+4. **Unavailable legacy ordering.** If the legacy `events` array is absent or
+   is not an ordered array (for example an empty or invalid shape), the
+   projection MUST report `unavailable` for the derived sequence and MUST
+   NOT synthesize an order — the view is produced with the report entry, or
+   the projection returns an explicit failure result; a guessed order is
+   never produced.
+5. **Inferred, never observed.** The derived `seq` values are recorded as
+   `inferred` in the projection report; the projection MUST NOT claim the
+   sequence was assigned at observation time.
+6. **Deterministic and versioned.** The rule is pure and deterministic
+   (identical input + identical projection version → identical output,
+   §6.5); the projection version records the rule version, and any change
+   to the rule bumps the projection version.
+
+Why this rule: array order is the only order the legacy contract itself
+records; using timestamps as an ordering authority would reorder events
+relative to the recorded legacy trace and require tie handling; contiguity
+from 0 matches Spec 013's sequence invariant so downstream canonical
+consumers (validators, completeness) treat the derived trace consistently.
+The rule defines behavior for every case — including missing ordering — so no
+implementation decision is left to the projection author.
+
 ## 7. Deterministic ordering and identity decisions
 
 For implementers, the decisions of §3–§4 are normative and summarized here:
@@ -947,14 +1103,24 @@ For implementers, the decisions of §3–§4 are normative and summarized here:
    never determine event or projection order (§4.6).
 8. Absence of a trustworthy monotonic clock means no monotonic duration claim
    — never a fabricated duration (§4.3).
-9. Where identifier generation cannot be settled from the repository, the
-   open decision is stated precisely (§12, open question 1); no canonical
-   algorithm is invented here.
+9. ID generation is the caller's/capture surface's responsibility: the
+   evidence core accepts caller-supplied opaque ids and validates syntax,
+   uniqueness, and reference integrity; no generation algorithm is defined
+   by this spec (§3.2).
+10. Trace/span status is a defined vocabulary — `completed` | `failed` |
+    `cancelled` | `unknown` — describing observed lifecycle state, never a
+    quality judgment (§4.7).
+11. The inverse projection derives canonical `seq` from legacy array order,
+    contiguous from 0, recorded `inferred` (§6.6).
 
 ## 8. Additive implementation sequence
 
 Each slice is independently reviewable, testable, and mergeable; none
-requires a flag-day migration, and none begins storage or capture migration.
+requires a flag-day migration, and none begins storage, capture, collector,
+adapter, or ingress migration. Spec 014 implementation ends with the
+provider-neutral evidence package, deterministic validators/serialization and
+fixtures, the compatibility projections beside the legacy model, and
+projection parity and loss verification — nothing more.
 
 1. **Evidence package foundation.** Create `packages/evidence` with the §2
    types, the §3 discriminants/versions, the §5 validators and serialization,
@@ -964,33 +1130,42 @@ requires a flag-day migration, and none begins storage or capture migration.
    normative serialized examples from `docs/evidence-model.md` into JSON
    fixtures under `packages/evidence/src/fixtures/`; add negative controls
    (status/fidelity matrix rejections, media-type boundary cases, hash-format
-   cases, seq/duplicate/gap cases, unknown-discriminant and unsupported-version
-   cases) mirroring the self-tests in `scripts/validate-evidence-examples.mjs`;
-   pin the retained-byte serialization form (§5.7) in the fixture contract.
+   cases, seq/duplicate/gap cases, version-compatibility and
+   unknown-discriminant cases) mirroring the self-tests in
+   `scripts/validate-evidence-examples.mjs`;
+   pin the retained-byte Base64 serialization contract (§5.7) with
+   round-trip fixtures (canonical acceptance; URL-safe/unpadded/whitespace
+   rejection; hashes over decoded bytes) and the version-compatibility cases
+   of §5.3 (compatible minor/patch accepted; unknown MAJOR refused).
 3. **Compatibility projections beside legacy types.** Add
    `packages/core/src/evidenceProjections/` (canonical → legacy trace,
    canonical → `AgentRun` view, legacy trace → canonical) with projection
    reports and explicit loss metadata; add `@signalglass/core`'s workspace
    dependency on `@signalglass/evidence`. Legacy modules are untouched.
-4. **Selected internal callers construct evidence records** beside legacy
-   behavior — for example, the ingress emits canonical evidence for new
-   captures while continuing to emit legacy traces — with no persistence
-   change. Wire-through tests only; no consumer switches.
-5. **Parity verification.** Run the existing analyzer and report tests
-   against projected views; verify deterministic outputs; explicitly
-   document projection loss and backfill mapping cases; confirm
+4. **Projection parity and loss verification.** Run the existing analyzer
+   and report tests against projected views; verify deterministic outputs;
+   explicitly document projection loss and backfill mapping cases; confirm
    `scripts/validate-evidence-examples.mjs` self-tests still pass unchanged.
-6. **Later specifications** (not this spec): persistence and migration;
+5. **Later specifications** (not this spec): persistence and migration;
    collector/adapter ingress onto evidence; native byte capture; streaming
-   capture; MCP and tool spans; Graphify provenance; deterministic
-   measurements; dashboard migration; privacy, retention, and redaction
-   workflows.
+   capture; MCP/tool capture and instrumentation; Graphify provenance;
+   deterministic measurements; dashboard migration; privacy, retention, and
+   redaction workflows.
+
+**Scope boundary.** None of the slices converts collectors, adapters, ingress
+paths, provider requests or responses, persistence, or capture pipelines to
+emit canonical evidence; those conversions belong to later specifications
+(slice 5). The only canonical-record construction during Spec 014
+implementation is **test construction** — fixtures and projection-test inputs
+built in memory inside the package's and projection modules' test suites
+(slices 2 and 4) — explicitly not production ingress adoption. No runtime
+production caller constructs canonical evidence records in this increment.
 
 Later concerns that require separate specifications include, explicitly:
-storage/migration (schema, indices, tombstones), collector/adapter ingress,
-native byte capture, streaming capture, MCP and tool spans, Graphify
-provenance, deterministic measurements, dashboard migration, and
-privacy/retention/redaction workflows.
+storage/migration (schema, indices, tombstones), collector/adapter ingress
+onto evidence, native byte capture, streaming capture, MCP/tool capture and
+instrumentation, Graphify provenance, deterministic measurements, dashboard
+migration, and privacy/retention/redaction workflows.
 
 ## 9. Testing and conformance
 
@@ -1003,8 +1178,10 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   non-JSON-safe values);
 - every discriminated-union variant (all event kinds, span kinds, locator
   types, fidelity values);
-- unknown discriminants and unsupported schema versions (refused) versus
-  unknown additive fields (preserved on round trip);
+- version compatibility: compatible additive minor/patch revisions within a
+  supported MAJOR accepted; unknown or breaking MAJOR versions and unknown
+  discriminants refused with structured errors; unknown additive fields
+  preserved on round trip;
 - identifier and reference integrity (`interactionId === traceId`,
   cross-reference resolution, uniqueness);
 - wall-clock and monotonic timing (ties resolved by `seq`, clock-basis
@@ -1012,7 +1189,9 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
 - deterministic event ordering (contiguous `seq`, duplicate and gap
   handling, completeness consistency);
 - JSON serialization and parsing round trips, including unknown-field
-  preservation and retained-byte encoding;
+  preservation and retained-byte encoding: canonical RFC 4648 §4 Base64
+  accepted; URL-safe, unpadded, and whitespace-containing variants rejected;
+  hashes computed over decoded bytes, never the encoded text;
 - retained/native content-hash selection (`contentHash` vs
   `nativeContentHash`, hash-path selection from artifact fields);
 - valid and invalid RFC 6838 content types (including
@@ -1020,8 +1199,9 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
 - completeness and unavailable-value handling (missing/unknown/not_applicable
   never carry content, fidelity, or hashes);
 - canonical → legacy `Trace` projection and its report;
-- legacy `Trace` → canonical inverse projection (derived `seq` labeled
-  `inferred`);
+- legacy `Trace` → canonical inverse projection (derived `seq` from legacy
+  array order, contiguous from 0, labeled `inferred`; missing or duplicate
+  timestamps never reorder; absent/invalid array → `unavailable`);
 - canonical → `AgentRun` projection (token fields `unavailable` until the
   measurement layer exists);
 - explicitly lossy projections (report entries for `partial`/`unavailable`);
@@ -1035,8 +1215,8 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
 
 Tests MUST use fixed fixtures and injected, controlled inputs. They MUST NOT
 require live providers, network access, current prices, nondeterministic
-clocks, or random identifiers — clocks and id generators are injected and
-controlled so tests are deterministic. The nine normative examples in
+clocks, or random identifiers — clocks are injected and ids are
+caller-supplied so tests are deterministic. The nine normative examples in
 `docs/evidence-model.md` are the initial fixture corpus; negative controls
 mirror the existing validator self-tests (§8 slice 2).
 
@@ -1104,14 +1284,16 @@ Narrow and explicit:
   types are no guarantee against untrusted input; the §5 validation contract
   is mandatory.
 - **Silently accepting invalid data** — rejected: unknown discriminants and
-  unsupported versions are refused; invalid evidence is never defaulted or
-  coerced (§5.3–§5.5).
+  unknown or breaking MAJOR versions are refused with structured errors;
+  compatible additive revisions are accepted per §5.3; invalid evidence is
+  never defaulted or coerced (§5.3–§5.5).
 - **Making projections nondeterministic** — rejected: projections are pure,
   versioned functions with explicit loss reports (§6.5).
 - **Treating Graphify or MCP concepts as core evidence dependencies** —
   rejected: Graphify/MCP activity appears only through the canonical
   provider-neutral event kinds and capture surfaces (Spec 013 §3.1, §5);
-  instrumentation belongs to later specs.
+  defining those record kinds is type-system vocabulary, not instrumentation
+  (§2.2), and instrumentation belongs to later specs.
 - **Introducing optimization behavior into the observation path** — rejected:
   the evidence core is observability-only; optimization is explicit
   experimental condition or optional analysis, never core (foundation
@@ -1120,45 +1302,33 @@ Narrow and explicit:
 ## 12. Open questions and decision discipline
 
 Decisions necessary for the first slice that the repository can already
-settle are settled in this spec (§1–§8). Genuinely unresolved questions are
-stated precisely below, with why they cannot be settled now and where they
-will be resolved:
+settle are settled in this spec (§1–§8). Four questions previously reported
+as open are now **resolved in this Draft** and removed from this section:
+identifier generation (§3.2 — caller-supplied ids; generation is outside the
+evidence core), retained-byte serialization (§5.7 — RFC 4648 §4 Base64,
+padded, canonical), trace/span status vocabulary (§4.7 — `completed` |
+`failed` | `cancelled` | `unknown`), and inverse-projection `seq` derivation
+(§6.6 — legacy array order, contiguous from 0, `inferred`). No implementation
+decision essential to the first slice remains delegated to implementers or
+fixture authors.
 
-1. **Identifier generation scheme.** Spec 013 §2.1 recommends ULID-style
-   trace ids but does not fix a scheme for `spanId`, `eventId`, and
-   `artifactId`. The repository has no existing id utility. Until resolved:
-   primitives accept opaque unique strings; ids are never ordering keys.
-   **Resolved by:** the slice-1 implementation experiment, choosing between
-   ULID, UUIDv7, and capture-surface-owned prefixed counters, with the
-   criteria: uniqueness within a trace, opacity, capture-time assignment,
-   immutability, and ordering independence. Not a correctness blocker for
-   the spec.
-2. **JSON representation of retained `byte_faithful` bytes.** Spec 013
-   requires preserving the exact native byte sequence but does not pin its
-   JSON form. This spec proposes base64 with `nativeEncoding` declared
-   (§5.7). **Resolved by:** the slice-2 fixture contract, which pins the
-   exact encoding and round-trip tests.
-3. **Trace/span status vocabulary.** The normative examples use
-   `"completed"`; Spec 013 defines `error` and `cancelled` events but no
-   closed trace-status vocabulary. This spec proposes the initial closed set
-   `completed | failed | cancelled` (§2.2.12). **Resolved by:** the
-   lifecycle/federation spec if a reviewer finds the proposed set wrong;
-   until then the proposed set is the contract for the slice.
-4. **Legacy `AgentRun` → canonical evidence direction.** Spec 013 §11.2
-   requires only the trace inverse; the offline-run-file direction is
-   deferred here (§6.1). **Resolved by:** the collector/adapter-ingress
-   spec, which will decide whether legacy offline run files are parsed into
-   evidence or remain legacy inputs.
-5. **Derived `seq` for legacy traces in the inverse projection.** A legacy
-   `Trace` has no `seq`; the inverse projection must order its events.
-   This spec requires the derivation to be labeled `inferred` and recorded in
-   the projection report (§6.3) but does not fix the derivation rule (event
-   timestamp order with documented tie handling is the candidate).
-   **Resolved by:** the projection implementation slice (slice 3), which
-   must fix and test the rule; the report makes the choice auditable.
+One question genuinely remains open, stated precisely with why it cannot be
+settled now and where it will be resolved:
 
-These are the only open questions. There are no broad "TBD" entries: every
-other decision needed to implement the first slice is specified above.
+1. **Legacy `AgentRun` → canonical evidence direction.** Spec 013 §11.2
+   requires only the legacy `Trace` → canonical inverse projection; it does
+   not require parsing legacy offline run files into evidence. The direction
+   is not needed for the first implementation increment because no
+   collector, adapter, or ingress converts to canonical evidence in Spec
+   014's slices (§8), and legacy offline run consumers are served by the
+   evidence → `AgentRun` view (§6.1). **Resolved by:** the later
+   collector/adapter-ingress specification, which will decide whether
+   legacy offline run files are parsed into evidence or remain legacy
+   inputs. This deferral does not weaken the required legacy `Trace` →
+   canonical inverse projection (§6.3, §6.6).
+
+This is the only open question. There are no broad "TBD" entries: every other
+decision needed to implement the first slice is specified above.
 
 ## 13. Acceptance criteria
 
@@ -1173,9 +1343,11 @@ other decision needed to implement the first slice is specified above.
 - [ ] The TypeScript type contract and the runtime-validation contract agree,
   and both are consistent with `scripts/validate-evidence-examples.mjs`
   (§5.1).
-- [ ] Unknown additive fields are preserved on round trips; unknown
-  discriminants and unsupported schema versions are refused; no silent
-  coercion (§5.3–§5.5).
+- [ ] The compatible-version policy is explicit and consistent with Spec
+  013 §10: compatible additive minor/patch revisions within a supported
+  MAJOR are accepted; unknown or breaking MAJOR versions and unknown
+  discriminants are refused with structured errors; unknown additive
+  fields are preserved on round trips; no silent coercion (§5.3–§5.5).
 - [ ] Compatibility projections are specified in both required directions:
   canonical evidence → legacy `Trace`/`TraceEvent` and → legacy `AgentRun`
   views, plus the Spec 013-required inverse (legacy `Trace` → canonical
@@ -1191,25 +1363,48 @@ other decision needed to implement the first slice is specified above.
   evidence core contains no measurements, interpretations, cost, smells,
   recommendations, or optimization logic (§2.2–§2.3).
 - [ ] Implementation slices are independently testable and mergeable, with
-  no flag-day migration and no storage/capture migration in any slice (§8).
+  no flag-day migration and no storage, capture, collector, adapter, or
+  ingress migration in any slice; Spec 014 implementation ends at the
+  package, validators/fixtures, projections, and parity verification (§8).
 - [ ] Evidence remains separate from measurements and interpretations
   (§2.1); derived and administrative records never merge into payload
   status.
-- [ ] No storage, collector, Graphify, MCP, or dashboard implementation is
-  included in this spec's scope or planned slices (§8.2 non-goals).
+- [ ] No storage, collector, adapter, ingress, Graphify, MCP/tool
+  capture-and-instrumentation, or dashboard implementation is included in
+  this spec's scope or planned slices; provider-neutral MCP/tool record
+  kinds are type-system vocabulary only (§2.2, §8).
 - [ ] Documentation and index references are consistent: the spec index
   lists Spec 014 as Draft, and the roadmap and glossary reference it
   without claiming implementation exists.
+- [ ] The retained-byte serialization contract is pinned: RFC 4648 §4
+  standard-alphabet Base64, padding required, canonical emission,
+  noncanonical forms rejected, hashes over decoded bytes (§5.7).
+- [ ] Identifier responsibility is explicit: ids are caller-supplied opaque
+  values; generation is outside the evidence core; validators enforce
+  syntax, uniqueness, and reference integrity; projections preserve valid
+  legacy ids and report synthesized ids as `inferred` (§3.2).
+- [ ] The trace/span status vocabulary is defined and validated as
+  evidence-scoped lifecycle state — `completed` | `failed` | `cancelled` |
+  `unknown` — never a quality judgment; absence of an observed error is not
+  success; `unknown` represents unobservable completion (§4.7).
+- [ ] The inverse projection's `seq` derivation is deterministic: legacy
+  array order is primary, contiguous from 0, timestamps never reorder, and
+  inferred/lossy status is recorded in the projection report (§6.6).
+- [ ] Completeness is classified per Spec 013 as a derived record;
+  `deriveCompleteness` is pure, deterministic, and free of measurement,
+  cost, interpretation, or optimization logic (§2.1, §2.2.9).
 
 ## Tests
 
 Spec 014 is documentation-only; no production code changes are made by this
 spec. The test plan in §9 is the contract for the future implementation
 PRs, mapped to the acceptance criteria above (valid construction, malformed
-records, all union variants, unknown discriminants/versions, reference
-integrity, timing, deterministic ordering, serialization, hash selection,
-media types, completeness, both projection directions, explicit loss,
-projection determinism, no fabrication, and package-boundary checks).
+records, all union variants, version-compatibility acceptance and
+unknown-discriminant/breaking-version refusal, reference integrity, timing,
+deterministic ordering, serialization and retained-byte Base64 canonicality,
+hash selection, media types, completeness, both projection directions and the
+deterministic inverse `seq` rule, explicit loss, projection determinism, no
+fabrication, and package-boundary checks).
 
 ## References
 
