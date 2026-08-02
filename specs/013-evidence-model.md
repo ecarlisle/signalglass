@@ -472,9 +472,13 @@ A context artifact is a referenceable unit of context:
   forbidden when no retained content exists (`missing`, `unknown`,
   `not_applicable`). It describes the retained representation, never
   discarded originals;
-- `contentType` — the media type / format of the retained representation (an
-  IANA media type such as `application/json` or `text/markdown`, or an
-  equivalent registry name). Required whenever retained content exists or a
+- `contentType` — the media type of the retained representation, in RFC 6838
+  type/subtype syntax: standard types such as `application/json`,
+  `application/xml`, `text/markdown`, and `text/html`; vendor-specific types
+  such as `application/vnd.example+json`; and structured-suffix types such as
+  `application/example+json`. The same syntax covers text and binary
+  representations; there is no separate content-type registry. Required
+  whenever retained content exists or a
   `contentHash`/`contentHashUnavailableReason` is present; it is the
   artifact-local input that selects the hashing path;
 - `contentHash` — top-level artifact field; a deterministic SHA-256 digest
@@ -518,12 +522,20 @@ context:
 
 | Retained representation | Hashing path | `contentHash` |
 |---|---|---|
-| `byte_faithful` bytes | Hash the retained byte sequence directly: the exact bytes observed by the capture surface, without decoding, normalization, canonicalization, or character-set conversion. Raw bytes are hashed as bytes; never treated as UTF-8 text. | **Required** (when `captured`) / MAY (when `redacted`/`truncated`, hashing only the retained representation) |
+| `byte_faithful` bytes | Hash the retained byte sequence directly, without decoding, normalization, canonicalization, or character-set conversion. Raw bytes are hashed as bytes; never treated as UTF-8 text. | **Required** (when `captured`) / MAY (when `redacted`/`truncated`, hashing only the retained representation) |
 | `structurally_faithful` JSON | Canonicalize the retained logical value with RFC 8785 (JCS) (the schema-fixed default), encode the canonicalized value as UTF-8, and hash those bytes. | **Required** (when `captured`) / MAY (when `redacted`/`truncated`) |
 | `structurally_faithful` other structured format with a supported canonicalizer | Canonicalize with the declared `contentCanonicalizer: { name, version }`, encoded as that canonicalizer's specified output encoding. | **Required** (when `captured`) / MAY (when `redacted`/`truncated`) |
 | `structurally_faithful` structured content with **no** supported deterministic canonicalizer | No canonical form exists; reproducibility cannot be claimed without declaring every input needed to reproduce the bytes. | **Forbidden.** Declare `contentHashUnavailableReason: "unsupported_canonicalizer"` instead. |
 | `missing` / `unknown` / `not_applicable` | No retained content exists to hash. | **Forbidden.** `contentFidelity` and `contentHashUnavailableReason` are forbidden too; claiming otherwise would imply content existed. |
 | `redacted` / `truncated` | MAY hash only the retained representation (what remains after removal/masking, or the retained prefix) per the selected path above. | MAY (see rows above); never implies access to discarded content. |
+
+- **`byte_faithful` fidelity is to the retained artifact representation.**
+  For captured, untransformed content, the retained bytes may equal the
+  exact bytes observed at the capture boundary; for `redacted` or
+  `truncated` content, the claim applies only to the retained byte sequence
+  and never to discarded bytes. Only `nativeContentHash` (§3.2) represents
+  the exact native bytes observed at the capture boundary before any
+  transformation.
 
 - **Hash input** — only retained payload content is hashed; metadata and
   envelope fields are excluded unless they are explicitly part of the

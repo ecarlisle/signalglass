@@ -611,6 +611,8 @@ function selfTest() {
       { artifactId: "art-st-bf", kind: "file", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "byte_faithful", contentType: "text/markdown", contentHash: `sha256:${'cd'.repeat(32)}`, payloadRef: { excerpt: "x" } }],
     ["valid structurally_faithful JSON with a hash",
       { artifactId: "art-st-jsonok", kind: "fragment", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "application/json", contentCanonicalizer: { name: "rfc8785-jcs", version: "1.0.0" }, contentHash: `sha256:${'cd'.repeat(32)}`, payloadRef: { excerpt: "{}" } }],
+    ["valid vendor/structured-suffix media type (application/vnd.example+json)",
+      { artifactId: "art-st-vendorjson", kind: "fragment", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "application/vnd.example+json", contentCanonicalizer: { name: "rfc8785-jcs", version: "1.0.0" }, contentHash: `sha256:${'cd'.repeat(32)}`, payloadRef: { excerpt: "{}" } }],
     ["valid non-JSON structured content with a declared canonicalizer",
       { artifactId: "art-st-xmlok", kind: "tool_result", evidenceStatus: "captured", traceId: "t", evidenceSchemaVersion: "1.0.0", contentFidelity: "structurally_faithful", contentType: "application/xml", contentCanonicalizer: { name: "xml-c14n-1.1", version: "1.0.0" }, contentHash: `sha256:${'cd'.repeat(32)}`, payloadRef: { excerpt: "<x/>" } }],
     ["valid unsupported-canonicalizer unavailability (no contentHash required)",
