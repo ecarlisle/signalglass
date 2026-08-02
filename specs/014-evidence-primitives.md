@@ -265,7 +265,8 @@ defining a provider-neutral record kind does not implement MCP observation.
   interaction (Spec 013 §1.2): one interaction, one trace.
 - **Fields:** `interactionId`, `traceId` (equal; invariant), `evidenceSchemaVersion`,
   `captureProfile: { name, version }`, `captureSurface`, `observationBoundary`,
-  `startedAt`, `finishedAt`, `status`, `conditions?`, `spans[]`, `events[]`,
+  `startedAt`, `finishedAt?` (present iff a terminal state was observed, §4.7),
+  `status`, `conditions?`, `spans[]`, `events[]`,
   `completeness?` (derived; MAY be serialized, MUST be consistent when present).
 - **Discriminant/id rules:** `traceId` is the reference identifier; nested
   records reference the trace by `traceId` only. `interactionId === traceId`
@@ -278,8 +279,8 @@ defining a provider-neutral record kind does not implement MCP observation.
 - **Serialization:** JSON object; both `interactionId` and `traceId`
   serialized at top level (never inferred from each other).
 - **Validation:** identity equality, version presence, boundary vocabulary,
-  status vocabulary, seq/span/event cross-checks, completeness consistency
-  (§4, §5).
+  status vocabulary and lifecycle presence rules (§4.7), seq/span/event
+  cross-checks, completeness consistency (§4, §5).
 - **Relationships:** parent of all spans/events; referenced by artifacts,
   measurements, and interpretations by `traceId`.
 - **Slice:** in (first).
@@ -292,7 +293,8 @@ defining a provider-neutral record kind does not implement MCP observation.
   context assembly (Spec 013 §1.1, §3.1). Content lives on events, never on
   spans.
 - **Fields:** `spanId`, `kind`, `name`, `parentSpanId` (null for root),
-  `startSeq`, `endSeq`, `startedAt`, `finishedAt`, `durationMs?`,
+  `startSeq`, `endSeq?` (present iff a terminal state was observed, §4.7),
+  `startedAt`, `finishedAt?` (same rule as `endSeq`, §4.7), `durationMs?`,
   `status`, `participants?`.
 - **Discriminant/id rules:** `kind` ∈ {`model`, `tool`, `mcp`, `retrieval`,
   `context_provider`, `context_assembly`}; `spanId` opaque, unique within
@@ -302,8 +304,12 @@ defining a provider-neutral record kind does not implement MCP observation.
 - **Serialization:** JSON object; `null` for structural absence
   (`parentSpanId`).
 - **Validation:** span ids unique; parent ids resolve or are null; `startSeq`
-  ≤ `endSeq`; `span_start`/`span_end` events exist and bound the range;
-  `durationMs` present only with a declared clock basis.
+  present (a span exists because its `span_start` was observed) and matches
+  the `span_start` event's `seq`; `endSeq` present iff a terminal state was
+  observed and equals the cited terminal event's `seq` (§4.7); `endSeq` ≥
+  `startSeq` when present; `span_end` required only for `completed` spans —
+  never required and never fabricated for `failed`, `cancelled`, or `unknown`
+  spans (§4.7); `durationMs` present only with a declared clock basis.
 - **Relationships:** parent→child hierarchy; aggregates events via `spanId`.
 - **Slice:** in.
 
@@ -467,7 +473,9 @@ defining a provider-neutral record kind does not implement MCP observation.
   interpretation, and it must never become a general-purpose analysis layer.
 - **Responsibility:** a derived description of which evidence was captured,
   redacted, truncated, missing, or unknown, plus sequence gaps, duplicates,
-  and the boundary statement (Spec 013 §4.3). Never invents evidence.
+  and the boundary statement (Spec 013 §4.3). Never invents evidence;
+  unobserved lifecycle termination is reported (boundary statement /
+  explicit `missing` record) per §4.7, never fabricated.
 - **Fields:** `eventsByStatus: Record<EvidenceStatus, number>`, `seqGaps[]`,
   `duplicatesDetected[]`, `boundaryStatement`.
 - **Discriminant/id rules:** none.
@@ -726,13 +734,64 @@ never a quality judgment.
   could not be observed (for example capture ended before the terminal event,
   or the boundary could not observe completion); `unknown` is an honest
   representation of unavailability and MUST NOT be defaulted to `completed`.
-- **Rules.** The status MUST be declared by the capture surface at capture
-  and MUST be coherent with the observed lifecycle events (the validator
-  checks this). Validators MUST NOT infer status from incomplete evidence: a
-  trace with no observed terminal event and no observed error/cancellation
-  cannot claim `completed` — its status is `unknown` or the trace is
-  incomplete (§4.4). Status MUST NOT be derived from wall-clock absence, and
-  `completed` never implies outcome quality.
+- **Terminal-state availability contract.** Finish fields are present exactly
+  when a terminal state was observed — never fabricated. The internal type
+  MAY represent the terminal state as this discriminated union, and the
+  serialized record MUST follow the same presence rules:
+
+```ts
+type TraceTerminalState =
+  | { status: "completed"; finishedAt: string }   // interaction_end observed
+  | { status: "failed"; finishedAt: string }      // terminal error event observed
+  | { status: "cancelled"; finishedAt: string }   // cancelled event observed
+  | { status: "unknown" };                         // termination not observed
+
+type SpanTerminalState =
+  | { status: "completed"; endSeq: number; finishedAt: string }  // span_end observed
+  | { status: "failed"; endSeq: number; finishedAt: string }     // terminal error observed
+  | { status: "cancelled"; endSeq: number; finishedAt: string }  // cancelled observed
+  | { status: "unknown" };                                        // termination not observed
+```
+
+  Presence rules: `finishedAt` (trace) is present iff the trace status is
+  `completed`, `failed`, or `cancelled`, and is absent (not serialized, never
+  `null`) when status is `unknown`; span `endSeq` and `finishedAt` follow the
+  same rule. A present `finishedAt`/`endSeq` MUST be supported by observed
+  evidence (§5.4): for `completed` it equals the `interaction_end`/`span_end`
+  event's `capturedAt`/`seq`; for `failed` and `cancelled` it equals the
+  terminal `error`/`cancelled` event's `capturedAt`/`seq`. No `null` sentinel
+  is used for unobserved finish fields (Spec 013 §2.1 reserves `null` for
+  structural absence of parentage/attachment, not for lifecycle fields).
+- **Validation rules.** The status MUST be declared by the capture surface
+  at capture and MUST be coherent with the observed lifecycle events (the
+  validator checks this).
+  - `completed` (trace/span) requires the observed normal terminal event
+    (`interaction_end`/`span_end`) as the record's final observed event;
+    validators MUST NOT accept `completed` without it.
+  - `failed` requires an observed `error` event declaring the failure as the
+    record's final observed event; `cancelled` requires an observed
+    `cancelled` event as the final observed event. Validators MUST NOT
+    fabricate a later normal end event (`interaction_end`/`span_end`) for a
+    `failed` or `cancelled` record, and MUST NOT require one. Mid-lifecycle
+    `error`/`cancelled` events do not by themselves set the status — the
+    record's final observed event does (a tool error followed by
+    `interaction_end` is a `completed` trace).
+  - `unknown` requires no terminal event; validators MUST NOT require
+    `interaction_end`/`span_end` when the lifecycle was not observed to
+    finish.
+  - Validators MUST NOT infer `completed`/`failed`/`cancelled` from
+    incomplete evidence, and wall-clock time is never used to invent
+    lifecycle completion: a trace with no observed terminal event cannot
+    become `completed` because time passed.
+  - A serialized record whose events contradict its declared status (for
+    example `completed` without `interaction_end`, or a present
+    `finishedAt`/`endSeq` not equal to the cited terminal event's
+    `capturedAt`/`seq`) is rejected.
+- **Completeness.** Unobserved termination is missing lifecycle evidence and
+  MUST be reported: the completeness record's boundary statement (or an
+  explicit `missing` record) discloses that termination was not observed
+  (Spec 013 §4.3); it is never inferred from sequence position or clock
+  time.
 
 ## 5. TypeScript and runtime-validation contract
 
@@ -780,8 +839,16 @@ type ParseResult<T> =
   fields in newer records without failing, and MUST preserve them on
   read-modify-write round trips. `parseEvidenceTrace` retains unknown fields
   (in an explicit passthrough slot on the internal record) and
-  `serializeEvidence` re-emits them verbatim. "Ignore unknown fields" never
-  permits discarding them when evidence is re-serialized.
+  `serializeEvidence` re-emits them at their original structural paths with
+  equivalent JSON values — never discarded and never interpreted as known
+  evidence. "Ignore unknown fields" never permits discarding them when
+  evidence is re-serialized. Ordinary unknown-field preservation does NOT
+  claim lexical JSON byte fidelity: after JSON parsing, whitespace, number
+  spelling (for example `1.0` vs `1`), escape spelling, and object-key
+  formatting are not preserved — only the parsed JSON values are. If exact
+  raw bytes must be retained, that is the byte-fidelity contract
+  (`byte_faithful` retained representation, §5.7), which ordinary
+  unknown-field preservation never implies.
 - **Unknown discriminant values** (an event `kind`, artifact `kind`, locator
   `type`, or fidelity value not in the closed vocabulary): a validation
   **error**, because the record's semantics cannot be safely interpreted.
@@ -828,7 +895,17 @@ type ParseResult<T> =
 - **Timestamps:** ISO 8601 UTC with millisecond precision; ties allowed,
   resolved by `seq`.
 - **Sequence:** non-negative integers; contiguous from 0; no duplicates;
-  span `startSeq`/`endSeq` consistent with `span_start`/`span_end` events.
+  span `startSeq`/`endSeq` consistent with span lifecycle events per §4.7
+  (`startSeq` required and matched to `span_start`; `endSeq` present only
+  when a terminal state was observed and equal to the cited terminal event's
+  `seq`).
+- **Lifecycle coherence:** status-driven presence rules (§4.7) — `completed`
+  requires the observed `interaction_end`/`span_end` as the record's final
+  observed event; `failed`/`cancelled` require their observed
+  `error`/`cancelled` evidence as the final observed event and never
+  fabricate a normal end event; `unknown` requires no terminal event; present
+  `finishedAt`/`endSeq` equal the cited terminal event's `capturedAt`/`seq`;
+  wall-clock absence never upgrades `unknown`.
 - **Hashes:** `sha256:` followed by exactly 64 lowercase hexadecimal
   characters.
 - **Media types:** RFC 6838 type/subtype restricted-name syntax — the same
@@ -859,13 +936,14 @@ type ParseResult<T> =
 ### 5.6 Normalized versus preserved values
 
 Parsing returns the canonicalized internal representation **and** preserves
-everything that must survive verbatim:
+everything that must survive round trips at the value level:
 
 - Normalized: vocabulary values, timestamps, identifiers, envelopes'
   normalized common fields.
 - Preserved: `providerNative` payloads at their declared fidelity, retained
   byte sequences (`byte_faithful`) without decoding or transformation, and
-  unknown additive fields (passthrough, §5.3).
+  unknown additive fields as parsed JSON values at their original structural
+  paths (passthrough, §5.3 — value-level preservation, never lexical bytes).
 - The two are explicit: normalization never rewrites native payloads, and
   preserved fields never bypass validation of the fields the contract owns.
 
@@ -876,13 +954,20 @@ everything that must survive verbatim:
 - **Retained-byte representation (`byte_faithful`) — pinned contract.**
   Retained byte payloads are represented in memory as `Uint8Array` and
   serialized in JSON as **Base64 per RFC 4648 §4**: the standard alphabet
-  (`A–Z`, `a–z`, `0–9`, `+`, `/`), **`=` padding required**, emitted as one
-  contiguous string with no whitespace or line breaks. The exact spelling of
-  the encoding name is `base64`. Emission is canonical: the single padded
-  standard-alphabet encoding. Validators reject noncanonical forms —
-  URL-safe alphabet (`-`/`_`), missing or incorrect padding, and embedded
-  whitespace or line breaks — and decoders MUST accept only the canonical
-  form (strictness keeps round trips lossless and deterministic); unpadded,
+  (`A–Z`, `a–z`, `0–9`, `+`, `/`), emitted as one contiguous string with no
+  whitespace or line breaks. The exact spelling of the encoding name is
+  `base64`. **Padding is exactly the canonical number of `=` characters RFC
+  4648 §4 requires for the encoded length** — zero, one, or two: an input
+  length divisible by 3 encodes with **zero** `=` characters, and a
+  canonical value whose data length requires no padding MUST NOT be rejected
+  for lacking `=`. Validators reject noncanonical forms: omitted required
+  padding, superfluous padding (more `=` than canonical), malformed padding
+  (for example `=` in a non-final position), URL-safe alphabet (`-`/`_`),
+  and embedded whitespace or line breaks. Canonicality is validated by
+  strict parsing or, equivalently, by decode-and-re-encode equivalence: a
+  value is canonical iff re-encoding the decoded bytes reproduces it exactly.
+  Decoders MUST accept only the canonical form (strictness keeps round trips
+  lossless and deterministic); unpadded-when-required, over-padded,
   URL-safe, or whitespace-containing variants are never accepted.
   `nativeEncoding` records the observed bytes' original character encoding
   (for example `utf-8`), a field separate from the JSON transport encoding.
@@ -895,8 +980,9 @@ everything that must survive verbatim:
   canonicalization exists only where Spec 013 requires it (content hashing,
   §4.5). The serialized form is self-describing (schema version present) and
   MUST be interpretable without the current application build (Spec 013 §10).
-- Serialization preserves unknown additive fields (§5.3) and does not
-  reorder or reformat retained content.
+- Serialization preserves unknown additive fields as parsed values (§5.3,
+  value-level, never lexical bytes) and does not reorder or reformat
+  retained native content.
 
 ### 5.8 Unavailable or incomplete evidence
 
@@ -957,23 +1043,33 @@ type ProjectionReport = {
   }>;
 };
 
-type EvidenceToLegacyTrace = (evidence: EvidenceTrace) => {
-  view: LegacyTraceView;                     // v0.x Trace/TraceEvent shape
-  report: ProjectionReport;
+type ProjectionIssue = {
+  path: string;                              // input path, e.g. "events"
+  code: string;                              // stable machine code, e.g. "missing_event_collection"
+  message: string;                           // human-readable; MUST NOT echo payload values
 };
-type EvidenceToAgentRun = (evidence: EvidenceTrace) => {
-  view: AgentRunView;                        // legacy AgentRun shape
-  report: ProjectionReport;
-};
-type LegacyTraceToEvidence = (trace: LegacyTrace) => {
-  view: EvidenceTrace;                       // canonical shape
-  report: ProjectionReport;
-};
+
+type ProjectionResult<T> =
+  | { ok: true; view: T; report: ProjectionReport }
+  | { ok: false; report: ProjectionReport; issues: ProjectionIssue[] };
+
+type EvidenceToLegacyTrace = (evidence: EvidenceTrace) => ProjectionResult<LegacyTraceView>;
+type EvidenceToAgentRun = (evidence: EvidenceTrace) => ProjectionResult<AgentRunView>;
+type LegacyTraceToEvidence = (trace: LegacyTrace) => ProjectionResult<EvidenceTrace>;
 ```
 
-- Projections return an explicit result (`view` + `report`); they never
-  throw on lossy mappings and never silently drop information without a
-  report entry.
+- Projections return an explicit `ProjectionResult` and never throw on
+  expected invalid or lossy input. Three outcomes are distinguished:
+  **successful exact projection** (`ok: true`, all mappings `exact`),
+  **successful lossy or partial projection** (`ok: true` with
+  `partial`/`inferred`/`unavailable` report entries — loss from otherwise
+  valid input always returns a successful view, never a failure), and
+  **failure** (`ok: false` with structured `ProjectionIssue[]`) when a valid
+  target record cannot be constructed — for example the inverse projection
+  cannot establish a canonical sequence from an absent, non-array, or
+  otherwise invalid legacy `events` collection (§6.6). A projection never
+  emits an invalid `EvidenceTrace` (or legacy view): every `ok: true` view
+  satisfies its target contract's invariants.
 - Callers distinguish **exact**, **partial**, **inferred**, and
   **unavailable** mappings from the report. `partial` means a field was
   mapped with documented loss; `inferred` means the projection derived a
@@ -1060,16 +1156,21 @@ The deterministic rule for deriving canonical `seq` values from legacy
    order, missing, or duplicated. Missing or duplicate timestamps never
    change `seq`; they are reported as `partial`/`unavailable` entries for
    the timestamp field in the projection report.
-4. **Unavailable legacy ordering.** If the legacy `events` array is absent or
-   is not an ordered array (for example an empty or invalid shape), the
-   projection MUST report `unavailable` for the derived sequence and MUST
-   NOT synthesize an order — the view is produced with the report entry, or
-   the projection returns an explicit failure result; a guessed order is
-   never produced.
-5. **Inferred, never observed.** The derived `seq` values are recorded as
+4. **Empty arrays are ordered.** An empty legacy `events` array is a valid
+   ordered collection: it requires zero `seq` assignments (contiguity from 0
+   holds vacuously) and yields a canonical trace whose lifecycle is
+   `unknown` per §4.7 — a valid but incomplete trace whose completeness
+   record reports that no lifecycle events were observed.
+5. **Unavailable legacy ordering.** Only an absent, non-array, or otherwise
+   invalid event collection (for example `events: null` or a non-array
+   shape) lacks usable array ordering. The projection then MUST return an
+   explicit failure (`ok: false` with a structured issue, §6.2) and MUST NOT
+   synthesize an order — a guessed order or a fabricated view is never
+   produced.
+6. **Inferred, never observed.** The derived `seq` values are recorded as
    `inferred` in the projection report; the projection MUST NOT claim the
    sequence was assigned at observation time.
-6. **Deterministic and versioned.** The rule is pure and deterministic
+7. **Deterministic and versioned.** The rule is pure and deterministic
    (identical input + identical projection version → identical output,
    §6.5); the projection version records the rule version, and any change
    to the rule bumps the projection version.
@@ -1134,9 +1235,11 @@ projection parity and loss verification — nothing more.
    unknown-discriminant cases) mirroring the self-tests in
    `scripts/validate-evidence-examples.mjs`;
    pin the retained-byte Base64 serialization contract (§5.7) with
-   round-trip fixtures (canonical acceptance; URL-safe/unpadded/whitespace
-   rejection; hashes over decoded bytes) and the version-compatibility cases
-   of §5.3 (compatible minor/patch accepted; unknown MAJOR refused).
+   round-trip fixtures (canonical acceptance including zero-padding
+   encodings; omitted/superfluous/malformed padding and URL-safe and
+   whitespace rejection; hashes over decoded bytes) and the
+   version-compatibility cases of §5.3 (compatible minor/patch accepted;
+   unknown MAJOR refused).
 3. **Compatibility projections beside legacy types.** Add
    `packages/core/src/evidenceProjections/` (canonical → legacy trace,
    canonical → `AgentRun` view, legacy trace → canonical) with projection
@@ -1188,10 +1291,19 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   declaration, no fabricated durations);
 - deterministic event ordering (contiguous `seq`, duplicate and gap
   handling, completeness consistency);
+- incomplete lifecycle records: `unknown` traces and spans without
+  `finishedAt`, `endSeq`, or terminal events parse and validate; `completed`
+  without the observed `interaction_end`/`span_end` is rejected; `failed`/
+  `cancelled` require their observed evidence as the final observed event
+  and never fabricate a normal end event; present `finishedAt`/`endSeq`
+  match the cited terminal event; wall-clock absence never upgrades
+  `unknown`; completeness reports unobserved termination;
 - JSON serialization and parsing round trips, including unknown-field
-  preservation and retained-byte encoding: canonical RFC 4648 §4 Base64
-  accepted; URL-safe, unpadded, and whitespace-containing variants rejected;
-  hashes computed over decoded bytes, never the encoded text;
+  preservation at value level (lexical bytes not claimed) and retained-byte
+  encoding: canonical RFC 4648 §4 Base64 accepted including zero-padding
+  encodings; omitted required padding, superfluous or malformed padding,
+  URL-safe characters, and whitespace rejected; hashes computed over
+  decoded bytes, never the encoded text;
 - retained/native content-hash selection (`contentHash` vs
   `nativeContentHash`, hash-path selection from artifact fields);
 - valid and invalid RFC 6838 content types (including
@@ -1204,6 +1316,11 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   timestamps never reorder; absent/invalid array → `unavailable`);
 - canonical → `AgentRun` projection (token fields `unavailable` until the
   measurement layer exists);
+- projection results: successful exact, successful lossy/partial (report
+  entries), and explicit failure (`ok: false`) for absent, non-array, or
+  invalid legacy event collections; an empty legacy `events` array succeeds
+  with zero `seq` assignments; no projection returns an invalid canonical
+  view and none throws on expected invalid or lossy input;
 - explicitly lossy projections (report entries for `partial`/`unavailable`);
 - projection determinism (same input + version → same view and report);
 - no fabrication of unavailable evidence (projections never invent content or
@@ -1347,14 +1464,18 @@ decision needed to implement the first slice is specified above.
   013 §10: compatible additive minor/patch revisions within a supported
   MAJOR are accepted; unknown or breaking MAJOR versions and unknown
   discriminants are refused with structured errors; unknown additive
-  fields are preserved on round trips; no silent coercion (§5.3–§5.5).
+  fields are preserved on round trips at equivalent JSON values (never
+  claimed as lexical byte preservation); no silent coercion (§5.3–§5.5).
 - [ ] Compatibility projections are specified in both required directions:
   canonical evidence → legacy `Trace`/`TraceEvent` and → legacy `AgentRun`
   views, plus the Spec 013-required inverse (legacy `Trace` → canonical
   evidence) (§6).
 - [ ] Projection loss and unavailable values are explicit through a
-  projection report (`exact`/`partial`/`inferred`/`unavailable`), and
-  projections never fabricate evidence (§6.2–§6.3).
+  projection report (`exact`/`partial`/`inferred`/`unavailable`),
+  projections never fabricate evidence, and projection results distinguish
+  successful exact, successful lossy/partial, and explicit failure
+  (`ok: false`) outcomes — a projection never returns an invalid canonical
+  view and never throws on expected invalid or lossy input (§6.2, §6.6).
 - [ ] Deterministic ordering and identity behavior is defined: `seq` is the
   only ordering key; ids are opaque, capture-time, and never
   ordering-significant; ties resolve by `seq`; monotonic durations declare a
@@ -1377,8 +1498,11 @@ decision needed to implement the first slice is specified above.
   lists Spec 014 as Draft, and the roadmap and glossary reference it
   without claiming implementation exists.
 - [ ] The retained-byte serialization contract is pinned: RFC 4648 §4
-  standard-alphabet Base64, padding required, canonical emission,
-  noncanonical forms rejected, hashes over decoded bytes (§5.7).
+  standard-alphabet Base64 with the canonical padding (zero, one, or two
+  `=` characters exactly as the encoded length requires), canonical
+  emission, noncanonical forms rejected (omitted/superfluous/malformed
+  padding, URL-safe characters, whitespace), hashes over decoded bytes
+  (§5.7).
 - [ ] Identifier responsibility is explicit: ids are caller-supplied opaque
   values; generation is outside the evidence core; validators enforce
   syntax, uniqueness, and reference integrity; projections preserve valid
@@ -1386,7 +1510,12 @@ decision needed to implement the first slice is specified above.
 - [ ] The trace/span status vocabulary is defined and validated as
   evidence-scoped lifecycle state — `completed` | `failed` | `cancelled` |
   `unknown` — never a quality judgment; absence of an observed error is not
-  success; `unknown` represents unobservable completion (§4.7).
+  success; incomplete records are representable: `unknown` traces/spans
+  carry no `finishedAt`/`endSeq`/terminal event, `completed` requires the
+  observed normal terminal event, `failed`/`cancelled` require their
+  observed evidence without fabricating a normal end event, and present
+  `finishedAt`/`endSeq` are supported by observed evidence (§2.2, §4.7,
+  §5.4).
 - [ ] The inverse projection's `seq` derivation is deterministic: legacy
   array order is primary, contiguous from 0, timestamps never reorder, and
   inferred/lossy status is recorded in the projection report (§6.6).
@@ -1401,10 +1530,11 @@ spec. The test plan in §9 is the contract for the future implementation
 PRs, mapped to the acceptance criteria above (valid construction, malformed
 records, all union variants, version-compatibility acceptance and
 unknown-discriminant/breaking-version refusal, reference integrity, timing,
-deterministic ordering, serialization and retained-byte Base64 canonicality,
-hash selection, media types, completeness, both projection directions and the
-deterministic inverse `seq` rule, explicit loss, projection determinism, no
-fabrication, and package-boundary checks).
+deterministic ordering, incomplete-lifecycle representation, serialization
+and retained-byte Base64 canonicality, hash selection, media types,
+completeness, both projection directions, the deterministic inverse `seq`
+rule, projection success/failure results, explicit loss, projection
+determinism, no fabrication, and package-boundary checks).
 
 ## References
 
