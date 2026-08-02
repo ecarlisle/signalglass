@@ -126,7 +126,7 @@ Rationale for a separate package rather than a module inside
   `@signalglass/evidence` as a dependency of `@signalglass/core` gives every
   consumer access without changing their imports.
 
-Compatibility projections (canonical ↔ legacy) live in `@signalglass/core`
+Compatibility projections (canonical → legacy `Trace`/`TraceEvent`, legacy `Trace`/`TraceEvent` → legacy `AgentRun`, canonical → legacy `AgentRun`) live in `@signalglass/core`
 as new modules (`packages/core/src/evidenceProjections/`), beside the legacy
 types they convert, not inside `@signalglass/evidence`. This keeps the
 evidence package pure and puts compatibility glue at the legacy layer where
@@ -1096,6 +1096,7 @@ type ProjectionReport = {
   sourceSchemaVersion: string;               // version of the input contract
   mappings: Array<{
     path: string;                            // input path, e.g. "events[3]"
+    stage: "evidence_to_legacy_trace" | "legacy_trace_to_agent_run"; // which projection produced this mapping
     outcome: "exact" | "partial" | "inferred" | "unavailable";
     reason: string;                          // why the mapping is not exact
   }>;
@@ -1103,6 +1104,7 @@ type ProjectionReport = {
 
 type ProjectionIssue = {
   path: string;                              // input path, e.g. "events"
+  stage: "evidence_to_legacy_trace" | "legacy_trace_to_agent_run";
   code: string;                              // stable machine code, e.g. "missing_event_collection"
   message: string;                           // human-readable; MUST NOT echo payload values
 };
@@ -1130,18 +1132,26 @@ type EvidenceToAgentRun = (evidence: EvidenceTrace) => ProjectionResult<AgentRun
 - Callers distinguish **exact**, **partial**, **inferred**, and
   **unavailable** mappings from the report. `partial` means a field was
   mapped with documented loss; `inferred` means the projection derived a
-  value that was not directly present (for example a token estimate
-  converted to an `estimated` measurement placeholder — never presented as
-  observed); `unavailable` means the target field cannot be populated and
-  the mapping is explicit.
+  value that was not directly present (for example a deterministically
+  synthesized legacy identifier reported as `inferred` and never presented
+  as canonical evidence); `unavailable` means the target field cannot be
+  populated and the mapping is explicit.
 - The `EvidenceToAgentRun` projection MAY be implemented as a direct function
   or as an explicit composition of `EvidenceToLegacyTrace` followed by
-  `LegacyTraceToAgentRun`. If composed, the resulting `ProjectionReport`
-  MUST concatenate the mappings from both stages (preserving order and
-  loss metadata) so that the composed report is indistinguishable from a
-  direct projection's report for the same input. Implementations MUST
-  document which approach is used and ensure semantic equivalence for all
-  representable `AgentRun` fields.
+  `LegacyTraceToAgentRun`. Composition failure behavior is deterministic:
+  - if `EvidenceToLegacyTrace` returns `ok: false`, the composed
+    `EvidenceToAgentRun` MUST return `ok: false` with the first stage's
+    report and issues, and MUST NOT invoke `LegacyTraceToAgentRun`;
+  - if `EvidenceToLegacyTrace` succeeds but `LegacyTraceToAgentRun`
+    returns `ok: false`, the composed `EvidenceToAgentRun` MUST return
+    `ok: false` with the concatenated mappings from the first stage and
+    the second stage's report and issues;
+  - a successful composition concatenates mappings from both stages in
+    stage order, each attributed with its `stage` field.
+  A direct `EvidenceToAgentRun` implementation MUST produce a report that
+  is semantically equivalent to this composed report (including
+  stage-attributed mappings and issues) for all representable `AgentRun`
+  fields.
 
 ### 6.3 Loss, missing, and unavailable values
 
@@ -1196,12 +1206,15 @@ type EvidenceToAgentRun = (evidence: EvidenceTrace) => ProjectionResult<AgentRun
   is implemented as a composition of `EvidenceToLegacyTrace` followed by
   `LegacyTraceToAgentRun`, the composed `ProjectionReport` MUST be
   constructed by concatenating the `mappings` arrays from both stages in
-  order (canonical→legacy Trace mappings first, then legacy Trace→AgentRun
-  mappings). The composed report's `projectionVersion` records the
+  order (canonical→legacy Trace mappings first with `stage: "evidence_to_legacy_trace"`,
+  then legacy Trace→AgentRun mappings with `stage: "legacy_trace_to_agent_run"`).
+  The composed report's `projectionVersion` records the
   `EvidenceToAgentRun` projection version; its `sourceSchemaVersion` records
-  the `EvidenceTrace` schema version. A direct `EvidenceToAgentRun`
+  the `EvidenceTrace` schema version. Any `issues` from a failed second stage
+  are included with their `stage` field. A direct `EvidenceToAgentRun`
   implementation MUST produce a report that is semantically equivalent to
-  this composed report for all representable `AgentRun` fields.
+  this composed report (including stage-attributed mappings and issues) for
+  all representable `AgentRun` fields.
 - Projections create **ephemeral views by default**: they are computed on
   demand and are not stored records. Persisting a projection (for caching,
   export, or redacted export) is a later storage/export concern and MUST
@@ -1344,9 +1357,10 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   then legacy Trace→`AgentRun` verified;
 - projection results: successful exact, successful lossy/partial (report
   entries), and explicit failure (`ok: false`) for absent, non-array, or
-  invalid legacy event collections; an empty legacy `events` array succeeds
-  with zero `seq` assignments; no projection returns an invalid canonical
-  view and none throws on expected invalid or lossy input;
+  invalid legacy event collections; an empty legacy `events` array in the
+  `LegacyTraceToAgentRun` projection yields an empty `AgentRun` view;
+  no projection returns an invalid canonical view and none throws on
+  expected invalid or lossy input;
 - projection report composition: composed `EvidenceToAgentRun` report
   concatenates mappings from both stages with correct ordering;
 - explicitly lossy projections (report entries for `partial`/`unavailable`);
@@ -1450,8 +1464,8 @@ Decisions necessary for the first slice that the repository can already
 settle are settled in this spec (§1–§8). Three questions previously reported
 as open are now **resolved in this Draft** and removed from this section:
 identifier generation (§3.2 — caller-supplied ids; generation is outside the
-evidence core), retained-byte serialization (§5.7 — RFC 4648 §4 Base64,
-padded, canonical), trace/span status vocabulary (§4.7 — `completed` |
+evidence core), retained-byte serialization (§5.7 — RFC 4648 §4 Base64
+with canonical padding), trace/span status vocabulary (§4.7 — `completed` |
 `failed` | `cancelled` | `unknown`). No implementation decision essential
 to the first slice remains delegated to implementers or fixture authors.
 
@@ -1544,9 +1558,11 @@ records, all union variants, version-compatibility acceptance and
 unknown-discriminant/breaking-version refusal, reference integrity, timing,
 deterministic ordering, incomplete-lifecycle representation, serialization
 and retained-byte Base64 canonicality, hash selection, media types,
-completeness, both projection directions, projection report composition,
-projection success/failure results, explicit loss, projection
-determinism, no fabrication, and package-boundary checks).
+completeness, canonical evidence → legacy `Trace`/`TraceEvent`, legacy
+`Trace`/`TraceEvent` → legacy `AgentRun`, canonical evidence → legacy
+`AgentRun`, projection report composition, projection success/failure
+results, explicit loss, projection determinism, no fabrication, and
+package-boundary checks).
 
 ## References
 
