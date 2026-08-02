@@ -8,12 +8,17 @@ SignalGlass follows SemVer and is currently pre-1.0. Minor versions represent mi
 
 ### Evidence foundation
 
-Ratify the architectural foundation (done in the realignment docs PR); write and accept the evidence-model specification: interactions, spans, events, capture profiles, and versioning.
+Ratify the architectural foundation (done in the realignment docs PR); write
+and accept the evidence-model specification (done — [Spec 013](../specs/013-evidence-model.md)
+is accepted): interactions, spans, events, capture profiles, and versioning.
+The next implementation spec, `spec/014-evidence-primitives`, will define the
+additive TypeScript evidence primitives and compatibility projections before
+any storage or capture migration.
 
 - Interaction/span/event model with span parentage (`parentSpanId`) and events attached to spans (`spanId`).
 - Evidence records carry an evidence-schema version; derived measurement records carry an algorithm/derivation version plus references to their inputs.
 - Capture profiles as separate **collection**, **persistence**, and **export** decisions. A metadata-only profile must not collect full payloads in the first place. A redacted profile may discard content at its declared capture boundary. Full-fidelity capture is explicit, appropriately protected, and never the universal default.
-- Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification and re-framed as projections.
+- Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification; to be re-framed as projections.
 
 ### Capture fidelity
 

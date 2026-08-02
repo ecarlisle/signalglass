@@ -39,7 +39,7 @@ SignalGlass adopts the following architectural decisions:
 
 5. **Optimization is optional experimental or analysis scope.** Prompt optimization and context transformation are explicit experimental conditions or optional analysis outputs that the user chooses to act on. They are never core behavior and never applied automatically.
 
-6. **The repository will be migrated incrementally, not replaced.** The current v0.x models (`Trace`/`TraceEvent`, `AgentRun`/`Turn`/`ContextBlock`) and their specifications remain accurate records of what exists. They are labeled as legacy/current-state contracts and are no longer authoritative for the target architecture. A later accepted evidence-model specification will formally supersede them. New evidence primitives are added beside the existing models without requiring a rewrite of the current runtime.
+6. **The repository will be migrated incrementally, not replaced.** The current v0.x models (`Trace`/`TraceEvent`, `AgentRun`/`Turn`/`ContextBlock`) and their specifications remain accurate records of what exists. They are labeled as legacy/current-state contracts and are no longer authoritative for the target architecture. The accepted evidence-model specification ([Spec 013](../../specs/013-evidence-model.md)) formally supersedes them. New evidence primitives will be added beside the existing models without requiring a rewrite of the current runtime.
 
 ## Consequences
 
