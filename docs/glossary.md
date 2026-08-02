@@ -36,8 +36,12 @@ The second SignalGlass mode. SignalGlass acts as an OpenAI-compatible ingress/pr
 ## Trace
 A live-captured session representing a complete provider exchange. A trace can be converted into an `AgentRun` for offline-style analysis.
 
+> **Legacy v0.x.** Pending supersession by [Spec 013 — Evidence model](../specs/013-evidence-model.md) upon acceptance: under the evidence model, a trace is the canonical serialized record of one interaction, carrying both `traceId` and `interactionId` at the top level (equal values; the equality is an invariant), with nested records referencing `traceId`.
+
 ## TraceEvent
 A single event in a trace. Current event types include `message`, `instruction`, `context`, `transformation`, `tool_call`, `tool_result`, `provider_request`, `provider_response`, `provider_error`, `inference`, and `egress_response`.
+
+> **Legacy v0.x.** Pending supersession by [Spec 013 — Evidence model](../specs/013-evidence-model.md) upon acceptance: under the evidence model, the canonical event vocabulary is the provider-neutral `Event` (kinds in Spec 013 §3.1) with `observationRole` and `evidenceStatus`; `TraceEvent` describes the current v0.x runtime vocabulary and is not changed by this spec's Draft status.
 
 ## Content phase
 A label describing the role of content in an exchange: said, sent, transformed, requested, observed, generated, or returned.
@@ -59,3 +63,42 @@ A planned UI surface that shows the raw blocks, turns, and token counts behind a
 
 ## Heuristic
 A rule-of-thumb detection that is useful but not certain. SignalGlass labels heuristics clearly and avoids presenting them as facts.
+
+## Evidence
+An observed, recorded fact about an AI interaction (a payload, event, or envelope), with an explicit evidence status and observation boundary. Evidence is the unit of truth for the target architecture; see [Spec 013](../specs/013-evidence-model.md).
+
+## Interaction
+The enclosing logical AI exchange or task execution being observed (one agent step, one user turn). The domain entity whose evidence is recorded; each interaction is serialized as exactly one trace.
+
+## Span
+A structured segment of an interaction with a lifecycle (start/end): a model request, tool call, MCP call, retrieval, context-provider call, or context assembly. Spans carry hierarchy, timing, and status; events carry content.
+
+## Event
+A discrete observed occurrence attached to a span or trace root, carrying content, evidence status, and a deterministic sequence position (`seq`).
+
+## Observation boundary
+The declared scope of what a capture surface could and could not observe, recorded with the evidence. Claims are scoped to the boundary where they were observed.
+
+## Evidence status
+The state of an evidence payload: `captured`, `redacted`, `truncated`, `missing`, `unknown`, or `not_applicable`. `inferred` appears only on derived records. Statuses are never collapsed into `null` or omitted fields.
+
+## Content hash
+A SHA-256 digest (`sha256:` + 64 lowercase hex) whose input is the retained payload representation, hashed as bytes. The hashing path is selected from the artifact's own serialized fields — `contentFidelity`, `contentType`, `contentCanonicalizer` — never from an enclosing event or envelope: `byte_faithful` bytes are hashed directly (never treated as UTF-8 text); `structurally_faithful` JSON is canonicalized with RFC 8785 (JCS) and hashed as UTF-8; other structured formats use their declared versioned canonicalizer and its output encoding; when retained content exists but no supported deterministic canonicalizer is available, no hash is emitted and `contentHashUnavailableReason: "unsupported_canonicalizer"` is recorded instead. It hashes only retained payload content, never metadata, and never implies possession of discarded original content.
+
+## Native content hash
+A SHA-256 digest (`sha256:` + 64 lowercase hex) over the exact native byte sequence observed by a capture surface, before decoding, normalization, envelope construction, or serialization. Recorded on an envelope; required when fidelity is `byte_faithful` and the payload is `captured` (`byte_faithful` itself requires `evidenceStatus: "captured"`), optional on `structurally_faithful` envelopes when a transparent surface observed and retained the exact bytes, and forbidden when the exact bytes were not observed or retained (missing/unknown/not applicable/redacted/truncated). Equal to `contentHash` only when the retained representation is the exact observed byte sequence with no transformation; otherwise the two digests differ.
+
+## Measurement record
+A deterministic derivation over evidence (token counts, latency, duration, cost) with algorithm/version, input references, and configuration versions. Cost is a derivation, not evidence.
+
+## Interpretation record
+A labeled, optional, versioned judgment derived from measurements and evidence (for example, a smell or recommendation), with a checkable claim and an explicitly subjective confidence.
+
+## Capture profile
+A named, versioned bundle of policy references and configuration settings that selects collection rules, persistence rules, and export defaults or permitted export profiles (redaction, retention, and overrides included). It is a convenience bundling; collection, persistence, and export remain three independent policies. See [capture profiles](capture-profiles.md).
+
+## Projection
+A derived representation of evidence (for example, a Run, a legacy `Trace`/`AgentRun` shape, or a redacted export). Projections never alter or overwrite authoritative evidence.
+
+## Trace completeness
+A derived description of which evidence was captured, redacted, truncated, missing, or unknown for an interaction, including `seq` gaps (assigned sequence positions absent from retained evidence), boundary statements, and explicit `missing` records. Never invents evidence.
