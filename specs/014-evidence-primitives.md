@@ -293,8 +293,9 @@ defining a provider-neutral record kind does not implement MCP observation.
   context assembly (Spec 013 §1.1, §3.1). Content lives on events, never on
   spans.
 - **Fields:** `spanId`, `kind`, `name`, `parentSpanId` (null for root),
-  `startSeq`, `endSeq?` (present iff a terminal state was observed, §4.7),
-  `startedAt`, `finishedAt?` (same rule as `endSeq`, §4.7), `durationMs?`,
+  `startSeq`, `endSeq?` (present only for `completed` spans, equals the
+  observed `span_end` event's `seq`, §4.7), `startedAt`, `finishedAt?`
+  (present iff a terminal state was observed, §4.7), `durationMs?`,
   `status`, `participants?`.
 - **Discriminant/id rules:** `kind` ∈ {`model`, `tool`, `mcp`, `retrieval`,
   `context_provider`, `context_assembly`}; `spanId` opaque, unique within
@@ -305,8 +306,8 @@ defining a provider-neutral record kind does not implement MCP observation.
   (`parentSpanId`).
 - **Validation:** span ids unique; parent ids resolve or are null; `startSeq`
   present (a span exists because its `span_start` was observed) and matches
-  the `span_start` event's `seq`; `endSeq` present iff a terminal state was
-  observed and equals the cited terminal event's `seq` (§4.7); `endSeq` ≥
+  the `span_start` event's `seq`; `endSeq` present only for `completed` spans
+  and equals the observed `span_end` event's `seq` (§4.7); `endSeq` ≥
   `startSeq` when present; `span_end` required only for `completed` spans —
   never required and never fabricated for `failed`, `cancelled`, or `unknown`
   spans (§4.7); `durationMs` present only with a declared clock basis.
@@ -736,8 +737,10 @@ never a quality judgment.
   representation of unavailability and MUST NOT be defaulted to `completed`.
 - **Terminal-state availability contract.** Finish fields are present exactly
   when a terminal state was observed — never fabricated. The internal type
-  MAY represent the terminal state as this discriminated union, and the
-  serialized record MUST follow the same presence rules:
+  MUST represent the terminal state as this discriminated union (or an
+  equivalent compile-time contract that makes invalid field/status
+  combinations unrepresentable), and the serialized record MUST follow the
+  same presence rules:
 
 ```ts
 type TraceTerminalState =
@@ -748,20 +751,25 @@ type TraceTerminalState =
 
 type SpanTerminalState =
   | { status: "completed"; endSeq: number; finishedAt: string }  // span_end observed
-  | { status: "failed"; endSeq: number; finishedAt: string }     // terminal error observed
-  | { status: "cancelled"; endSeq: number; finishedAt: string }  // cancelled observed
-  | { status: "unknown" };                                        // termination not observed
+  | { status: "failed"; finishedAt: string }                     // terminal error observed
+  | { status: "cancelled"; finishedAt: string }                  // cancelled observed
+  | { status: "unknown" };                                       // termination not observed
 ```
 
   Presence rules: `finishedAt` (trace) is present iff the trace status is
   `completed`, `failed`, or `cancelled`, and is absent (not serialized, never
-  `null`) when status is `unknown`; span `endSeq` and `finishedAt` follow the
-  same rule. A present `finishedAt`/`endSeq` MUST be supported by observed
-  evidence (§5.4): for `completed` it equals the `interaction_end`/`span_end`
-  event's `capturedAt`/`seq`; for `failed` and `cancelled` it equals the
-  terminal `error`/`cancelled` event's `capturedAt`/`seq`. No `null` sentinel
-  is used for unobserved finish fields (Spec 013 §2.1 reserves `null` for
-  structural absence of parentage/attachment, not for lifecycle fields).
+  `null`) when status is `unknown`; span `endSeq` is present only for
+  `completed` spans and equals the observed `span_end` event's `seq`; span
+  `finishedAt` is present iff the span status is `completed`, `failed`, or
+  `cancelled`, and is absent when status is `unknown`. A present
+  `finishedAt`/`endSeq` MUST be supported by observed evidence (§5.4): for
+  `completed` it equals the `interaction_end`/`span_end` event's
+  `capturedAt`/`seq`; for `failed` and `cancelled` spans it equals the
+  terminal `error`/`cancelled` event's `capturedAt` (no `endSeq`); for `failed`
+  and `cancelled` traces it equals the terminal `error`/`cancelled` event's
+  `capturedAt`. No `null` sentinel is used for unobserved finish fields (Spec
+  013 §2.1 reserves `null` for structural absence of parentage/attachment, not
+  for lifecycle fields).
 - **Validation rules.** The status MUST be declared by the capture surface
   at capture and MUST be coherent with the observed lifecycle events (the
   validator checks this).
@@ -787,6 +795,24 @@ type SpanTerminalState =
     example `completed` without `interaction_end`, or a present
     `finishedAt`/`endSeq` not equal to the cited terminal event's
     `capturedAt`/`seq`) is rejected.
+  - **Final observed event scope.**
+    - For a trace terminal state, the final observed event is the event with
+      the greatest canonical `seq` in the trace; the required terminal event
+      (`interaction_end` for `completed`, the terminal `error` for `failed`,
+      the terminal `cancelled` for `cancelled`) MUST be that event.
+    - For a span terminal state, the final observed event is the event with
+      the greatest canonical `seq` among events attached to that span
+      (`spanId` match); the required terminal event (`span_end` for
+      `completed`, the terminal `error` for `failed`, the terminal `cancelled`
+      for `cancelled`) MUST be that event.
+    - Later events belonging to unrelated spans must not invalidate a failed,
+      cancelled, or completed span.
+    - An `error` only terminates a span when it explicitly declares failure
+      of that span (its `actor` and payload claim that span). An `error` or
+      `cancelled` that does not claim the trace must not automatically
+      terminate the whole trace.
+    - Timestamps never determine which event is final; `seq` is the sole
+      authority.
 - **Completeness.** Unobserved termination is missing lifecycle evidence and
   MUST be reported: the completeness record's boundary statement (or an
   explicit `missing` record) discloses that termination was not observed
@@ -895,10 +921,9 @@ type ParseResult<T> =
 - **Timestamps:** ISO 8601 UTC with millisecond precision; ties allowed,
   resolved by `seq`.
 - **Sequence:** non-negative integers; contiguous from 0; no duplicates;
-  span `startSeq`/`endSeq` consistent with span lifecycle events per §4.7
-  (`startSeq` required and matched to `span_start`; `endSeq` present only
-  when a terminal state was observed and equal to the cited terminal event's
-  `seq`).
+  span `startSeq` required and matched to `span_start`; `endSeq` present
+  only for `completed` spans and equals the observed `span_end` event's `seq`
+  (§4.7).
 - **Lifecycle coherence:** status-driven presence rules (§4.7) — `completed`
   requires the observed `interaction_end`/`span_end` as the record's final
   observed event; `failed`/`cancelled` require their observed
@@ -906,6 +931,11 @@ type ParseResult<T> =
   fabricate a normal end event; `unknown` requires no terminal event; present
   `finishedAt`/`endSeq` equal the cited terminal event's `capturedAt`/`seq`;
   wall-clock absence never upgrades `unknown`.
+- **Final observed event scope:** trace final event = greatest `seq` in trace;
+  span final event = greatest `seq` among that span's events; required
+  terminal event must be that final event; later unrelated span events do not
+  invalidate a span; an `error` only terminates its declared span; timestamps
+  never determine finality (§4.7).
 - **Hashes:** `sha256:` followed by exactly 64 lowercase hexadecimal
   characters.
 - **Media types:** RFC 6838 type/subtype restricted-name syntax — the same
@@ -1293,11 +1323,13 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   handling, completeness consistency);
 - incomplete lifecycle records: `unknown` traces and spans without
   `finishedAt`, `endSeq`, or terminal events parse and validate; `completed`
-  without the observed `interaction_end`/`span_end` is rejected; `failed`/
-  `cancelled` require their observed evidence as the final observed event
-  and never fabricate a normal end event; present `finishedAt`/`endSeq`
-  match the cited terminal event; wall-clock absence never upgrades
-  `unknown`; completeness reports unobserved termination;
+  spans carry `endSeq` matching the observed `span_end` and require that
+  event; `completed` traces require `interaction_end`; `failed`/`cancelled`
+  spans carry `finishedAt` (no `endSeq`) matching their terminal event and
+  never fabricate `span_end`; `failed`/`cancelled` traces carry `finishedAt`
+  matching their terminal event and never fabricate `interaction_end`;
+  present `finishedAt`/`endSeq` match the cited terminal event; wall-clock
+  absence never upgrades `unknown`; completeness reports unobserved termination;
 - JSON serialization and parsing round trips, including unknown-field
   preservation at value level (lexical bytes not claimed) and retained-byte
   encoding: canonical RFC 4648 §4 Base64 accepted including zero-padding
@@ -1511,11 +1543,14 @@ decision needed to implement the first slice is specified above.
   evidence-scoped lifecycle state — `completed` | `failed` | `cancelled` |
   `unknown` — never a quality judgment; absence of an observed error is not
   success; incomplete records are representable: `unknown` traces/spans
-  carry no `finishedAt`/`endSeq`/terminal event, `completed` requires the
-  observed normal terminal event, `failed`/`cancelled` require their
-  observed evidence without fabricating a normal end event, and present
-  `finishedAt`/`endSeq` are supported by observed evidence (§2.2, §4.7,
-  §5.4).
+  carry no `finishedAt`/`endSeq`/terminal event; `completed` spans carry
+  `endSeq` matching the observed `span_end` and require that event;
+  `completed` traces require `interaction_end`; `failed`/`cancelled` spans
+  carry `finishedAt` (no `endSeq`) matching their terminal event and never
+  fabricate `span_end`; `failed`/`cancelled` traces carry `finishedAt`
+  matching their terminal event and never fabricate `interaction_end`;
+  present `finishedAt`/`endSeq` are supported by observed evidence (§2.2,
+  §4.7, §5.4).
 - [ ] The inverse projection's `seq` derivation is deterministic: legacy
   array order is primary, contiguous from 0, timestamps never reorder, and
   inferred/lossy status is recorded in the projection report (§6.6).
