@@ -8,8 +8,8 @@ context it was captured under. The normative contract is
 
 Why separate the three policies? Because they answer different questions:
 
-- **Collection** — *what evidence do we observe and keep?*
-- **Persistence** — *how long do we keep it, and what happens when it must go?*
+- **Collection** — *what do we observe?*
+- **Persistence** — *what is retained, for how long, and what happens when it must go?*
 - **Export** — *what may leave the system, and in what shape?*
 
 Changing one MUST NOT silently change another. A collection profile that starts
@@ -54,6 +54,12 @@ Rules:
 - Administrative deletion MUST produce a deletion record (tombstone) with a
   reason and scope, so completeness remains honest. Deleting evidence silently
   erases the ability to explain what happened.
+- A tombstone MUST NOT retain the deleted content or any sensitive payload
+  data.
+- Where legal or privacy requirements demand deletion without retaining
+  identifying metadata, the tombstone itself MUST be deleted; the persistence
+  policy MUST acknowledge that the record is then permanently unrecoverable and
+  completeness cannot be fully reconstructed.
 - Purging by policy MUST be recorded in the affected traces' completeness
   records.
 

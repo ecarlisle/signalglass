@@ -66,7 +66,7 @@ A rule-of-thumb detection that is useful but not certain. SignalGlass labels heu
 An observed, recorded fact about an AI interaction (a payload, event, or envelope), with an explicit evidence status and observation boundary. Evidence is the unit of truth for the target architecture; see [Spec 013](../specs/013-evidence-model.md).
 
 ## Interaction
-The enclosing logical AI exchange or task execution being observed (one agent step, one user turn). The top-level evidence container; one interaction owns exactly one trace.
+The enclosing logical AI exchange or task execution being observed (one agent step, one user turn). The domain entity whose evidence is recorded; each interaction is serialized as exactly one trace.
 
 ## Span
 A structured segment of an interaction with a lifecycle (start/end): a model request, tool call, MCP call, retrieval, context-provider call, or context assembly. Spans carry hierarchy, timing, and status; events carry content.

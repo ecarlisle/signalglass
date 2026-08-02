@@ -25,7 +25,7 @@ into versioned **capture profiles**.
 | Interaction / Trace | Yes | Top-level container; identity, lifecycle, conditions, completeness |
 | Span | Yes | Hierarchy, timing, status; aggregates its events |
 | Event | Yes | Content, evidence status, sequence position |
-| Request / Response envelope | Yes | Normalized fields + verbatim provider-native payload |
+| Request / Response envelope | Yes | Normalized fields + provider-native payload at a declared fidelity |
 | Context artifact | Yes | A referenceable unit of context with provenance |
 | Context contribution | Yes | The recorded act of adding context to a request |
 | Condition | Yes (metadata) | Declared experimental/environmental conditions |
@@ -39,15 +39,17 @@ into versioned **capture profiles**.
 
 - `interactionId` is the trace id. Spans and events carry `traceId` with the
   same value. One interaction, one trace, one identity.
-- Every event carries `seq`: a non-negative integer, strictly increasing within
-  the trace, assigned by the capture surface at observation time. **`seq` is
-  the only deterministic ordering key.**
+- Every event carries `seq`: a non-negative integer, strictly increasing and
+  **contiguous** within the trace (first event `seq` 0; each subsequent event
+  exactly one greater). `seq` is assigned by the capture surface at observation
+  time and is **the only deterministic ordering key.**
 - Timestamps (`capturedAt`, ISO 8601 UTC) may tie and are never used for
   ordering. `durationMs` comes from a monotonic clock.
 - Spans declare `startSeq`/`endSeq`; nested spans reference `parentSpanId`
   (hierarchy only). Spans with overlapping `seq` ranges are concurrent.
-- Duplicates are detected by `eventId`; `seq` gaps are reported in the
-  completeness record. SignalGlass never invents missing events.
+- Duplicates are detected by `eventId`; because `seq` is contiguous, any `seq`
+  gap is proof of a dropped event and is reported in the completeness record.
+  SignalGlass never invents missing events.
 
 ## Evidence status
 
@@ -113,6 +115,18 @@ measurements they cite), a stable versioned `label`, a `claim` with a checkable
 evidence basis, and a `confidence` of `high`/`medium`/`low`/`not_rated`.
 Interpretation confidence is explicitly subjective and is never presented as a
 measurement. Interpretations never modify evidence.
+
+## Provider-native fidelity
+
+Provider-native payloads are preserved at a declared `providerNativeFidelity`:
+
+- `structurally_faithful` (default) — the parsed structure that was captured
+  (for example, a JSON object), with field order and values equivalent to what
+  was observed. Byte-for-byte equivalence is not claimed.
+- `byte_faithful` — the raw bytes or text, with `nativeEncoding` and
+  `nativeContentType` recorded (and `nativeContentHash` recommended).
+
+An envelope never implies byte fidelity unless `byte_faithful` is recorded.
 
 ## Projections
 
@@ -208,8 +222,9 @@ A complete trace with one model span and lifecycle events:
 
 ### 2. Model request and response with envelopes
 
-The request envelope keeps normalized fields plus the verbatim provider-native
-payload. The response envelope preserves provider-reported usage:
+The request envelope keeps normalized fields plus the provider-native payload
+at the declared fidelity. The response envelope preserves provider-reported
+usage:
 
 ```json
 {
@@ -224,6 +239,7 @@ payload. The response envelope preserves provider-reported usage:
   "requestEnvelope": {
     "model": "claude-sonnet-4",
     "provider": "anthropic",
+    "providerNativeFidelity": "structurally_faithful",
     "messages": [
       { "role": "system", "content": "You are a helpful software engineering assistant." },
       { "role": "user", "content": "Fix the failing TypeScript build in this repo." }
@@ -253,6 +269,7 @@ payload. The response envelope preserves provider-reported usage:
   "observationRole": "provider_reported",
   "responseEnvelope": {
     "finishReason": "end_turn",
+    "providerNativeFidelity": "structurally_faithful",
     "providerNative": {
       "id": "msg_01J5TZXQ8K7M2N4P6R8T0VXWY",
       "content": [ { "type": "text", "text": "I fixed the build. Run pnpm typecheck to verify." } ],
@@ -268,7 +285,7 @@ payload. The response envelope preserves provider-reported usage:
 ### 3. Streaming responses
 
 Each delivered chunk is a `model_response_chunk` event with a chunk index and
-the provider-native delta preserved verbatim:
+the provider-native delta preserved at the declared fidelity:
 
 ```json
 {

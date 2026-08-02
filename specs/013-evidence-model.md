@@ -23,11 +23,6 @@ revision wins; where this spec and legacy v0.x documentation conflict, this
 spec wins for the target architecture and the legacy documents become
 compatibility projections (see [§11 Legacy supersession](#11-legacy-supersession)).
 
-> **Note on repository state.** The foundation and ADR 0004 are introduced by
-> the pending architectural-realignment docs work. This spec is self-contained:
-> its normative requirements do not depend on those documents being merged, and
-> the links above resolve once that work lands on `main`.
-
 ## Scope
 
 - The canonical evidence record: interactions, traces, spans, events, context
@@ -65,14 +60,14 @@ compatibility projections (see [§11 Legacy supersession](#11-legacy-supersessio
 
 | Entity | Responsibility | Canonical? |
 |---|---|---|
-| **Interaction** | The enclosing logical AI exchange or task execution being observed (one agent step, one user turn, or an equivalent logical unit). The top-level evidence container. | Yes |
-| **Trace** | The authoritative serialized record of one interaction. `traceId` equals the interaction's `id`. A trace is the interaction's evidence record, not a second container. | Yes |
+| **Interaction** | The enclosing logical AI exchange or task execution being observed (one agent step, one user turn, or an equivalent logical unit). The domain entity whose evidence is recorded. | Yes |
+| **Trace** | The authoritative serialized evidence record of one interaction. Each interaction is serialized as exactly one trace; `traceId` is the same identifier value as the interaction's `id`. | Yes |
 | **Span** | A structured, hierarchically organized segment of an interaction with a lifecycle (start/end): a model request, a tool call, an MCP call, a retrieval, a context-provider call, or context assembly. Carries hierarchy, timing, and status. | Yes |
 | **Event** | A discrete observed occurrence attached to a span or to the trace root. Carries content, evidence status, and the deterministic sequence position. | Yes |
 | **Run** | A derived, session-level grouping of one or more interactions (for example, an agent's task execution). A projection, not a canonical evidence container. | No (projection) |
 | **Condition** | A declared, labeled experimental or environmental condition attached to an interaction (prompt variant, temperature, model version, capture surface). Conditions are metadata; they are never evidence of outcome. | Yes (metadata) |
-| **Request envelope** | The canonical wrapper for an application-visible request: normalized common fields plus the provider-native payload preserved verbatim. | Yes |
-| **Response envelope** | The canonical wrapper for an application-visible response (including stream chunks and final usage). Provider-native payload preserved verbatim. | Yes |
+| **Request envelope** | The canonical wrapper for an application-visible request: normalized common fields plus the provider-native payload preserved at a declared fidelity. | Yes |
+| **Response envelope** | The canonical wrapper for an application-visible response (including stream chunks and final usage). Provider-native payload preserved at a declared fidelity. | Yes |
 | **Context artifact** | A referenceable unit of context (message, file, document, retrieved fragment, MCP response, tool result, repository content) with payload and provenance metadata. | Yes |
 | **Context contribution** | The recorded act of adding context into a model request, referencing artifacts by deterministic locator. | Yes |
 | **Observation boundary** | The declared scope of what a capture surface could and could not observe, recorded with the evidence. | Yes (metadata) |
@@ -80,15 +75,18 @@ compatibility projections (see [§11 Legacy supersession](#11-legacy-supersessio
 | **Measurement record** | A deterministic derivation over evidence (token counts, latency, duration, cost) with algorithm/version and input references. | Derived |
 | **Interpretation record** | A labeled, optional human-facing explanation or judgment derived from measurements and evidence. | Derived |
 
-### 1.2 An interaction owns exactly one trace
+### 1.2 An interaction is serialized as exactly one trace
 
-**Rule:** An interaction owns exactly one trace. `traceId` and the interaction
-`id` are the same value; the terms describe the same record from the domain
-perspective (interaction) and the serialization perspective (trace).
+**Rule:** An interaction is a domain entity; a trace is the authoritative
+serialized evidence record of that entity. Each interaction is serialized as
+exactly one trace, and `interactionId` (the interaction's id) and `traceId`
+(the trace's id) are the same identifier value. This document uses
+"interaction" when referring to the domain object and "trace" when referring
+to its serialized record; they are two views of one entity, not two containers.
 
 **Rationale:** Two competing top-level containers would make "interaction" and
-"trace" ambiguous forever. One container keeps identity, ordering, completeness,
-and lifecycle in a single place.
+"trace" ambiguous forever. One serialization keeps identity, ordering,
+completeness, and lifecycle in a single place.
 
 **Rejected alternatives:**
 
@@ -122,9 +120,9 @@ ordering key lives on every content-bearing record.
 
 ### 2.1 Identifiers
 
-- `traceId` — stable, opaque identifier of the interaction/trace. MUST be
-  unique within a SignalGlass installation; SHOULD be globally unique (ULID-style
-  values are recommended).
+- `traceId` — stable, opaque identifier of a trace; the same value as the
+  interaction's `id` (see §1.2). MUST be unique within a SignalGlass
+  installation; SHOULD be globally unique (ULID-style values are recommended).
 - `spanId` — stable, opaque span identifier, unique within the trace.
 - `parentSpanId` — MAY be absent on root spans. Establishes **hierarchy only**;
   it MUST NOT be used for ordering.
@@ -138,11 +136,13 @@ separate `contentHash` field, never an id.
 ### 2.2 Deterministic sequence ordering
 
 **Rule:** Every event carries a `seq` — a non-negative integer, strictly
-increasing within the trace, assigned by the capture surface at observation
-time. `seq` is the **only** deterministic ordering key. All other ordering
-constructs (timestamps, hierarchy) are derived views over `seq`.
+increasing **and contiguous** within the trace, assigned by the capture surface
+at observation time. `seq` is the **only** deterministic ordering key. All other
+ordering constructs (timestamps, hierarchy) are derived views over `seq`.
 
 - Two events MUST NOT share a `seq` within one trace.
+- `seq` values MUST be contiguous: the first event has `seq` 0, and every
+  subsequent event's `seq` is exactly one greater than its predecessor's.
 - `seq` is assigned by the capture surface, not by persistence or replay.
 - Spans reference their start/end `seq` range (`startSeq`, `endSeq`).
 - Total order is `seq`; partial order is the `parentSpanId` hierarchy.
@@ -179,9 +179,10 @@ survives replay.
 - **Duplicates:** the same `eventId` appearing twice in one trace is a
   duplicate. Persistence MUST detect it and record a single event plus a
   completeness note (`duplicateDetected`), never two distinct events.
-- **Dropped events:** a gap in `seq` within a trace is evidence of a dropped
-  event. The completeness record MUST report the gap; SignalGlass MUST NOT
-  invent the missing event.
+- **Dropped events:** because `seq` is contiguous (§2.2), any gap in `seq`
+  within a trace is proof that at least one event was dropped (or never
+  captured). The completeness record MUST report the gap and the adjacent
+  event ids; SignalGlass MUST NOT invent the missing event.
 
 ## 3. Span and event semantics
 
@@ -208,17 +209,29 @@ events: each is a span kind (`tool`, `mcp`, `retrieval`, `context_provider`,
 `context_assembly`) with `span_start`/`span_end` events wrapping its request
 and result events.
 
-### 3.2 Provider neutrality
+### 3.2 Provider neutrality and payload fidelity
 
-**Rule:** Provider-native payloads MUST be preserved verbatim inside
-`requestEnvelope.providerNative` / `responseEnvelope.providerNative`. A
-provider-specific shape (for example, an OpenAI chat-completions request) MUST
-NOT become the canonical common model: the normalized envelope fields are the
-canonical representation, and the native payload is preserved beside them.
+**Rule:** Provider-native payloads are preserved inside
+`requestEnvelope.providerNative` / `responseEnvelope.providerNative` at a
+declared fidelity:
+
+- `structurally_faithful` (default) — the payload is preserved as the parsed
+  structure that was captured (for example, a JSON object), with field order
+  and values equivalent to what was observed. Byte-for-byte equivalence is not
+  claimed.
+- `byte_faithful` (optional) — the raw bytes or text are preserved. This
+  requires recording `nativeEncoding` and `nativeContentType` on the envelope;
+  `nativeContentHash` SHOULD also be recorded.
+
+The envelope MUST record `providerNativeFidelity` and MUST NOT imply byte
+fidelity unless `byte_faithful` is recorded. A provider-specific shape (for
+example, an OpenAI chat-completions request) MUST NOT become the canonical
+common model: the normalized envelope fields are the canonical representation,
+and the native payload is preserved beside them at the declared fidelity.
 
 **Rationale:** Normalized fields make capture, storage, comparison, and replay
-provider-neutral; preserving the native payload keeps evidence complete and
-falsifiable.
+provider-neutral; preserving the native payload at a declared fidelity keeps
+evidence complete and falsifiable without overstating what was stored.
 
 ### 3.3 Errors, cancellation, and retries
 
@@ -423,9 +436,14 @@ point so evidence remains interpretable in its original policy context.
   version).
 - Redacted exports are projections; they MUST NOT overwrite authoritative
   evidence.
-- Administrative deletion MUST be recorded as a deletion record (tombstone with
-  reason and scope) rather than silently removed from the authoritative record,
-  so completeness remains honest.
+- Administrative deletion MUST be recorded as a deletion record (a tombstone
+  with reason and scope) rather than silently removed from the authoritative
+  record, so completeness remains honest. A tombstone MUST NOT retain the
+  deleted content or any sensitive payload data. Where legal or privacy
+  requirements demand deletion without retaining identifying metadata, the
+  tombstone itself MUST be deleted, and the persistence policy MUST acknowledge
+  that the record is then permanently unrecoverable and completeness cannot be
+  fully reconstructed.
 - Exports and reports MUST label their policy context and MUST NOT claim to
   show evidence that the policy excluded.
 
@@ -450,14 +468,18 @@ This spec requires:
 
 ### 11.1 Legacy specs
 
-This spec formally supersedes the legacy v0.x model specifications. Superseded
-specs remain on `main` as historical records and are not deleted.
+Upon acceptance, this spec will formally supersede the legacy v0.x model
+specifications. Until then (this spec is Draft), specs 002, 003, and 004 remain
+accurate records of the implemented v0.x state and are labeled in the
+[spec index](000-index.md) as "legacy v0.x, pending supersession by 013", not
+formally Superseded. They remain on `main` as historical records and are not
+deleted.
 
 | Spec | Legacy model | Status under 013 |
 |---|---|---|
-| [002 — Core domain](../specs/002-core-domain.md) | `AgentRun`, `Turn`, `ContextBlock`, token estimation, smells/recommendations | Superseded by 013 upon acceptance. `AgentRun` becomes a compatibility projection. |
-| [003 — Offline analysis](../specs/003-offline-analysis.md) | Offline analysis pipeline over `AgentRun` | Superseded. Analysis becomes interpretation records over evidence. |
-| [004 — Trace model](../specs/004-trace-model.md) | `Trace`/`TraceEvent`, `ContentPhase`, `StorageMode` | Superseded. `Trace`/`TraceEvent` become a compatibility projection over evidence. |
+| [002 — Core domain](../specs/002-core-domain.md) | `AgentRun`, `Turn`, `ContextBlock`, token estimation, smells/recommendations | Pending supersession by 013. `AgentRun` becomes a compatibility projection. |
+| [003 — Offline analysis](../specs/003-offline-analysis.md) | Offline analysis pipeline over `AgentRun` | Pending supersession. Analysis becomes interpretation records over evidence. |
+| [004 — Trace model](../specs/004-trace-model.md) | `Trace`/`TraceEvent`, `ContentPhase`, `StorageMode` | Pending supersession. `Trace`/`TraceEvent` become a compatibility projection over evidence. |
 
 ### 11.2 Compatible legacy concepts
 
@@ -525,11 +547,12 @@ example conflicts with the prose above, the prose wins.
 ## 14. Acceptance criteria
 
 - [ ] One interaction produces exactly one trace record.
-- [ ] Every event carries a strictly increasing `seq`; no record relies on
-  timestamps for ordering.
+- [ ] Every event carries a strictly increasing, contiguous `seq`; no record
+  relies on timestamps for ordering.
 - [ ] Raw evidence carries exactly one of the six evidence statuses; `inferred`
   appears only on derived records.
-- [ ] Provider-native payloads survive capture verbatim inside envelopes.
+- [ ] Provider-native payloads survive capture at the declared fidelity
+  (`structurally_faithful` or `byte_faithful`).
 - [ ] Measurement records reference inputs, algorithm, and configuration
   versions; cost records reference a pricing table version.
 - [ ] Collection, persistence, and export policies are independently configurable
@@ -544,7 +567,7 @@ example conflicts with the prose above, the prose wins.
 No production code changes are made on this branch. The mapping below is a
 contract for future implementation specs:
 
-- identity/ordering: `seq` monotonicity, tie resolution, duplicate and gap
+- identity/ordering: `seq` contiguity, tie resolution, duplicate and gap
   handling;
 - evidence status: status transitions and completeness aggregation;
 - measurement determinism: same inputs → same values; cost derivation;
