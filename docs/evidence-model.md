@@ -109,11 +109,13 @@ proves what the client sent, not what the provider did internally.
   representation when `redacted`, and forbidden for
   `missing`/`unknown`/`not_applicable` (§6.1 of Spec 013). `contentHash`
   always hashes the retained representation and never implies possession of
-  discarded original content. `contentHash` is computed over the UTF-8
-  canonical serialization of the retained payload content: RFC 8785 (JCS) is
-  the schema-fixed default for JSON content, so cross-implementation
-  reproduction needs no per-record metadata; non-JSON formats MUST declare
-  their canonicalizer. A **standalone artifact** (not provably enclosed by
+  discarded original content. The `contentHash` input depends on the retained
+  representation: `byte_faithful` retained bytes are hashed directly as bytes
+  (never treated as UTF-8 text); `structurally_faithful` JSON is canonicalized
+  with RFC 8785 (JCS) (the schema-fixed default) and hashed as UTF-8; other
+  structured formats use their declared versioned canonicalizer and its
+  specified output encoding; if no deterministic canonicalizer exists, no
+  hash is emitted. A **standalone artifact** (not provably enclosed by
   its trace) MUST serialize `traceId` and `evidenceSchemaVersion` explicitly,
   and its `traceId` MUST resolve to a known trace.
 - A **context contribution** records that an artifact entered a model request:
@@ -159,15 +161,19 @@ Provider-native payloads are preserved at a declared `providerNativeFidelity`:
   surface (before any decoding, normalization, envelope construction, or
   serialization), with `nativeEncoding` and `nativeContentType` recorded.
   `nativeContentHash` (`sha256:` + 64 lowercase hex, over exactly those
-  observed bytes) is **required** when the native bytes were captured, and
+  observed bytes) is **required** when the payload is `captured`, and
   forbidden when the exact byte sequence was not observed or not retained
   (`missing`/`unknown`/`not_applicable`, and `redacted`/`truncated` native
-  payloads). It is also optional on `structurally_faithful` envelopes when a
-  transparent capture surface observed and retained the exact bytes — it
-  verifies the observed stream without claiming the canonical record is
-  byte-exact. It differs from artifact-level `contentHash`, which hashes the
-  retained representation per fidelity and canonicalization rules (Spec 013
-  §3.2).
+  payloads — those are byte-faithful only to their retained representation,
+  never to discarded originals). `byte_faithful` itself requires
+  `evidenceStatus: "captured"`. It is also optional on `structurally_faithful`
+  envelopes when a transparent capture surface observed and retained the
+  exact bytes — it verifies the observed stream without claiming the
+  canonical record is byte-exact. It differs from artifact-level
+  `contentHash`, which hashes the retained representation per fidelity and
+  canonicalization rules (Spec 013 §3.2); the two digests are equal only when
+  the retained representation is the exact observed byte sequence with no
+  transformation.
 
 An envelope never implies byte fidelity unless `byte_faithful` is recorded.
 
@@ -357,12 +363,8 @@ interpretation records shown after example 9 reference this event.
 ### 3. Streaming responses
 
 Each delivered chunk is a `model_response_chunk` event with a chunk index and
-the provider-native delta preserved at the declared fidelity; the first chunk
-also carries `nativeContentHash` because the ingress proxy observed and
-retained the exact native stream bytes (the optional
-`structurally_faithful` case — it verifies the observed stream without
-claiming the canonical chunk is byte-exact); final usage arrives as a
-`model_usage` event:
+the provider-native delta preserved at the declared fidelity; final usage
+arrives as a `model_usage` event:
 
 ```json
 {
@@ -421,7 +423,6 @@ claiming the canonical chunk is byte-exact); final usage arrives as a
       "responseEnvelope": {
         "chunkIndex": 0,
         "providerNativeFidelity": "structurally_faithful",
-        "nativeContentHash": "sha256:6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a",
         "providerNative": {
           "type": "content_block_delta",
           "delta": { "type": "text_delta", "text": "The last 20 commits cover " }

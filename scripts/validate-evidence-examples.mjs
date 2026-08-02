@@ -18,9 +18,11 @@
 //     errorEventId referencing an error event)
 //   - missing status carries an explicit `missing` declaration
 //   - request/response envelopes declare providerNativeFidelity, and the
-//     declared fidelity matches the stored representation; nativeContentHash
-//     (exact observed native bytes) is checked for representation, required
-//     with byte_faithful, and forbidden when the event is not captured
+//     declared fidelity matches the stored representation; checkEnvelope
+//     enforces one coherent status/fidelity/hash rule set (byte_faithful
+//     requires captured, nativeEncoding, nativeContentType, nativeContentHash;
+//     byte_faithful with any non-captured status is a single rejection;
+//     nativeContentHash forbidden when bytes not observed; sha256:64hex)
 //   - declared completeness counts match the events
 //   - cross-record references resolve (traceId, eventId, measurementId,
 //     artifactId)
@@ -30,7 +32,8 @@
 //     representation and per-status presence; contentCanonicalizer shape
 //   - --self-test runs negative fixtures proving the administrative-policy
 //     checks fire for traces, events, artifacts, measurements, and
-//     interpretations
+//     interpretations, and that invalid envelope status/fidelity/hash
+//     combinations are rejected (with a positive byte_faithful control)
 
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -123,6 +126,46 @@ function checkTraceRef(ref, label) {
   }
 }
 
+// Envelope fidelity / nativeContentHash contract (Spec 013 §3.2). One
+// coherent rule set, so an invalid combination produces a single rejection
+// rather than simultaneous "required" and "forbidden" errors:
+//   - byte_faithful + captured  -> requires nativeEncoding, nativeContentType,
+//                                  and nativeContentHash
+//   - byte_faithful + missing/unknown/not_applicable -> invalid (bytes not
+//                                  observed), single rejection
+//   - byte_faithful + redacted/truncated -> invalid as a claim over observed
+//                                  bytes (fidelity to discarded originals is
+//                                  never implied)
+//   - nativeContentHash on a non-captured payload -> forbidden
+//   - nativeContentHash representation: 'sha256:' + 64 lowercase hex
+function checkEnvelope(env, ev, el, envKey) {
+  if (!env.providerNativeFidelity) {
+    errors.push(`${el}: ${envKey} missing required providerNativeFidelity`);
+    return;
+  }
+  if (!FIDELITIES.has(env.providerNativeFidelity)) {
+    errors.push(`${el}: ${envKey} invalid providerNativeFidelity ${env.providerNativeFidelity}`);
+    return;
+  }
+  if (env.nativeContentHash !== undefined && !/^sha256:[0-9a-f]{64}$/.test(env.nativeContentHash)) {
+    errors.push(`${el}: ${envKey} nativeContentHash '${env.nativeContentHash}' is not 'sha256:' + 64 lowercase hex characters (Spec 013 §3.2)`);
+  }
+  if (env.providerNativeFidelity === "byte_faithful") {
+    if (ev.evidenceStatus !== "captured") {
+      errors.push(`${el}: ${envKey} declares byte_faithful but event evidenceStatus is ${ev.evidenceStatus} — byte fidelity requires the exact native bytes to have been observed and captured; it cannot be claimed for content that was not observed or that was transformed at capture (Spec 013 §3.2)`);
+      return;
+    }
+    if (!env.nativeEncoding || !env.nativeContentType) {
+      errors.push(`${el}: ${envKey} byte_faithful requires nativeEncoding and nativeContentType`);
+    }
+    if (env.nativeContentHash === undefined) {
+      errors.push(`${el}: ${envKey} byte_faithful with captured native bytes requires nativeContentHash over the observed native bytes (Spec 013 §3.2)`);
+    }
+  } else if (env.nativeContentHash !== undefined && ev.evidenceStatus !== "captured") {
+    errors.push(`${el}: ${envKey} carries nativeContentHash but event evidenceStatus is ${ev.evidenceStatus} — a native content hash claims observed, retained bytes (Spec 013 §3.2)`);
+  }
+}
+
 // Administrative policy fields (persistence/export policy versions) belong on
 // storage/export metadata, never on canonical evidence records (Spec 013
 // §9.2). Runs for every canonical record type — trace, event, artifact,
@@ -197,30 +240,7 @@ for (const { i, b } of traces) {
     for (const envKey of ["requestEnvelope", "responseEnvelope"]) {
       const env = ev[envKey];
       if (!env) continue;
-      if (!env.providerNativeFidelity) {
-        errors.push(`${el}: ${envKey} missing required providerNativeFidelity`);
-      } else if (!FIDELITIES.has(env.providerNativeFidelity)) {
-        errors.push(`${el}: ${envKey} invalid providerNativeFidelity ${env.providerNativeFidelity}`);
-      }
-      // nativeContentHash (Spec 013 §3.2): hashes the exact observed native
-      // bytes; required with byte_faithful, forbidden when the event is not
-      // captured, and always 'sha256:' + 64 lowercase hex.
-      if (env.nativeContentHash !== undefined) {
-        if (!/^sha256:[0-9a-f]{64}$/.test(env.nativeContentHash)) {
-          errors.push(`${el}: ${envKey} nativeContentHash '${env.nativeContentHash}' is not 'sha256:' + 64 lowercase hex characters (Spec 013 §3.2)`);
-        }
-        if (ev.evidenceStatus !== "captured") {
-          errors.push(`${el}: ${envKey} carries nativeContentHash but event evidenceStatus is ${ev.evidenceStatus} — a native content hash claims observed, retained bytes (Spec 013 §3.2)`);
-        }
-      }
-      if (env.providerNativeFidelity === "byte_faithful") {
-        if (!env.nativeEncoding || !env.nativeContentType) {
-          errors.push(`${el}: ${envKey} byte_faithful requires nativeEncoding and nativeContentType`);
-        }
-        if (env.nativeContentHash === undefined) {
-          errors.push(`${el}: ${envKey} byte_faithful with a captured native payload requires nativeContentHash over the observed native bytes (Spec 013 §3.2)`);
-        }
-      }
+      checkEnvelope(env, ev, el, envKey);
     }
 
     if (ev.kind === "retry") {
@@ -401,10 +421,51 @@ function selfTest() {
     ["trace", { interactionId: "t", traceId: "t", evidenceSchemaVersion: "1.0.0", status: "completed", exportPolicy: "1.0.0", events: [] }],
   ];
   for (const [name, rec] of fixtures) checkAdminPolicyFields(rec, `[self-test ${name}]`);
-  const rejected = errors.length - baseline;
+  const adminRejected = errors.length - baseline;
+
+  // Envelope status/fidelity/hash negative fixtures (Spec 013 §3.2). Each
+  // invalid combination must be rejected with a single, coherent error — never
+  // simultaneous "required" and "forbidden" messages.
+  const envFixtures = [
+    ["byte_faithful + captured without nativeContentHash",
+      { providerNativeFidelity: "byte_faithful", nativeEncoding: "utf-8", nativeContentType: "application/json" },
+      { evidenceStatus: "captured" }],
+    ["byte_faithful + missing",
+      { providerNativeFidelity: "byte_faithful", nativeEncoding: "utf-8", nativeContentType: "application/json", nativeContentHash: `sha256:${'ab'.repeat(32)}` },
+      { evidenceStatus: "missing" }],
+    ["byte_faithful + unknown",
+      { providerNativeFidelity: "byte_faithful", nativeEncoding: "utf-8", nativeContentType: "application/json", nativeContentHash: `sha256:${'ab'.repeat(32)}` },
+      { evidenceStatus: "unknown" }],
+    ["byte_faithful + redacted (claims fidelity to discarded originals)",
+      { providerNativeFidelity: "byte_faithful", nativeEncoding: "utf-8", nativeContentType: "application/json", nativeContentHash: `sha256:${'ab'.repeat(32)}` },
+      { evidenceStatus: "redacted" }],
+    ["nativeContentHash where native bytes were not observed",
+      { providerNativeFidelity: "structurally_faithful", nativeContentHash: `sha256:${'ab'.repeat(32)}` },
+      { evidenceStatus: "missing" }],
+    ["incorrectly formatted nativeContentHash",
+      { providerNativeFidelity: "byte_faithful", nativeEncoding: "utf-8", nativeContentType: "application/json", nativeContentHash: "sha256:abc123" },
+      { evidenceStatus: "captured" }],
+  ];
+  let envRejected = 0;
+  for (const [name, env, ev] of envFixtures) {
+    const before = errors.length;
+    checkEnvelope(env, ev, "[self-test envelope]", "responseEnvelope");
+    if (errors.length > before) envRejected++;
+    else console.log(`SELF-TEST FAIL: '${name}' was not rejected`);
+  }
+
+  // Positive control: byte_faithful + captured with all required fields is
+  // accepted (no error), so the rejections above are not over-strict.
+  const posBefore = errors.length;
+  checkEnvelope(
+    { providerNativeFidelity: "byte_faithful", nativeEncoding: "utf-8", nativeContentType: "application/json", nativeContentHash: `sha256:${'cd'.repeat(32)}` },
+    { evidenceStatus: "captured" }, "[self-test envelope]", "responseEnvelope");
+  const positiveOK = errors.length === posBefore;
+  if (!positiveOK) console.log("SELF-TEST FAIL: valid byte_faithful + captured envelope was rejected");
+
   errors.length = baseline;
-  console.log(`Self-test: ${rejected}/${fixtures.length} negative fixtures rejected forbidden administrative policy fields on ${fixtures.map((f) => f[0]).join(", ")} records.`);
-  return rejected === fixtures.length;
+  console.log(`Self-test: admin-policy ${adminRejected}/${fixtures.length} rejected; envelope status/fidelity ${envRejected}/${envFixtures.length} rejected; positive byte_faithful control ${positiveOK ? "accepted" : "FAILED"}.`);
+  return adminRejected === fixtures.length && envRejected === envFixtures.length && positiveOK;
 }
 
 console.log(`\nValidated ${rawBlocks.length} JSON blocks in docs/evidence-model.md (${traces.length} traces) and ${extra} JSON block(s) in capture-profiles/model-versioning docs.\n`);

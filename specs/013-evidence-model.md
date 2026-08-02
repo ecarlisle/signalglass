@@ -295,26 +295,38 @@ byte sequence observed by the capture surface, before any transformation.
 Representation: `sha256:<64 lowercase hexadecimal characters>`.
 
 - **Required** when the envelope declares `byte_faithful` fidelity and the
-  native bytes were captured (`evidenceStatus: "captured"`). A `byte_faithful`
-  claim with no `nativeContentHash` is incomplete: the hash is what lets a
-  consumer verify the retained bytes against the observed stream.
+  payload is `captured`: `byte_faithful` claims the retained bytes ARE the
+  exact bytes observed at the boundary, and `nativeContentHash` is what lets
+  a consumer verify them against the observed stream.
 - **Optional** for `structurally_faithful` evidence when the capture surface
   also observed and retained the exact native bytes (for example, a
   transparent ingress proxy). It then verifies the observed stream without
   claiming the canonical record is byte-exact.
 - **Forbidden** when the exact byte sequence was not observed or not retained
   sufficiently to compute it honestly: `missing`, `unknown`, and
-  `not_applicable` native payloads cannot claim a native content hash, and
-  `redacted` or `truncated` native payloads retained bytes that differ from
-  what was observed, so a hash over the observed sequence would misrepresent
-  the retained evidence.
+  `not_applicable` payloads cannot claim a native content hash, and
+  `redacted` or `truncated` payloads retained bytes that differ from what was
+  observed, so a hash over the observed sequence would misrepresent the
+  retained evidence.
+- **Fidelity/status compatibility.** `byte_faithful` requires
+  `evidenceStatus: "captured"`. `missing`, `unknown`, and `not_applicable`
+  payloads cannot claim byte fidelity — nothing was observed. `redacted` or
+  `truncated` payloads are byte-faithful only to their **retained
+  representation**, never to the discarded original: any byte fidelity
+  claimed for a redacted or truncated retained representation MUST be
+  declared explicitly as fidelity to that retained representation (with its
+  masking/truncation boundary), so it cannot be mistaken for fidelity to the
+  original bytes. In the default contract, `redacted`/`truncated` payloads
+  carry a lower declared fidelity and MUST NOT emit `nativeContentHash`.
 - **Difference from `contentHash`:** `contentHash` (artifact-level, §6.1)
   hashes the retained representation according to the declared fidelity and
   canonicalization rules — for `structurally_faithful`, a canonical
   serialization of the parsed structure, which is not byte-for-byte the
-  observed stream. `nativeContentHash` hashes the exact observed bytes and
-  never implies a canonical form. For the same payload the two values may
-  differ.
+  observed stream. The two digests are **equal** only when the retained
+  representation is the exact observed byte sequence with no transformation
+  applied (`byte_faithful`); they **differ** whenever canonicalization,
+  decoding, normalization, or any other transformation was applied to the
+  retained form. `nativeContentHash` never implies a canonical form.
 - **External payload references:** an external reference to a native payload
   may carry `nativeContentHash` only when the hash was computed at capture
   time over the exact byte sequence the capture surface observed, and the
@@ -469,28 +481,31 @@ both `traceId` and `evidenceSchemaVersion` explicitly, and its `traceId` MUST
 resolve to a known trace. Validators and readers MUST NOT rely on an unstated
 enclosing context.
 
-**Hash semantics.** `contentHash` is a SHA-256 digest over the UTF-8 encoding
-of the **canonical serialization of the retained payload content**:
+**Hash semantics.** `contentHash` is a SHA-256 digest whose input is the
+**retained representation**, hashed as bytes:
 
-- **Logical value.** For `structurally_faithful`, the retained parsed
-  structure's logical value (for example, a JSON object with values equivalent
-  to what was observed); for `byte_faithful`, the retained raw bytes or text
-  (`nativeEncoding` and `nativeContentType` describe that representation).
-- **Canonicalization.** JSON and JSON-compatible content are canonicalized
-  with RFC 8785 (JCS). The schema version fixes this default, so
-  cross-implementation reproduction needs no per-record metadata. A non-JSON
-  format MUST select its canonicalizer from the versioned canonicalizer
-  registry by content type/kind and MUST record it on the artifact as
-  `contentCanonicalizer: { name, version }`; the default JCS canonicalizer MAY
-  be recorded explicitly to pin its registry version.
-- **Byte encoding.** The canonicalized value is hashed as UTF-8.
-- **Hash input.** Only retained payload content is hashed — never artifact or
-  envelope metadata (`artifactId`, `kind`, `provenance`, `traceId`,
-  `evidenceSchemaVersion`, `providerNativeFidelity`, and so on).
-- **No supported canonicalizer.** If no deterministic canonicalizer exists for
-  the content's format, `contentHash` MUST NOT be emitted: reproducibility
-  cannot be claimed without declaring every input needed to reproduce the
-  bytes.
+- **`byte_faithful`** — hash the retained byte sequence directly: the exact
+  bytes observed by the capture surface, without decoding, normalization,
+  canonicalization, or character-set conversion. Raw bytes are hashed as
+  bytes; they are never treated as UTF-8 text.
+- **`structurally_faithful` JSON** — canonicalize the retained logical value
+  with RFC 8785 (JCS) (the schema-fixed default), encode the canonicalized
+  value as UTF-8, and hash those bytes.
+- **Other structured formats** — canonicalize with the declared versioned
+  canonicalizer (`contentCanonicalizer: { name, version }`), encoded as that
+  canonicalizer's specified output encoding.
+- **No supported canonicalizer** — if no deterministic canonicalizer exists
+  for the content's format, `contentHash` MUST NOT be emitted:
+  reproducibility cannot be claimed without declaring every input needed to
+  reproduce the bytes.
+- **Hash input** — only retained payload content is hashed; metadata and
+  envelope fields are excluded unless they are explicitly part of the
+  retained payload.
+- **Equality with `nativeContentHash`** — the two digests are equal only
+  when the retained representation is the exact observed byte sequence with
+  no transformation applied (`byte_faithful`); they differ whenever
+  canonicalization, decoding, or any other transformation was applied
+  (§3.2).
 - `contentHash` always hashes the **retained representation**; it never
   implies possession, verification, or reconstruction of discarded original
   content. Presence rules by `evidenceStatus`:
