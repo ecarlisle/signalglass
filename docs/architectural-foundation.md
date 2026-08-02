@@ -5,7 +5,7 @@
 
 This document is the canonical statement of where SignalGlass is going. It defines the vision, principles, terminology, high-level architecture, roadmap priorities, boundaries, and the non-modifying measurement plan.
 
-Specifications, ADRs, and other documents that describe the current v0.x implementation (notably the `Trace`/`TraceEvent` and `AgentRun` models and optimization-oriented features) remain accurate records of what exists, but they are **no longer authoritative for the target architecture**. The accepted evidence-model specification ([Spec 013](../specs/013-evidence-model.md)) formally supersedes them; their concepts are re-framed as compatibility projections.
+Specifications, ADRs, and other documents that describe the current v0.x implementation (notably the `Trace`/`TraceEvent` and `AgentRun` models and optimization-oriented features) remain accurate records of what exists, but they are **no longer authoritative for the target architecture**. The accepted evidence-model specification ([Spec 013](../specs/013-evidence-model.md)) formally supersedes them; their concepts are to be re-framed as compatibility projections in implementation.
 
 ## 1. Vision
 

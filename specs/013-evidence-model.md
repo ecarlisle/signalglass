@@ -29,7 +29,7 @@ revision wins; where this spec and legacy v0.x documentation conflict, this
 spec wins for the target architecture. Acceptance of this spec formally
 superseded the legacy model specifications (002, 003, and 004): they remain on
 `main` as historical records of the implemented v0.x state, and their
-concepts are expressed through compatibility projections (see
+concepts must be expressed as compatibility projections in implementation (see
 [§11 Legacy supersession](#11-legacy-supersession)).
 
 ## Scope
@@ -785,9 +785,9 @@ behavior.
 
 | Spec | Legacy model | Status under 013 |
 |---|---|---|
-| [002 — Core domain](../specs/002-core-domain.md) | `AgentRun`, `Turn`, `ContextBlock`, token estimation, smells/recommendations | Superseded by 013. `AgentRun` is expressed as a compatibility projection. |
-| [003 — Offline analysis](../specs/003-offline-analysis.md) | Offline analysis pipeline over `AgentRun` | Superseded by 013. Analysis is expressed as interpretation records over evidence. |
-| [004 — Trace model](../specs/004-trace-model.md) | `Trace`/`TraceEvent`, `ContentPhase`, `StorageMode` | Superseded by 013. `Trace`/`TraceEvent` is expressed as a compatibility projection over evidence. |
+| [002 — Core domain](../specs/002-core-domain.md) | `AgentRun`, `Turn`, `ContextBlock`, token estimation, smells/recommendations | Superseded by 013. `AgentRun` must be expressed as a compatibility projection (§11.2). |
+| [003 — Offline analysis](../specs/003-offline-analysis.md) | Offline analysis pipeline over `AgentRun` | Superseded by 013. Analysis must be expressed as interpretation records over evidence. |
+| [004 — Trace model](../specs/004-trace-model.md) | `Trace`/`TraceEvent`, `ContentPhase`, `StorageMode` | Superseded by 013. `Trace`/`TraceEvent` must be expressed as a compatibility projection over evidence. |
 
 ### 11.2 Compatible legacy concepts
 
@@ -798,9 +798,9 @@ behavior.
   provider-internal state.
 - Token estimates map to `estimated` measurements; heuristic smells map to
   interpretation records with `low`/`medium` confidence.
-- Trace-to-`AgentRun` conversion (spec 004) is expressed as one documented
-  projection; the inverse projection (evidence to trace view) is supported
-  the same way.
+- Trace-to-`AgentRun` conversion (spec 004) must be expressed as one
+  documented projection, and Spec 013 requires the inverse projection
+  (evidence to trace view) to be supported the same way.
 
 ### 11.3 Legacy concepts that do not carry over
 
