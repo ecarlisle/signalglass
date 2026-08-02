@@ -2,18 +2,71 @@
 
 SignalGlass follows SemVer and is currently pre-1.0. Minor versions represent milestones. Patch versions contain fixes and small additions within a milestone.
 
-The product supports two complementary modes:
+**Direction:** The authoritative target direction is [`docs/architectural-foundation.md`](architectural-foundation.md). This roadmap is directional, not a release ledger, and it is ordered by dependency: **evidence model, capture fidelity, completeness, deterministic measurements, and streaming come before optimization features.** Optimization-oriented functionality (reduction previews, budgets, recommendations as core features) is deferred until the evidence foundation exists.
 
-1. **Offline Run Analysis** — analyze captured runs from JSON or parser inputs.
-2. **Live Ingress Observability** — act as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and optimization opportunities.
+## Target roadmap (in dependency order)
 
-Both modes feed the same internal domain model. A live trace can be converted into an `AgentRun` so the existing analyzer can be reused.
+### Evidence foundation
 
-This roadmap is directional rather than a release ledger. Some ingress, local storage, and trace-report work originally placed in later milestones has already landed; dashboard views, broader adapters, comparison, budgets, and reduction previews remain future work.
+Ratify the architectural foundation (done in the realignment docs PR); write and accept the evidence-model specification: interactions, spans, events, capture profiles, and versioning.
 
-## Milestones
+- Interaction/span/event model with span parentage (`parentSpanId`) and events attached to spans (`spanId`).
+- Evidence records carry an evidence-schema version; derived measurement records carry an algorithm/derivation version plus references to their inputs.
+- Capture profiles as separate **collection**, **persistence**, and **export** decisions. A metadata-only profile must not collect full payloads in the first place. A redacted profile may discard content at its declared capture boundary. Full-fidelity capture is explicit, appropriately protected, and never the universal default.
+- Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification and re-framed as projections.
 
-### v0.1.0 — First Light
+### Capture fidelity
+
+- Native request/response evidence captured without semantic transformation; byte-exact preservation verified and documented where claimed.
+- Capture profiles implemented end-to-end (collection → persistence → export).
+- Core instrumentation provably non-modifying; any transformation happens at a declared capture boundary and is recorded as such.
+
+### Completeness
+
+- Deterministic event ordering (sequence numbers).
+- Per-interaction and per-event capture-completeness reporting: captured, redacted, truncated, not captured.
+- Missing evidence reported explicitly, never silently assumed.
+
+### Deterministic measurements
+
+- Token accounting, latency/duration, and cost as versioned derivations over evidence, with algorithm versions and input references.
+- Provider-reported vs. locally estimated values distinguished everywhere.
+- Cost derived from measured usage × a versioned pricing schedule, kept in the measurement layer (not the optional analysis module).
+
+### Streaming
+
+- Transparent streaming capture (SSE passthrough with event extraction), so real agent-harness traffic (Pi, OpenCode) can be observed without being changed.
+
+### Multi-span interactions
+
+- Model, tool, MCP, and retrieval spans within one logical interaction.
+- MCP, Graphify, retrieval systems, and other tools as independently observable systems with documented capture boundaries.
+
+### Replay and comparison
+
+- Deterministic request reconstruction: reissuing a recorded request under a declared environment, with reproducible replay configuration and orchestration.
+- Side-by-side comparison of derived measurements across runs, models, and providers.
+- Identical responses cannot be guaranteed: models, providers, tools, external data, and inference may be nondeterministic or may change over time.
+
+### Optional analysis
+
+- Smells, recommendations, savings lenses, and reduction previews as a clearly labeled, **optional analysis module** over measurements and evidence.
+- Optimization and context transformation only as explicit experimental conditions or optional analysis — never core behavior.
+
+## Deferred optimization features
+
+The following are **explicitly deferred** until the evidence, capture-fidelity, completeness, deterministic-measurement, and streaming milestones above are in place:
+
+- Reduction previews (v0.9 "Reduction Preview" in the old roadmap).
+- Context budgets as core features.
+- Recommendations and savings language as core report content (they survive only as legacy/optional analysis output).
+- Automatic context rewriting (never core; human-approved at most).
+
+## Current state (v0.x, historical)
+
+The milestones below describe what the v0.x implementation has already delivered. They remain accurate records of current behavior but are **no longer authoritative for the target architecture**; their terminology and priorities predate the architectural foundation.
+
+### v0.1.0 — First Light (delivered)
 
 Offline CLI analyzer for sample/generic run files.
 
@@ -26,7 +79,7 @@ Offline CLI analyzer for sample/generic run files.
 
 **Success condition:** `signalglass analyze samples/messy-agent-run.json` produces a useful terminal report.
 
-### v0.2.0 — Glass Report
+### v0.2.0 — Glass Report (delivered)
 
 Static HTML report generation.
 
@@ -34,7 +87,7 @@ Static HTML report generation.
 - Report contract documented.
 - Education-first formatting in HTML output.
 
-### v0.3.0 — Context Smells
+### v0.3.0 — Context Smells (delivered)
 
 Richer smell detection with evidence and recommendations.
 
@@ -43,65 +96,39 @@ Richer smell detection with evidence and recommendations.
 - Recommendations include inspect and try suggestions.
 - Smell severity ranking and grouping.
 
-### v0.4.0 — Run Comparison
-
-Compare two or more runs side by side.
-
-- Data model extended for run comparison.
-- Compare model, provider, agent, task, tokens, turns, tool calls, repeated context, smells, patch size, and outcome.
-- CLI support for comparing runs.
-- Comparison report in terminal, JSON, and HTML.
-
-### v0.5.0 — OpenCode Adapter + Ingress Foundation
+### v0.5.0 — OpenCode Adapter + Ingress Foundation (partially delivered)
 
 Expand input formats and lay the groundwork for live ingress.
 
-- OpenCode run parser.
-- Map OpenCode messages, tool calls, and outputs to SignalGlass normalized blocks.
-- Adapter interface formalized and documented.
 - Provider config schema and adapter interface for `openai-compatible`, `anthropic`, `gemini`, `ollama`, `custom`.
-- Tests against real OpenCode samples and OpenAI request/response fixtures.
+- OpenAI-compatible adapter implemented against request/response fixtures.
+- OpenCode run parser remains a placeholder.
 
-### v0.6.0 — Observatory UI
+### v0.6.0 — Observatory UI (foundation delivered)
 
 Interactive dashboard/report viewer for both offline runs and live traces.
 
-- Web UI sections: Run Summary, Context Timeline, Token Breakdown, Context Smells, Evidence Drawer, Recommendations.
-- Live-ingress views: Trace View, Payload View, Story View, Savings Lens.
-- Load and visualize analysis JSON and trace JSON in the browser.
-- Keep static export path intact.
+- Minimal Vite + React dashboard validating the data model (sample report only).
+- Full views (Context Timeline, Evidence Drawer, Payload View, Story View) remain future work and will be reprioritized toward evidence/trace exploration under the target roadmap.
 
-### v0.7.0 — Budgets
-
-Configurable context budgets.
-
-- Per-run, per-turn, per-source-type, and per-block budgets.
-- Budget alerts as smells.
-- Default and user-defined budget profiles.
-
-### v0.8.0 — Capture & Storage
+### v0.8.0 — Capture & Storage (delivered)
 
 Local capture/proxy prototype with persistence.
 
-- Optional lightweight capture of agent runs as they happen.
-- SQLite storage for traces, events, metrics, and redacted excerpts.
-- Capture must remain observability-first: record and report, do not automatically rewrite.
+- OpenAI-compatible ingress with trace/timeline capture and provider-error tracing.
+- Opt-in SQLite storage for traces, events, metrics, and redacted excerpts.
+- Capture remains observability-first: record and report, do not automatically rewrite.
 - Privacy and security considerations documented.
 
-### v0.9.0 — Reduction Preview
+## Earlier milestones no longer authoritative
 
-Preview safe context reductions without automatically applying them.
+The following older milestone intents have been superseded in priority by the target roadmap above:
 
-- Suggest reductions (deduplication, trimming, summarization) with estimated token savings.
-- Show before/after previews.
-- Human approval before any change.
-- Distinguish realized savings from potentially correctable opportunities.
+- **v0.4.0 — Run Comparison:** comparison is retained but re-scoped under "Replay and comparison" as comparison of derived measurements.
+- **v0.7.0 — Budgets:** deferred (optimization-adjacent).
+- **v0.9.0 — Reduction Preview:** deferred (optimization).
+- **v1.0.0 — Stable Observatory:** retained in spirit (stable schema, CLI, docs, report contract, adapter API) but the 1.0 contract will be defined by the evidence-model specification, not the v0.x schemas.
 
-### v1.0.0 — Stable Observatory
+## Milestone reality check
 
-Stable schema, CLI, docs, report contract, and adapter API.
-
-- Commitment to backward compatibility after 1.0.
-- Stable report contract, trace schema, and parser/provider adapter API.
-- Comprehensive documentation and governance.
-- Real-world validation across multiple agents and providers.
+Some ingress, local storage, and trace-report work originally placed in later milestones has already landed (see the historical section); the target roadmap re-orders what comes next rather than re-describing what exists. `docs/releases/` and `docs/dogfood/` contain accurate historical records of the v0.x alpha.
