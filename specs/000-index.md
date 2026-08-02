@@ -27,22 +27,27 @@ Provide a single directory of implementation specifications for SignalGlass. Eac
 - Read `AGENTS.md` and this index before implementing any spec.
 - Read the target spec and all docs it references before coding.
 
+## Architectural authority
+
+The current authority for the target architecture is **[Spec 013 — Evidence model](013-evidence-model.md)** (Draft) together with the [Architectural Foundation](../docs/architectural-foundation.md) (v0.1) and [ADR 0004](../docs/decisions/0004-evidence-first.md). Spec 013 defines the canonical, provider-neutral evidence model and supersedes the legacy v0.x model specs below. Legacy specs remain as historical records of the implemented v0.x model and are not deleted. Acceptance of 013 finalizes this supersession; the authority boundary is unambiguous now.
+
 ## Specs
 
 | Spec | Title | Status |
 |---|---|---|
 | [001](001-workspace.md) | Workspace and package layout | Implemented |
-| [002](002-core-domain.md) | Core domain model | Implemented |
-| [003](003-offline-analysis.md) | Offline Run Analysis | Implemented |
-| [004](004-trace-model.md) | Trace and timeline model | Implemented |
+| [002](002-core-domain.md) | Core domain model | Superseded (by [013](013-evidence-model.md)); legacy v0.x |
+| [003](003-offline-analysis.md) | Offline Run Analysis | Superseded (by [013](013-evidence-model.md)); legacy v0.x |
+| [004](004-trace-model.md) | Trace and timeline model | Superseded (by [013](013-evidence-model.md)); legacy v0.x |
 | [005](005-provider-adapters.md) | Provider adapters | Implemented (OpenAI-compatible), Draft (others) |
 | [006](006-ingress-openai-compatible.md) | OpenAI-compatible ingress | Implemented |
 | [007](007-storage-and-privacy.md) | Storage and privacy | Implemented |
 | [008](008-reports.md) | Reports | Implemented (offline + trace reports), Draft (dashboard report views) |
-| [009](009-dashboard-views.md) | Dashboard views | Draft |
-| [010](010-insight-evaluation.md) | Insight evaluation | Draft |
+| [009](009-dashboard-views.md) | Dashboard views | Draft (legacy v0.x; see [013](013-evidence-model.md) §12) |
+| [010](010-insight-evaluation.md) | Insight evaluation | Draft (legacy v0.x; see [013](013-evidence-model.md) §7–8) |
 | [011](011-cli.md) | CLI | Implemented (analyze, ingress, traces) |
 | [012](012-versioning-and-releases.md) | Versioning and releases | Accepted |
+| [013](013-evidence-model.md) | Evidence model | **Draft — current authority for the target architecture** |
 
 ## Project framing
 
@@ -52,6 +57,8 @@ SignalGlass has two complementary modes:
 2. **Live Ingress Observability** — act as an OpenAI-compatible ingress/proxy that captures traces, timeline events, provider requests/responses, token usage, transformations, and optimization opportunities.
 
 The existing offline analyzer is preserved. Live ingress is added beside it, not as a replacement.
+
+The v0.x models behind these modes (`AgentRun`, `Trace`/`TraceEvent`) are compatibility projections over the canonical evidence model defined by [Spec 013](013-evidence-model.md).
 
 ## References
 
