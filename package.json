@@ -8,11 +8,16 @@
     "build": "pnpm -r build",
     "test": "vitest run",
     "dev": "pnpm --filter @signalglass/cli dev",
-    "lint": "echo 'No linter configured yet'"
+    "lint": "echo 'No linter configured yet'",
+    "fallow": "fallow",
+    "fallow:dead-code": "fallow dead-code --unused-files --unused-deps",
+    "fallow:audit": "fallow audit --changed-since main",
+    "fallow:fix-dry": "fallow fix --dry-run"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "fallow": "^2.91.0"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -106,6 +106,32 @@ pnpm --filter @signalglass/cli dev -- traces --storage .signalglass/traces.db sh
 
 See `docs/ingress.md`, `docs/provider-config.md`, and `docs/privacy.md` for details on live ingress and privacy-safe storage.
 
+### Code analysis with Fallow
+
+[Fallow](https://fallow.tools) is a developer-tooling codebase analyzer for
+TypeScript/JavaScript. It is configured via `.fallowrc.json` and is advisory
+during initial adoption — it supplements, rather than replaces, TypeScript
+checks (`tsc`), tests (`pnpm test`), and linting.
+
+```bash
+# Complete repository analysis (unused code, duplication, complexity)
+pnpm fallow
+
+# Unused code, dependencies, and cycles only
+pnpm fallow:dead-code
+
+# Analysis of changes relative to main (dead code, complexity, duplication)
+pnpm fallow:audit
+
+# Preview fixes without modifying any files
+pnpm fallow:fix-dry
+```
+
+`pnpm fallow:dead-code` reports unused files and unused dependencies
+(including cycles); `pnpm fallow:audit` gates on changes relative to `main`;
+`pnpm fallow:fix-dry` prints the edits fallow would make without writing
+them. Findings are reports to triage, not automatic blockers.
+
 ## Token counts are approximate
 
 SignalGlass currently uses a simple character-based approximation (roughly one token per four characters). In the target architecture, token counts are deterministic measurements recorded as versioned derivations over evidence, with provider-reported and locally estimated values distinguished.
