@@ -496,17 +496,30 @@ defining a provider-neutral record kind does not implement MCP observation.
   `duplicatesDetected[]`, `boundaryStatement`.
 - **Discriminant/id rules:** none.
 - **Append-only:** derived; recomputable by a deterministic pure function
-  `deriveCompleteness(trace)`; MAY be serialized on the trace (the docs'
-  examples do), MUST be consistent with the trace when present.
+  `deriveCompleteness(trace, analysis, boundary)`; MAY be serialized on the
+  trace (the docs' examples do), MUST be consistent with the trace when
+  present.
 - **Derivation contract (`deriveCompleteness`):** MUST be pure and
-  deterministic; MUST operate only on explicit evidence and capture-boundary
-  declarations; MUST NOT fabricate observations (it never invents missing
-  events or statuses); MUST report unavailable or incomplete inputs (for
-  example, a trace whose boundary cannot be determined yields an incomplete
-  completeness record, not an invented boundary statement); and MUST NOT
-  calculate quality, cost, recommendations, smells, or optimization claims.
-- **Validation:** counts match the events; gaps and duplicates match the seq
-  analysis; a serialized completeness record that disagrees with its trace is
+  deterministic; signature:
+
+```ts
+function deriveCompleteness(
+  trace: EvidenceTrace,
+  analysis: EvidenceStructuralAnalysis,
+  boundary: CaptureBoundary
+): TraceCompleteness;
+```
+
+  MUST operate only on explicit evidence, the provided structural analysis,
+  and capture-boundary declarations; MUST NOT fabricate observations (it
+  never invents missing events or statuses); MUST report unavailable or
+  incomplete inputs (for example, a trace whose boundary cannot be
+  determined yields an incomplete completeness record, not an invented
+  boundary statement); and MUST NOT calculate quality, cost, recommendations,
+  smells, or optimization claims.
+- **Validation:** counts match the events; gaps and duplicates match the
+  structural analysis; a serialized completeness record that disagrees with
+  the deterministic derivation from trace, analysis, and boundary is
   rejected.
 - **Relationships:** derived from the trace it describes.
 - **Slice:** in (the derivation function and the type).
@@ -946,13 +959,14 @@ examples and the package accept/reject the same inputs.
 
 ### 5.2 Validation entry points and result types
 
-- `parseEvidenceTrace(input: unknown): ParseResult<EvidenceTrace>` — the
+- `parseEvidenceTrace(input: unknown): ParseResult<EvidenceNormalizationResult>` — the
   primary entry point; validates the full trace (identity, seq, spans,
-  events, envelopes, artifacts, completeness consistency).
+  events, envelopes, artifacts, completeness consistency) and returns the
+  normalized trace together with its structural analysis.
 - Per-record validators: `isEvidenceStatus`, `isObservationRole`, `isEventKind`,
   `isContentHash`, `isContentType`, and record-level guards
   (`isContextArtifact`, `isRequestEnvelope`, ...) for composability.
-- Result type (hand-rolled; no library):
+- Result types (hand-rolled; no library):
 
 ```ts
 type ValidationIssue = {
@@ -961,9 +975,41 @@ type ValidationIssue = {
   message: string;       // human-readable, MUST NOT echo payload values
 };
 
-type ParseResult<T> =
-  | { ok: true; value: T; issues: [] }
-  | { ok: false; issues: ValidationIssue[] };
+type DuplicateObservation = {
+  classification: "exact_replay" | "same_id_different_seq";
+  retainedEventId: string;
+  retainedSeq: number;
+  discardedSeq: number;
+  positionIndependentlyRepresented: boolean;
+  canonicalContentEqual: boolean;          // true for exact replays
+  canonicalContentDigest?: string;         // optional integrity aid (e.g., sha256 of canonical bytes)
+  normalizationAlgorithmVersion: string;   // version of the normalization/validation algorithm
+};
+
+type SequenceGap = {
+  startSeq: number;
+  endSeq: number;                          // exclusive; gap covers [startSeq, endSeq)
+  adjacentRetainedEventIds: [string, string] | [string] | [];
+};
+
+type EvidenceStructuralAnalysis = {
+  duplicateObservations: readonly DuplicateObservation[];
+  sequenceGaps: readonly SequenceGap[];
+  validationIssues: readonly ValidationIssue[];
+  completenessDerivationAlgorithmVersion: string;
+};
+
+type EvidenceNormalizationResult =
+  | {
+      ok: true;
+      trace: EvidenceTrace;
+      analysis: EvidenceStructuralAnalysis;
+      completeness: TraceCompleteness;
+    }
+  | {
+      ok: false;
+      issues: readonly ValidationIssue[];
+    };
 ```
 
 - Validation functions never throw for malformed input; they return a
@@ -1093,8 +1139,11 @@ everything that must survive round trips at the value level:
 
 ### 5.7 Serialization rules
 
-- `serializeEvidence(record)` produces the JSON-safe form: plain objects,
-  arrays, strings, numbers, booleans, and `null` for structural absence only.
+- `serializeEvidence(record, analysis)` produces the JSON-safe form: plain
+  objects, arrays, strings, numbers, booleans, and `null` for structural
+  absence only. The serialized output includes the retained canonical trace
+  and its structural analysis (duplicate observations, sequence gaps, and
+  validation issues), and optionally the derived completeness record.
 - **Retained-byte representation (`byte_faithful`) — pinned contract.**
   Retained byte payloads are represented in memory as `Uint8Array` and
   serialized in JSON as **Base64 per RFC 4648 §4**: the standard alphabet
@@ -1127,6 +1176,27 @@ everything that must survive round trips at the value level:
 - Serialization preserves unknown additive fields as parsed values (§5.3,
   value-level, never lexical bytes) and does not reorder or reformat
   retained native content.
+- **Round-trip behavior for exact replays:** For a valid trace containing
+  an exact replay observation:
+  1. parsing classifies and collapses the exact replay;
+  2. the retained canonical trace contains one event at that position;
+  3. duplicate-observation provenance remains serialized in the structural
+     analysis;
+  4. completeness reports the replay deterministically;
+  5. serializing and parsing again preserves equivalent normalized trace,
+     structural analysis, and completeness;
+  6. the second parse does not reject the historical duplicate metadata
+     merely because the duplicate copy is absent from the retained event
+     array.
+- **Semantic round-trip equality:** the following are preserved under
+  parse–serialize–parse:
+  - retained canonical events;
+  - structural duplicate analysis;
+  - sequence gaps;
+  - capture-boundary facts;
+  - derived completeness.
+  Byte-for-byte equality is unnecessary unless the existing serialization
+  contract already requires it.
 
 ### 5.8 Unavailable or incomplete evidence
 
@@ -1140,18 +1210,48 @@ everything that must survive round trips at the value level:
   remains parseable as an explicitly incomplete trace. The completeness
   record MUST document the gap; parsers MUST NOT repair or renumber.
 - A trace whose serialized completeness metadata **contradicts** its
-  retained events or the deterministic `deriveCompleteness` derivation
-  (incorrect status counts, claimed nonexistent gaps, omitted duplicate
-  or gap information, contradictory completeness status) is **invalid and
-  MUST be rejected**. An `incomplete` label never overrides contradictory
-  metadata.
+  retained events, structural analysis, or the deterministic
+  `deriveCompleteness` derivation (incorrect status counts, claimed
+  nonexistent gaps, omitted duplicate or gap information, contradictory
+  completeness status) is **invalid and MUST be rejected**. An `incomplete`
+  label never overrides contradictory metadata.
 - Parsing never fabricates events, content, or values to fill gaps.
+- **Validation order (normative):**
+  1. Parse raw serialized structure.
+  2. Validate raw observations and serialized normalization provenance.
+  3. Classify replay and collision cases.
+  4. Reject structurally invalid ambiguous collisions (same-ID/same-seq
+     content conflict, different-ID/same-seq collision).
+  5. Deterministically produce or validate the retained canonical trace.
+  6. Produce or validate structural analysis, including duplicate
+     observations and gaps.
+  7. Derive completeness from the retained trace, structural analysis, and
+     capture boundary.
+  8. If serialized completeness is present, require exact semantic equality
+     with that derivation.
+  9. Reject disagreement without repairing or overwriting serialized
+     metadata.
+- **Parser distinctions:** A parser MUST distinguish:
+  - valid historical duplicate provenance that cannot be inferred from the
+    retained event array alone;
+  - duplicate provenance inconsistent with the serialized raw observations
+    or normalization record;
+  - completeness metadata inconsistent with valid structural analysis.
+- **Normalized exports without raw duplicate copies:** Such an export MUST
+  declare its boundary honestly and MUST NOT imply that discarded raw
+  observations can be independently reconstructed. The serialized
+  structural analysis serves as the authoritative record of duplicate
+  provenance when raw copies are intentionally omitted.
 - **Negative test requirements (validators MUST reject):**
   - Undocumented sequence gap (gap exists but completeness record omits it).
   - Completeness metadata claiming a nonexistent gap.
   - Incorrect status counts in completeness record.
   - Omitted duplicate or gap information.
   - Contradictory completeness status.
+  - Serialized duplicate provenance inconsistent with raw observations.
+  - Serialized completeness inconsistent with structural analysis.
+  - Fabricated duplicate provenance when the available evidence boundary
+    permits that verification.
   - A correctly documented incomplete trace (all gaps, duplicates, and
     boundary statement match derivation) MUST remain parseable.
 
@@ -1461,6 +1561,24 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   nonexistent/omitted gaps, contradictory status) MUST be rejected;
   negative tests for undocumented gaps, claimed nonexistent gaps, incorrect
   status counts, omitted duplicate/gap info, contradictory status;
+- structural analysis round-trip: exact replay provenance surviving
+  parse–serialize–parse; normalized trace plus structural analysis
+  producing the same completeness before and after serialization;
+- same-ID/different-sequence conflict: retaining the lowest-`seq` event
+  while preserving the discarded observation's provenance and resulting
+  gap;
+- serialized duplicate provenance inconsistent with raw observations being
+  rejected;
+- serialized completeness inconsistent with structural analysis being
+  rejected;
+- fabricated duplicate provenance being rejected when the available
+  evidence boundary permits that verification;
+- a normalized export without raw duplicate copies declaring that
+  limitation without pretending the copies are reconstructable;
+- ambiguous collision cases (same-ID/same-seq content conflict,
+  different-ID/same-seq collision) remaining invalid;
+- permutations of equivalent raw observations producing equivalent
+  normalized results and normalized issues;
 - JSON serialization and parsing round trips, including unknown-field
   preservation at value level (lexical bytes not claimed) and retained-byte
   encoding: canonical RFC 4648 §4 Base64 accepted including zero-padding
@@ -1681,8 +1799,16 @@ first slice; every decision needed to implement it is specified above.
   not auto-fail trace; terminal declaration must be final applicable event;
   timestamps never determine targeting (§2.2.3, §4.7, §5.4).
 - [ ] Completeness is classified per Spec 013 as a derived record;
-  `deriveCompleteness` is pure, deterministic, and free of measurement,
-  cost, interpretation, or optimization logic (§2.1, §2.2.9).
+  `deriveCompleteness(trace, analysis, boundary)` is pure, deterministic,
+  and free of measurement, cost, interpretation, or optimization logic
+  (§2.1, §2.2.9).
+- [ ] Structural analysis and normalization: `parseEvidenceTrace` returns
+  `EvidenceNormalizationResult` containing the retained canonical trace,
+  structural analysis (duplicate observations, sequence gaps, validation
+  issues), and derived completeness; `serializeEvidence` accepts both trace
+  and analysis; exact replay provenance survives parse–serialize–parse;
+  semantic round-trip equality for retained events, structural analysis,
+  gaps, capture boundary, and completeness (§5.2, §5.7).
 - [ ] Duplicate handling and sequence gaps follow the deterministic
   processing order (§4.4): exact replay (no gap), same-ID same-seq content
   conflict (reject trace as invalid), different-ID same-seq collision (reject
@@ -1696,11 +1822,12 @@ first slice; every decision needed to implement it is specified above.
   invalid collision into a valid trace.
 - [ ] Completeness metadata contradiction is rejected: a trace whose
   serialized completeness disagrees with the deterministic derivation from
-  retained evidence (incorrect status counts, claimed nonexistent gaps,
-  omitted duplicate/gap info, contradictory status) is invalid and MUST be
-  rejected; a correctly documented incomplete trace remains parseable;
-  negative tests for undocumented gaps, nonexistent gaps, incorrect counts,
-  omitted info, and contradictory status are required (§5.8).
+  retained evidence, structural analysis, and capture boundary (incorrect
+  status counts, claimed nonexistent gaps, omitted duplicate/gap info,
+  contradictory status) is invalid and MUST be rejected; a correctly
+  documented incomplete trace remains parseable; negative tests for
+  undocumented gaps, nonexistent gaps, incorrect counts, omitted info, and
+  contradictory status are required (§5.8).
 
 ## Tests
 
@@ -1713,6 +1840,9 @@ deterministic ordering, lifecycle targeting (`lifecycleTarget`/`lifecycleEffect`
 duplicate handling (exact replay, same-ID same-seq content conflict,
   different-ID same-seq collision, same-ID different-seq),
 completeness contradiction rejection, incomplete-lifecycle representation,
+structural analysis round-trip (exact replay provenance, completeness
+equivalence, same-ID/different-seq gap provenance),
+normalized export boundary declaration, ambiguous collision rejection,
 serialization and retained-byte Base64 canonicality, hash selection, media
 types, completeness, canonical evidence → legacy `Trace`/`TraceEvent`, legacy
 `Trace`/`TraceEvent` → legacy `AgentRun`, canonical evidence → legacy
