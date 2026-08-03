@@ -871,7 +871,7 @@ path to the caller). The retry references the **original request event**
   "captureSurface": "client_side",
   "observationBoundary": "application_constructed",
   "startedAt": "2025-06-01T14:00:00.123Z",
-  "finishedAt": "2025-06-01T14:00:05.600Z",
+  "finishedAt": "2025-06-01T14:00:31.600Z",
   "status": "completed",
   "spans": [
     {
@@ -882,8 +882,8 @@ path to the caller). The retry references the **original request event**
       "startSeq": 1,
       "endSeq": 6,
       "startedAt": "2025-06-01T14:00:00.200Z",
-      "finishedAt": "2025-06-01T14:00:05.500Z",
-      "durationMs": 5300,
+      "finishedAt": "2025-06-01T14:00:31.500Z",
+      "durationMs": 31300,
       "status": "completed"
     }
   ],
@@ -913,7 +913,7 @@ path to the caller). The retry references the **original request event**
       "spanId": "span-8-0001",
       "seq": 3,
       "kind": "error",
-      "capturedAt": "2025-06-01T14:00:04.500Z",
+      "capturedAt": "2025-06-01T14:00:30.200Z",
       "evidenceStatus": "captured",
       "observationRole": "returned",
       "actor": "model",
@@ -921,7 +921,7 @@ path to the caller). The retry references the **original request event**
       "lifecycleEffect": "none",
       "error": {
         "type": "timeout",
-        "message": "No upstream response was received within 30000ms; the failure was observed at the client boundary when the response did not arrive."
+        "message": "No upstream response was received within 4300ms; the failure was observed at the client boundary when the response did not arrive."
       }
     },
     {
@@ -930,7 +930,7 @@ path to the caller). The retry references the **original request event**
       "spanId": "span-8-0001",
       "seq": 4,
       "kind": "retry",
-      "capturedAt": "2025-06-01T14:00:05.100Z",
+      "capturedAt": "2025-06-01T14:00:30.700Z",
       "evidenceStatus": "captured",
       "observationRole": "application_constructed",
       "retry": {
@@ -946,7 +946,7 @@ path to the caller). The retry references the **original request event**
       "spanId": "span-8-0001",
       "seq": 5,
       "kind": "cancelled",
-      "capturedAt": "2025-06-01T14:00:05.400Z",
+      "capturedAt": "2025-06-01T14:00:31.000Z",
       "evidenceStatus": "captured",
       "observationRole": "application_constructed",
       "lifecycleTarget": "none",
@@ -955,8 +955,8 @@ path to the caller). The retry references the **original request event**
         "requestedBy": "user"
       }
     },
-    { "eventId": "evt-8-0007", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": "span-8-0001", "seq": 6, "kind": "span_end", "capturedAt": "2025-06-01T14:00:05.500Z", "evidenceStatus": "captured" },
-    { "eventId": "evt-8-0008", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": null, "seq": 7, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:05.600Z", "evidenceStatus": "captured" }
+    { "eventId": "evt-8-0007", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": "span-8-0001", "seq": 6, "kind": "span_end", "capturedAt": "2025-06-01T14:00:31.500Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-8-0008", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": null, "seq": 7, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:31.600Z", "evidenceStatus": "captured" }
   ]
 }
 ```
@@ -1084,7 +1084,7 @@ the derivations show how records cite their inputs and versions:
   "algorithm": { "name": "provider-reported-usage", "version": "1.0.0" },
   "inputs": [{ "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2", "eventId": "evt-2-0004" }],
   "configuration": { "tokenizerRegistry": "anthropic-2025-05" },
-  "calculatedAt": "2025-06-01T14:00:05.400Z"
+  "calculatedAt": "2025-06-01T14:00:31.000Z"
 }
 ```
 
@@ -1101,7 +1101,7 @@ the derivations show how records cite their inputs and versions:
     { "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2" }
   ],
   "configuration": { "pricingTable": "anthropic-2025-06", "tokenizerRegistry": "anthropic-2025-05" },
-  "calculatedAt": "2025-06-01T14:00:05.500Z"
+  "calculatedAt": "2025-06-01T14:00:31.500Z"
 }
 ```
 

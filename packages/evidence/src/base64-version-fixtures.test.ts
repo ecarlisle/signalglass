@@ -104,6 +104,10 @@ describe('Retained-byte Base64 contract (Spec 014 §5.7)', () => {
       const bytes = utf8Encode('x');
       const encoded = base64Encode(bytes);
       expect(sha256Hex(utf8Encode(encoded))).not.toBe(sha256Hex(bytes));
+      // Verify round-trip decode
+      const decoded = base64Decode(encoded);
+      expect(decoded).not.toBeNull();
+      expect([...(decoded as Uint8Array)]).toEqual([...bytes]);
     });
 
     it('uses decoded bytes for nativeContentHash', () => {

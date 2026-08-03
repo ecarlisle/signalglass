@@ -9,7 +9,7 @@
   "captureSurface": "client_side",
   "observationBoundary": "application_constructed",
   "startedAt": "2025-06-01T14:00:00.123Z",
-  "finishedAt": "2025-06-01T14:00:05.600Z",
+  "finishedAt": "2025-06-01T14:00:31.600Z",
   "status": "completed",
   "spans": [
     {
@@ -20,8 +20,8 @@
       "startSeq": 1,
       "endSeq": 6,
       "startedAt": "2025-06-01T14:00:00.200Z",
-      "finishedAt": "2025-06-01T14:00:05.500Z",
-      "durationMs": 5300,
+      "finishedAt": "2025-06-01T14:00:31.500Z",
+      "durationMs": 31300,
       "status": "completed"
     }
   ],
@@ -74,7 +74,7 @@
       "spanId": "span-8-0001",
       "seq": 3,
       "kind": "error",
-      "capturedAt": "2025-06-01T14:00:04.500Z",
+      "capturedAt": "2025-06-01T14:00:30.200Z",
       "evidenceStatus": "captured",
       "observationRole": "returned",
       "actor": "model",
@@ -82,7 +82,7 @@
       "lifecycleEffect": "none",
       "error": {
         "type": "timeout",
-        "message": "No upstream response was received within 30000ms; the failure was observed at the client boundary when the response did not arrive."
+        "message": "No upstream response was received within 4300ms; the failure was observed at the client boundary when the response did not arrive."
       }
     },
     {
@@ -91,7 +91,7 @@
       "spanId": "span-8-0001",
       "seq": 4,
       "kind": "retry",
-      "capturedAt": "2025-06-01T14:00:05.100Z",
+      "capturedAt": "2025-06-01T14:00:30.700Z",
       "evidenceStatus": "captured",
       "observationRole": "application_constructed",
       "retry": {
@@ -107,7 +107,7 @@
       "spanId": "span-8-0001",
       "seq": 5,
       "kind": "cancelled",
-      "capturedAt": "2025-06-01T14:00:05.400Z",
+      "capturedAt": "2025-06-01T14:00:31.000Z",
       "evidenceStatus": "captured",
       "observationRole": "application_constructed",
       "lifecycleTarget": "none",
@@ -122,7 +122,7 @@
       "spanId": "span-8-0001",
       "seq": 6,
       "kind": "span_end",
-      "capturedAt": "2025-06-01T14:00:05.500Z",
+      "capturedAt": "2025-06-01T14:00:31.500Z",
       "evidenceStatus": "captured"
     },
     {
@@ -131,7 +131,7 @@
       "spanId": null,
       "seq": 7,
       "kind": "interaction_end",
-      "capturedAt": "2025-06-01T14:00:05.600Z",
+      "capturedAt": "2025-06-01T14:00:31.600Z",
       "evidenceStatus": "captured"
     }
   ]
