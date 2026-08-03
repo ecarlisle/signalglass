@@ -157,7 +157,8 @@ gains one workspace dependency on `@signalglass/evidence`.
   `deriveCompleteness` derivation, §2.2.9);
 - the discriminant and identifier rules of §3 as types and constants;
 - runtime validators and the parse result type (§5);
-- `serializeEvidence` / `parseEvidenceTrace` JSON-safe round-trip functions
+- `serializeEvidenceRecord` / `parseEvidenceRecord` JSON-safe round-trip
+  functions
   (§5.7);
 - deterministic helpers that are pure and dependency-free: sequence and
   completeness derivation, hash-path selection and RFC 8785 (JCS)
@@ -251,10 +252,10 @@ Every primitive carries one classification, mirroring Spec 013 §1.1:
 The evidence core contains only **evidence** primitives plus the
 vocabulary/value types they need, with one exception: the `CompletenessRecord`
 and its deterministic derivation (§2.2.9) are in the first slice because Spec
-013 §4.3 requires each trace to carry a derived completeness record and
-validators must verify serialized completeness. Derived and administrative
-types are otherwise referenced by id or field where Spec 013 requires, but are
-not implemented in the first slice.
+013 §4.3 requires each `EvidenceRecord` to carry one derived completeness
+record and validators must verify serialized completeness. Derived and
+administrative types are otherwise referenced by id or field where Spec 013
+requires, but are not implemented in the first slice.
 
 ### 2.2 In-slice primitives
 
@@ -272,29 +273,30 @@ specifications (§8.2), and `@signalglass/evidence` MUST NOT depend on any MCP
 implementation, MCP protocol library, tool runtime, or provider API. Merely
 defining a provider-neutral record kind does not implement MCP observation.
 
-#### 2.2.1 Trace envelope (`EvidenceTrace`)
+#### 2.2.1 Canonical trace view (`EvidenceTrace`)
 
 - **Category:** evidence (top-level container).
-- **Responsibility:** the authoritative serialized evidence record of one
-  interaction (Spec 013 §1.2): one interaction, one trace.
+- **Responsibility:** the deterministic canonical trace derived from the raw
+  observations in the authoritative `EvidenceRecord` (§5.2). It is the
+  normalized view of one interaction, not an independently authoritative
+  serialized evidence record.
 - **Fields:** `interactionId`, `traceId` (equal; invariant), `evidenceSchemaVersion`,
   `captureProfile: { name, version }`, `captureSurface`, `observationBoundary`,
   `startedAt`, `finishedAt?` (present iff a terminal state was observed, §4.7),
-  `status`, `conditions?`, `spans[]`, `events[]`,
-  `completeness?` (derived; MAY be serialized, MUST be consistent when present).
+  `status`, `conditions?`, `spans[]`, `events[]`.
 - **Discriminant/id rules:** `traceId` is the reference identifier; nested
   records reference the trace by `traceId` only. `interactionId === traceId`
   MUST hold (validated). ULID-style ids recommended (Spec 013 §2.1).
-- **Append-only:** the trace and its records are immutable once captured;
-  nothing is mutated in place. Corrections are new records or completeness
-  notes, never in-place edits.
+- **Append-only:** the raw observations from which the trace is derived are
+  immutable once captured; normalization never mutates them. Corrections are
+  new observations, never in-place edits.
 - **Observation boundary:** `captureSurface` + `observationBoundary` declare
   the trace-level boundary; records inherit unless they override.
 - **Serialization:** JSON object; both `interactionId` and `traceId`
   serialized at top level (never inferred from each other).
 - **Validation:** identity equality, version presence, boundary vocabulary,
   status vocabulary and lifecycle presence rules (§4.7), seq/span/event
-  cross-checks, completeness consistency (§4, §5).
+  cross-checks, and agreement with deterministic normalization (§4, §5).
 - **Relationships:** parent of all spans/events; referenced by artifacts,
   measurements, and interpretations by `traceId`.
 - **Slice:** in (first).
@@ -501,9 +503,8 @@ defining a provider-neutral record kind does not implement MCP observation.
   `duplicatesDetected[]`, `boundaryStatement`.
 - **Discriminant/id rules:** none.
 - **Append-only:** derived; recomputable by a deterministic pure function
-  `deriveCompleteness(trace, analysis, boundary)`; MAY be serialized on the
-  trace (the docs' examples do), MUST be consistent with the trace when
-  present.
+  `deriveCompleteness(trace, analysis, boundary)`; serialized exactly once as
+  `EvidenceRecord.completeness`, never on `EvidenceTrace`.
 - **Derivation contract (`deriveCompleteness`):** MUST be pure and
   deterministic; signature:
 
@@ -523,9 +524,9 @@ function deriveCompleteness(
   boundary statement); and MUST NOT calculate quality, cost, recommendations,
   smells, or optimization claims.
 - **Validation:** counts match the events; gaps and duplicates match the
-  structural analysis; a serialized completeness record that disagrees with
-  the deterministic derivation from trace, analysis, and boundary is
-  rejected.
+  structural analysis; `EvidenceRecord.completeness` MUST equal the
+  deterministic derivation from trace, analysis, and boundary or parsing
+  rejects the record.
 - **Relationships:** derived from the trace it describes.
 - **Slice:** in (the derivation function and the type).
 
@@ -719,7 +720,7 @@ as part of Spec 014:
 analysis in this deterministic order:
 
 1. Classify exact replays and collision candidates by `eventId`, `seq`,
-   and canonical content.
+   and canonical content, carrying provenance by `observationId`.
 2. Collapse exact replays.
 3. Reject same-ID/same-sequence content conflicts.
 4. Reject different-ID/same-sequence collisions.
@@ -729,6 +730,13 @@ analysis in this deterministic order:
 7. Derive gaps from retained sequence positions.
 8. Derive completeness only for a trace that remains valid after structural
    validation.
+
+This processing is invariant under permutation of the same already identified
+raw observations. Array position, arrival order, timestamps, opaque
+`observationId`/`eventId` values, and content digests never select a winner.
+`seq` remains the only canonical event-ordering and permitted collision-
+resolution field. Normalization preserves the raw observation array untouched;
+it does not reorder that captured evidence into `seq` order.
 
 **Collision cases:**
 
@@ -976,6 +984,7 @@ examples and the package accept/reject the same inputs.
 
 ```ts
 type EvidenceObservation = {
+  observationId: string;
   eventId: string;
   traceId: string;
   spanId: string | null;
@@ -1003,9 +1012,15 @@ type EvidenceRecord = {
 ```
 
 - The `rawObservations` array contains **every captured observation**,
-  including every replay or conflicting copy, in the order they were
-  assigned `seq` at the observation boundary. This array is never
-  modified by normalization; it is the authoritative lossless evidence.
+  including every replay or conflicting copy. Each observation receives a
+  unique, immutable, opaque `observationId` at the capture boundary. The
+  serialized array preserves captured array order for lossless authoritative
+  round trips, but that order is not semantically authoritative, does not
+  imply arrival or capture order, and is never a normalization tie-breaker.
+  If capture order is evidence for a future use case, it MUST be recorded as
+  an explicit captured field rather than inferred from array position. The
+  array is never modified by normalization; it is authoritative captured
+  evidence.
 - The `trace` field is the deterministic normalized canonical trace
   derived from `rawObservations` per the collision rules in §4.4.
 - The `analysis` field summarizes duplicate observations and sequence
@@ -1031,9 +1046,10 @@ type EvidenceRecordParseResult =
 ```ts
 type DuplicateObservation = {
   classification: "exact_replay" | "same_id_different_seq";
+  retainedObservationId: string;        // retained source when seq distinguishes it; representative only for exact replay
+  relatedObservationIds: readonly string[]; // all other observations in the relationship
   retainedEventId: string;              // eventId of the retained canonical event
   retainedSeq: number;                  // seq of the retained canonical event
-  rawObservationIndices: readonly number[]; // indices into EvidenceRecord.rawObservations for all copies
   discardedSeq: number | null;          // seq of discarded copy (for same_id_different_seq)
   positionIndependentlyRepresented: boolean; // true if discarded seq is independently occupied
   canonicalContentEqual: boolean;       // true for exact replays
@@ -1063,15 +1079,26 @@ type CaptureBoundary = {
 };
 ```
 
-- The `rawObservationIndices` in `DuplicateObservation` reference indices
-  into `EvidenceRecord.rawObservations`, preserving lossless access to every
-  original observation that contributed to the duplicate classification.
+- `retainedObservationId` and `relatedObservationIds` reference observations
+  by stable identity, never by array index. `observationId` is opaque: it MUST
+  NOT determine event ordering, collision resolution, or winner selection.
+  `relatedObservationIds` is semantically an unordered unique collection;
+  semantic comparisons normalize it (for example, by sorting a copy solely
+  for equality comparison). Such comparison normalization gives identifiers
+  no ordering authority and MUST NOT affect retained-event selection.
+  For an exact replay, all observations have identical canonical event content,
+  so no observation wins: semantic comparison treats
+  `retainedObservationId` plus `relatedObservationIds` as one unordered set,
+  and the retained id is only a serialized provenance representative. For a
+  same-ID/different-sequence relationship, `seq` determines the retained
+  observation and the retained id MUST reference that lowest-`seq`
+  observation. `observationId` and capture-only metadata are excluded from
+  canonical event-content equality.
 - `CaptureBoundary` records the declared observation boundary and declared
   event kinds/surfaces for completeness derivation (§2.2.9).
 - The parser returns `EvidenceRecordParseResult` with the full
   `EvidenceRecord` containing raw observations, canonical trace, structural
-  analysis, and derived completeness. This replaces the previous
-  `EvidenceNormalizationResult` and `ParseResult` nesting.
+  analysis, and derived completeness.
 
 - Validation functions never throw for malformed input; they return an
   `EvidenceRecordParseResult`. Throwing is reserved for programming
@@ -1087,9 +1114,9 @@ type CaptureBoundary = {
 - **Unknown fields on known shapes:** preserved, not errors. Forward
   tolerance per Spec 013 §10: older readers MUST tolerate unknown additive
   fields in newer records without failing, and MUST preserve them on
-  read-modify-write round trips. `parseEvidenceTrace` retains unknown fields
+  read-modify-write round trips. `parseEvidenceRecord` retains unknown fields
   (in an explicit passthrough slot on the internal record) and
-  `serializeEvidence` re-emits them at their original structural paths with
+  `serializeEvidenceRecord` re-emits them at their original structural paths with
   equivalent JSON values — never discarded and never interpreted as known
   evidence. "Ignore unknown fields" never permits discarding them when
   evidence is re-serialized. Ordinary unknown-field preservation does NOT
@@ -1119,8 +1146,9 @@ type CaptureBoundary = {
   - rejects **unknown discriminants** when their semantics are required to
     interpret the record safely (below);
   - never silently discards unknown fields;
-  - returns **structured compatibility or validation errors** (the
-    `ParseResult` of §5.2) whenever safe interpretation is impossible.
+  - returns **structured compatibility or validation errors** through the
+    `EvidenceRecordParseResult` of §5.2 whenever safe interpretation is
+    impossible.
   Four situations are deliberately distinguished: **unknown additive
   fields** (tolerated and preserved), **unknown discriminants** (refused
   when semantics are required), **compatible newer revisions** (accepted
@@ -1212,11 +1240,18 @@ everything that must survive round trips at the value level:
   4. `completeness` — derived completeness;
   5. `evidenceSchemaVersion`;
   6. `captureBoundary`.
-- **Normalized export serialization (derivative):** `serializeEvidenceExport(trace: EvidenceTrace, analysis: EvidenceStructuralAnalysis, completeness: TraceCompleteness)` produces a JSON-safe form containing only the canonical trace, structural analysis, and derived completeness. This export **omits `rawObservations`** and MUST:
+- **Normalized export serialization (derivative):** `serializeEvidenceExport(trace: EvidenceTrace, analysis: EvidenceStructuralAnalysis, completeness: TraceCompleteness, captureBoundary: CaptureBoundary)` produces a JSON-safe form containing only the canonical trace, reported structural analysis, derived completeness, and declared boundary. This export **omits `rawObservations`** and MUST:
   - declare in its metadata that raw observations are omitted;
+  - declare the reduced verification boundary;
   - NOT be described as the authoritative evidence record;
-  - NOT claim that duplicate provenance can be independently reconstructed or fully revalidated from the export;
-  - retain enough declared boundary information to interpret its completeness honestly.
+  - label duplicate analysis as reported derived metadata;
+  - declare that omitted observations cannot be independently proved,
+    reconstructed, or revalidated without the authoritative `EvidenceRecord`;
+  - retain enough declared boundary information to interpret its completeness
+    honestly;
+  - MAY validate internal consistency among its retained trace, reported
+    analysis, completeness, and declared boundary, but MUST NOT claim
+    evidentiary authority for observations it omits.
 - **Retained-byte representation (`byte_faithful`) — pinned contract.**
   Retained byte payloads are represented in memory as `Uint8Array` and
   serialized in JSON as **Base64 per RFC 4648 §4**: the standard alphabet
@@ -1253,7 +1288,8 @@ everything that must survive round trips at the value level:
   `EvidenceRecord` containing an exact replay observation:
   1. both original observations remain in `rawObservations`;
   2. one canonical event remains in `trace`;
-  3. structural analysis reports the replay with both `rawObservationIndices`;
+  3. structural analysis reports the replay using the stable identities of
+     both observations;
   4. `completeness` reflects the replay deterministically;
   5. serializing and parsing again reproduces equivalent `rawObservations`,
      `trace`, `analysis`, and `completeness`;
@@ -1264,7 +1300,8 @@ everything that must survive round trips at the value level:
   3. the discarded canonical position is reported as a gap in `analysis`
      unless independently occupied;
   4. structural provenance identifies the relationship via
-     `rawObservationIndices` without replacing the original observation;
+     `retainedObservationId` and `relatedObservationIds` without replacing
+     either original observation;
   5. the result round-trips semantically.
 - **Semantic round-trip equality (authoritative record):** the following are
   preserved under parse–serialize–parse of an `EvidenceRecord`:
@@ -1273,6 +1310,18 @@ everything that must survive round trips at the value level:
   - `analysis` (structural duplicate analysis);
   - `captureBoundary`;
   - `completeness`.
+  Raw array order and every `observationId` are preserved for this lossless
+  round trip. Semantic equivalence of normalized results instead compares:
+  canonical events by `seq`; exact-replay relationships by classification,
+  event identity, and the normalized unordered union of retained and related
+  observation ids; same-ID/different-sequence relationships additionally by
+  the lowest-`seq` retained observation and normalized unordered related ids;
+  sequence gaps by `(startSeq, endSeq)` with
+  `adjacentRetainedEventIds` compared as the ordered boundary tuple;
+  completeness status maps by key/value and duplicate collections
+  canonically; and validation issues by stable code, path, and normalized
+  identifier collections rather than emission order. Raw serialized array
+  order is intentionally excluded from normalized semantic equivalence.
   Byte-for-byte equality is unnecessary unless the existing serialization
   contract already requires it.
 
@@ -1282,12 +1331,12 @@ everything that must survive round trips at the value level:
   status and MAY carry a `MissingDeclaration` (`reportedBy` records which
   surface/boundary reported the absence); they carry no content, no fidelity,
   no content type, and no hash.
-- A trace with a real sequence gap whose serialized completeness metadata
+- An `EvidenceRecord` with a real sequence gap whose serialized completeness
   **accurately documents that gap** (counts, gap positions, duplicate
   detections, boundary statement all match the deterministic derivation)
   remains parseable as an explicitly incomplete trace. The completeness
   record MUST document the gap; parsers MUST NOT repair or renumber.
-- A trace whose serialized completeness metadata **contradicts** its
+- An `EvidenceRecord` whose serialized `completeness` **contradicts** its
   retained events, structural analysis, or the deterministic
   `deriveCompleteness` derivation (incorrect status counts, claimed
   nonexistent gaps, omitted duplicate or gap information, contradictory
@@ -1296,8 +1345,9 @@ everything that must survive round trips at the value level:
 - Parsing never fabricates events, content, or values to fill gaps.
 - **Validation order (normative):**
   1. Parse raw serialized structure.
-  2. Validate raw observations and serialized normalization provenance.
-  3. Classify replay and collision cases.
+  2. Validate unique, present observation identities and raw observations,
+     then validate serialized normalization provenance.
+  3. Classify replay and collision cases without using array order.
   4. Reject structurally invalid ambiguous collisions (same-ID/same-seq
      content conflict, different-ID/same-seq collision).
   5. Deterministically produce or validate the retained canonical trace.
@@ -1305,8 +1355,8 @@ everything that must survive round trips at the value level:
      observations and gaps.
   7. Derive completeness from the retained trace, structural analysis, and
      capture boundary.
-  8. If serialized completeness is present, require exact semantic equality
-     with that derivation.
+  8. Require serialized `EvidenceRecord.completeness` to have exact semantic
+     equality with that derivation.
   9. Reject disagreement without repairing or overwriting serialized
      metadata.
 - **Parser distinctions:** A parser MUST distinguish:
@@ -1316,10 +1366,12 @@ everything that must survive round trips at the value level:
     or normalization record;
   - completeness metadata inconsistent with valid structural analysis.
 - **Normalized exports without raw duplicate copies:** Such an export MUST
-  declare its boundary honestly and MUST NOT imply that discarded raw
-  observations can be independently reconstructed. The serialized
-  structural analysis serves as the authoritative record of duplicate
-  provenance when raw copies are intentionally omitted.
+  declare omitted evidence and its reduced verification boundary, carry
+  duplicate analysis only as reported derived metadata, and state that
+  discarded raw observations cannot be independently proved, reconstructed,
+  or revalidated without the authoritative `EvidenceRecord`. It MAY verify
+  internal consistency among retained fields but is not authoritative for
+  omitted observations.
 - **Negative test requirements (validators MUST reject):**
   - Undocumented sequence gap (gap exists but completeness record omits it).
   - Completeness metadata claiming a nonexistent gap.
@@ -1353,8 +1405,8 @@ Required directions (implemented in `@signalglass/core`'s
    or as an explicit composition; either way the projection report MUST
    reflect the composed loss metadata (see §6.5).
 
-The authoritative direction is **canonical evidence**. Projections are
-derived views; they never alter or overwrite authoritative evidence, and
+The authoritative input is an **`EvidenceRecord`**. Projection functions read
+its deterministic `trace` view; they never alter or overwrite the record, and
 redacted/missing/unknown evidence is never fabricated into false certainty
 during projection.
 
@@ -1396,9 +1448,9 @@ type ProjectionResult<T> =
   | { ok: true; view: T; report: ProjectionReport }
   | { ok: false; report: ProjectionReport; issues: ProjectionIssue[] };
 
-type EvidenceToLegacyTrace = (evidence: EvidenceTrace) => ProjectionResult<LegacyTraceView>;
+type EvidenceToLegacyTrace = (record: EvidenceRecord) => ProjectionResult<LegacyTraceView>;
 type LegacyTraceToAgentRun = (trace: LegacyTrace) => ProjectionResult<AgentRunView>;
-type EvidenceToAgentRun = (evidence: EvidenceTrace) => ProjectionResult<AgentRunView>;
+type EvidenceToAgentRun = (record: EvidenceRecord) => ProjectionResult<AgentRunView>;
 ```
 
 - Projections return an explicit `ProjectionResult` and never throw on
@@ -1493,7 +1545,7 @@ type EvidenceToAgentRun = (evidence: EvidenceTrace) => ProjectionResult<AgentRun
   then legacy Trace→AgentRun mappings with `stage: "legacy_trace_to_agent_run"`).
   The composed report's `projectionVersion` records the
   `EvidenceToAgentRun` projection version; its `sourceSchemaVersion` records
-  the `EvidenceTrace` schema version. Any `issues` from a failed second stage
+  the `EvidenceRecord` schema version. Any `issues` from a failed second stage
   are included with their `stage` field. A direct `EvidenceToAgentRun`
   implementation MUST produce a report that is semantically equivalent to
   this composed report (including stage-attributed mappings and issues) for
@@ -1595,6 +1647,12 @@ migration, and privacy/retention/redaction workflows.
 
 Future implementation tests MUST cover, using Vitest and fixed fixtures:
 
+- documentation/contract checks that the public parser and serializer names
+  are uniquely `parseEvidenceRecord` and `serializeEvidenceRecord`, with the
+  single success/failure contract `EvidenceRecordParseResult`;
+- `EvidenceRecord` as the only authoritative serialized evidence record,
+  `EvidenceTrace` as its deterministic canonical view, and completeness in
+  exactly one serialized location (`EvidenceRecord.completeness`);
 - valid record construction for every §2.2 record type;
 - malformed and incomplete records (missing required fields, invalid enums,
   non-JSON-safe values);
@@ -1605,7 +1663,9 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   discriminants refused with structured errors; unknown additive fields
   preserved on round trip;
 - identifier and reference integrity (`interactionId === traceId`,
-  cross-reference resolution, uniqueness);
+  cross-reference resolution, uniqueness), plus required unique immutable
+  `observationId` values on every raw observation; missing or duplicate
+  observation identities are rejected deterministically;
 - wall-clock and monotonic timing (ties resolved by `seq`, clock-basis
   declaration, no fabricated durations);
 - deterministic event ordering (contiguous `seq`, duplicate and gap
@@ -1640,14 +1700,29 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   status counts, omitted duplicate/gap info, contradictory status;
 - authoritative record serialization: every raw exact-replay copy preserved in `rawObservations`;
 - exact replay parse–serialize–parse semantic equality of full `EvidenceRecord`;
-- same-ID/different-sequence conflict: preserving both observations while retaining the lowest-`seq` canonical event and gap provenance;
+- exact-replay authoritative round trips preserving every observation and its
+  stable identity;
+- same-ID/different-sequence conflict: preserving both observations and their
+  identities while retaining the lowest-`seq` canonical event and stable gap
+  provenance;
+- duplicate provenance referencing only `observationId` values, never raw
+  array positions;
 - serialized duplicate provenance inconsistent with raw observations being rejected;
 - serialized `trace` contradicting deterministic normalization being rejected;
 - serialized completeness inconsistent with derived completeness being rejected;
 - fabricated duplicate provenance being rejected when the available evidence boundary permits that verification;
-- a normalized export without raw duplicate copies declaring that limitation without pretending the copies are reconstructable;
+- a normalized export without raw duplicate copies declaring omitted evidence,
+  its reduced verification boundary, and reported-derived status without
+  claiming authoritative duplicate provenance or independent revalidation;
 - ambiguous collision cases (same-ID/same-seq content conflict, different-ID/same-seq collision) remaining invalid;
-- permutations of equivalent raw observations producing equivalent normalized results and normalized issues;
+- permutations of the same identified raw observations producing semantically
+  equivalent trace, duplicate relationships, gaps, completeness, and
+  normalized issues, with unordered identifier collections canonicalized only
+  for comparison;
+- raw array order never affecting collision resolution, while authoritative
+  parse–serialize–parse preserves that serialized order;
+- opaque observation identities never serving as ordering or winner-selection
+  keys;
 - JSON serialization and parsing round trips, including unknown-field
   preservation at value level (lexical bytes not claimed) and retained-byte
   encoding: canonical RFC 4648 §4 Base64 accepted including zero-padding
@@ -1871,6 +1946,24 @@ first slice; every decision needed to implement it is specified above.
   `deriveCompleteness(trace, analysis, boundary)` is pure, deterministic,
   and free of measurement, cost, interpretation, or optimization logic
   (§2.1, §2.2.9).
+- [ ] `EvidenceRecord` is the only authoritative serialized evidence record;
+  its `rawObservations` are authoritative captured evidence, while
+  `EvidenceTrace`, structural analysis, and completeness are deterministic
+  derivations. `EvidenceRecord.completeness` is the only serialized
+  completeness location, and disagreement with recomputation is rejected
+  without repair (§2.2.1, §2.2.9, §5.2, §5.7–§5.8).
+- [ ] Every raw observation has a unique immutable opaque `observationId`;
+  duplicate provenance uses only stable observation identities; array order,
+  timestamps, arrival order, identifiers, and digests never affect collision
+  resolution. Permutations of the same identified observations yield
+  semantically equivalent normalized trace, analysis, gaps, completeness, and
+  issues, while authoritative round trips preserve the raw serialized order
+  and every identity (§4.4, §5.2, §5.7, §9.1).
+- [ ] Normalized exports that omit `rawObservations` declare omitted evidence,
+  their reduced verification boundary, and duplicate analysis as reported
+  derived metadata; they do not claim authoritative duplicate provenance or
+  independent revalidation without the authoritative `EvidenceRecord` (§5.7–
+  §5.8).
 - [ ] Structural analysis and normalization: `parseEvidenceRecord` returns
   `EvidenceRecordParseResult` containing the full `EvidenceRecord` with
   `rawObservations`, retained canonical trace, structural analysis
@@ -1890,9 +1983,9 @@ first slice; every decision needed to implement it is specified above.
   validate IDs → validate seq → derive gaps → derive completeness) is
   normative; completeness must not convert an ambiguous or structurally
   invalid collision into a valid trace.
-- [ ] Completeness metadata contradiction is rejected: a trace whose
-  serialized completeness disagrees with the deterministic derivation from
-  retained evidence, structural analysis, and capture boundary (incorrect
+- [ ] Completeness metadata contradiction is rejected: an `EvidenceRecord`
+  whose serialized `completeness` disagrees with the deterministic derivation
+  from retained evidence, structural analysis, and capture boundary (incorrect
   status counts, claimed nonexistent gaps, omitted duplicate/gap info,
   contradictory status) is invalid and MUST be rejected; a correctly
   documented incomplete trace remains parseable; negative tests for

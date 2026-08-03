@@ -71,7 +71,8 @@ concepts must be expressed as compatibility projections in implementation (see
 | Entity | Responsibility | Canonical? |
 |---|---|---|
 | **Interaction** | The enclosing logical AI exchange or task execution being observed (one agent step, one user turn, or an equivalent logical unit). The domain entity whose evidence is recorded. | Yes |
-| **Trace** | The authoritative serialized evidence record of one interaction. Each interaction is serialized as exactly one trace; `traceId` is the same identifier value as the interaction's `id`. | Yes |
+| **Evidence record** | The authoritative serialized record of one interaction: raw observations plus the deterministic trace, structural analysis, completeness, capture boundary, and schema version. | Yes |
+| **Trace** | The deterministic canonical view derived from an evidence record's raw observations. `traceId` is the same identifier value as the interaction's `id`; the trace is not independently authoritative. | Derived canonical view |
 | **Span** | A structured, hierarchically organized segment of an interaction with a lifecycle (start/end): a model request, a tool call, an MCP call, a retrieval, a context-provider call, or context assembly. Carries hierarchy, timing, and status. | Yes |
 | **Event** | A discrete observed occurrence attached to a span or to the trace root. Carries content, evidence status, and the deterministic sequence position. | Yes |
 | **Run** | A derived, session-level grouping of one or more interactions (for example, an agent's task execution). A projection, not a canonical evidence container. | No (projection) |
@@ -85,16 +86,16 @@ concepts must be expressed as compatibility projections in implementation (see
 | **Measurement record** | A deterministic derivation over evidence (token counts, latency, duration, cost) with algorithm/version and input references. | Derived |
 | **Interpretation record** | A labeled, optional human-facing explanation or judgment derived from measurements and evidence. | Derived |
 
-### 1.2 An interaction is serialized as exactly one trace
+### 1.2 An interaction is serialized as exactly one evidence record
 
-**Rule:** An interaction is a domain entity; a trace is the authoritative
-serialized evidence record of that entity. Each interaction is serialized as
-exactly one trace, and `interactionId` (the interaction's id) and `traceId`
-(the trace's id) are the same identifier value. This document uses
-"interaction" when referring to the domain object and "trace" when referring
-to its serialized record; they are two views of one entity, not two containers.
+**Rule:** An interaction is a domain entity; `EvidenceRecord` is its only
+authoritative serialized evidence record. Each record preserves authoritative
+raw observations and carries one deterministic canonical trace view plus its
+structural analysis, completeness, capture boundary, and schema version.
+Within that trace, `interactionId` (the interaction's id) and `traceId` (the
+trace view's id) are the same identifier value.
 
-**Canonical serialized shape.** The serialized trace record carries both
+**Canonical trace shape.** The derived trace view carries both
 `interactionId` and `traceId` at the top level, with equal values. This
 equality is an invariant that serialization MUST enforce and that consumers
 MAY rely on. `traceId` is the reference identifier: events, spans, envelopes,
@@ -102,9 +103,10 @@ artifacts, and derived records reference the trace by `traceId` only, never by
 `interactionId`. Neither field is omitted, and readers are never required to
 infer one from the other.
 
-**Rationale:** Two competing top-level containers would make "interaction" and
-"trace" ambiguous forever. One serialization keeps identity, ordering,
-completeness, and lifecycle in a single place.
+**Rationale:** One authoritative `EvidenceRecord` prevents a normalized trace
+from competing with the raw observations that reproduce it. Identity and
+lifecycle remain on the trace view; completeness has one serialized owner on
+the enclosing evidence record.
 
 **Rejected alternatives:**
 
@@ -141,7 +143,7 @@ ordering key lives on every content-bearing record.
 - `interactionId` — the domain identifier of the interaction; the same value
   as `traceId` (§1.2). Serialized at the trace top level; nested records never
   use it to reference the trace.
-- `traceId` — stable, opaque identifier of the serialized trace record; MUST
+- `traceId` — stable, opaque identifier of the canonical trace view; MUST
   equal `interactionId` (§1.2). MUST be unique within a SignalGlass
   installation; SHOULD be globally unique (ULID-style values are recommended).
   Nested records reference the trace by `traceId` only.
@@ -149,11 +151,23 @@ ordering key lives on every content-bearing record.
 - `parentSpanId` — MAY be absent on root spans. Establishes **hierarchy only**;
   it MUST NOT be used for ordering.
 - Event `eventId` — stable, opaque event identifier, unique within the trace.
+- Observation `observationId` — stable, opaque identifier assigned at the
+  capture boundary to every raw observation, unique within the evidence
+  record and immutable. Duplicate provenance references observation ids,
+  never raw-array positions.
 - Artifact, measurement, and interpretation records carry their own stable ids.
 
 Identifiers MUST be assigned at capture time, MUST be immutable, and MUST NOT be
 derived from content. Content-derived identity (for example, a hash) is a
 separate `contentHash` field, never an id.
+
+Opaque identifiers MUST NOT determine ordering, collision resolution, or
+winner selection. Permuting the same already identified raw observations MUST
+produce semantically equivalent trace, duplicate relationships, gaps,
+completeness, and normalized validation issues. The authoritative serialized
+record MAY preserve raw array order for lossless round trips, but that order is
+not semantic and is never a tie-breaker. Capture order, if needed as evidence,
+must be recorded explicitly rather than inferred from an array index.
 
 `null` is reserved for structural absence: a root span's absent
 `parentSpanId`, or an event attached to the trace root via `spanId`. Evidence
@@ -238,7 +252,8 @@ survives replay.
 analysis in this deterministic order:
 
 1. Classify exact replays and collision candidates by `eventId`, `seq`,
-   and canonical content.
+   and canonical content, carrying provenance by `observationId` rather than
+   array position.
 2. Collapse exact replays.
 3. Reject same-ID/same-sequence content conflicts.
 4. Reject different-ID/same-sequence collisions.
@@ -247,7 +262,7 @@ analysis in this deterministic order:
 6. Validate retained event-ID and sequence uniqueness.
 7. Derive gaps from retained sequence positions.
 8. Derive completeness only for a trace that remains valid after structural
-   validation.
+   validation, and serialize it only as `EvidenceRecord.completeness`.
 
 **Collision cases:**
 
@@ -460,9 +475,10 @@ the value of explicit uncertainty labeling. Collapsing states into `null` or
 existed"; the statuses above keep that distinction, and `inferred` is reserved
 so raw evidence is never quietly guessed.
 
-### 4.3 Trace completeness
+### 4.3 Evidence-record completeness
 
-Each trace carries a derived **completeness record** computed from its events:
+Each `EvidenceRecord` carries one derived **completeness record**, computed
+from its canonical trace, structural analysis, and capture boundary:
 
 - counts of events and payloads by status;
 - `seq` gaps (assigned sequence positions absent from retained evidence) and
@@ -474,7 +490,9 @@ Each trace carries a derived **completeness record** computed from its events:
   observe.
 
 Completeness MUST be derived from the record, never fabricated, and MUST NOT
-invent events to fill gaps.
+invent events to fill gaps. It MUST NOT also be serialized on `EvidenceTrace`;
+parsing recomputes it and rejects disagreement without repairing or
+overwriting the authoritative record.
 
 ## 5. Observation boundaries
 
@@ -766,7 +784,7 @@ each policy keeps its own version and its own recording location (§9.2).
 - **Redaction stages stay distinct.** Collection-time redaction yields
   `evidenceStatus: "redacted"` at capture and is part of the evidence.
   Persistence-time removal is a deletion/tombstone operation (administrative)
-  and the affected trace's completeness record notes it. Export-time
+  and the affected `EvidenceRecord.completeness` notes it. Export-time
   sanitization is a projection under the export policy and MUST NOT overwrite
   authoritative evidence.
 - The capture profile in effect MUST be recorded on the trace (profile name and
@@ -922,7 +940,8 @@ example conflicts with the prose above, the prose wins.
 
 ## 14. Acceptance criteria
 
-- [ ] One interaction produces exactly one trace record.
+- [ ] One interaction produces exactly one authoritative `EvidenceRecord`
+  containing one deterministic canonical trace view.
 - [ ] Every event carries a strictly increasing, contiguous `seq`; no record
   relies on timestamps for ordering.
 - [ ] Raw evidence carries exactly one of the six evidence statuses; `inferred`

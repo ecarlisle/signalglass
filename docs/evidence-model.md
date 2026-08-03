@@ -7,9 +7,11 @@ contract is [Spec 013](../specs/013-evidence-model.md); this document is the
 human-facing reference with serialized examples.
 
 Design in one paragraph: an **interaction** is the logical AI exchange being
-observed, and its authoritative serialized record is a **trace** (one
-interaction, one trace). Traces contain **spans** (structure: hierarchy, timing,
-status) and **events** (content: payloads, transitions, sequence position).
+observed, and its authoritative serialized record is an **`EvidenceRecord`**.
+That record preserves raw observations and contains a deterministic canonical
+**trace** view with **spans** (structure: hierarchy, timing, status) and
+**events** (content: payloads, transitions, sequence position), plus structural
+analysis, completeness, capture boundary, and schema identity.
 Every event carries a strictly increasing `seq` assigned at observation time —
 the only deterministic ordering key. Every payload declares an **evidence
 status** (captured, redacted, truncated, missing, unknown, not applicable) and
@@ -22,7 +24,8 @@ into versioned **capture profiles**.
 
 | Record | Canonical? | Holds |
 |---|---|---|
-| Interaction / Trace | Yes | Top-level container; identity, lifecycle, conditions, completeness |
+| Evidence record | Yes | Authoritative raw observations plus trace, analysis, completeness, capture boundary, and schema identity |
+| Interaction / Trace | Derived canonical view | Identity, lifecycle, conditions, spans, and events |
 | Span | Yes | Hierarchy, timing, status; aggregates its events |
 | Event | Yes | Content, evidence status, sequence position |
 | Request / Response envelope | Yes | Normalized fields + provider-native payload at a declared fidelity |
@@ -37,7 +40,7 @@ into versioned **capture profiles**.
 
 ## Identity and ordering
 
-- The serialized trace carries both `interactionId` and `traceId` at the top
+- The trace view carries both `interactionId` and `traceId` at the top
   level with equal values; the equality is an invariant. Spans and events
   carry `traceId` only. One interaction, one trace, one identity.
 - Every event carries `seq`: a non-negative integer, strictly increasing and
@@ -241,18 +244,14 @@ A complete trace with one model span and lifecycle events:
     { "eventId": "evt-1-0002", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1", "spanId": "span-1-0001", "seq": 1, "kind": "span_start", "capturedAt": "2025-06-01T14:00:00.200Z", "evidenceStatus": "captured" },
     { "eventId": "evt-1-0003", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1", "spanId": "span-1-0001", "seq": 2, "kind": "span_end", "capturedAt": "2025-06-01T14:00:05.300Z", "evidenceStatus": "captured" },
     { "eventId": "evt-1-0004", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1", "spanId": null, "seq": 3, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:05.411Z", "evidenceStatus": "captured" }
-  ],
-  "completeness": {
-    "eventsByStatus": { "captured": 4 },
-    "seqGaps": [],
-    "duplicatesDetected": [],
-    "boundaryStatement": "Client-side capture; provider internals not observable."
-  }
+  ]
 }
 ```
 
-`completeness` is a derived record; it is shown here and in example 9 and
-omitted from the other examples for brevity.
+These numbered JSON objects are canonical trace-view fixtures, not standalone
+authoritative evidence records. An authoritative `EvidenceRecord` preserves
+the raw observations from which one such trace is derived and serializes
+completeness once at `EvidenceRecord.completeness`.
 
 ### 2. Model request and response with envelopes
 
@@ -1016,13 +1015,7 @@ three without inventing anything:
       }
     },
     { "eventId": "evt-9-0005", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9", "spanId": null, "seq": 4, "kind": "interaction_end", "capturedAt": "2025-06-02T09:30:12.800Z", "evidenceStatus": "captured" }
-  ],
-  "completeness": {
-    "eventsByStatus": { "captured": 2, "redacted": 1, "missing": 1, "unknown": 1 },
-    "seqGaps": [],
-    "duplicatesDetected": [],
-    "boundaryStatement": "Ingress proxy capture. The model response body was not captured: the capture surface observed a connection reset before the body was read and recorded an explicit `missing` event. Provider internals are not observable. No claim is made about the uncaptured response content."
-  }
+  ]
 }
 ```
 
@@ -1036,6 +1029,11 @@ derived from this trace, and the content cannot be reconstructed. Note that the
 `seq` values are contiguous: the missing response was disclosed explicitly,
 never inferred from a sequence position (no later sequence number exists, so
 there is no observable gap).
+
+For an authoritative record containing this trace view, the deterministic
+`EvidenceRecord.completeness` reports the status counts, explicit missing
+observation, and boundary statement. A parser rejects any serialized
+completeness value that disagrees with recomputation.
 
 This example also distinguishes the ways a value can be absent, which `null`
 must never collapse:
