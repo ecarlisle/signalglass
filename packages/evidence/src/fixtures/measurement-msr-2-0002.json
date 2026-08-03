@@ -1,0 +1,24 @@
+{
+  "measurementId": "msr-2-0002",
+  "type": "cost",
+  "value": 0.000926,
+  "unit": "usd",
+  "kind": "locally_calculated",
+  "algorithm": {
+    "name": "price-usage",
+    "version": "1.3.0"
+  },
+  "inputs": [
+    {
+      "measurementId": "msr-2-0001"
+    },
+    {
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2"
+    }
+  ],
+  "configuration": {
+    "pricingTable": "anthropic-2025-06",
+    "tokenizerRegistry": "anthropic-2025-05"
+  },
+  "calculatedAt": "2025-06-01T14:00:05.500Z"
+}

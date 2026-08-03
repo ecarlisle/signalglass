@@ -1,0 +1,22 @@
+{
+  "interpretationId": "int-2-0001",
+  "title": "Repeated context block detected",
+  "kind": "smell",
+  "label": "repeated-context",
+  "labelVersion": "1.0.0",
+  "inputs": [
+    {
+      "measurementId": "msr-2-0001"
+    },
+    {
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "eventId": "evt-2-0003"
+    },
+    {
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "artifactId": "art-2-0001"
+    }
+  ],
+  "claim": "The project-instruction artifact (art-2-0001) was contributed into the model request context (evt-2-0003) in this interaction; the cited event, artifact, measurement, and trace support this judgment.",
+  "confidence": "medium"
+}

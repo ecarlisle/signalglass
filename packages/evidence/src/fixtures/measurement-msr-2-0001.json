@@ -1,0 +1,21 @@
+{
+  "measurementId": "msr-2-0001",
+  "type": "token_count",
+  "value": 1842,
+  "unit": "tokens",
+  "kind": "provider_reported",
+  "algorithm": {
+    "name": "provider-reported-usage",
+    "version": "1.0.0"
+  },
+  "inputs": [
+    {
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "eventId": "evt-2-0004"
+    }
+  ],
+  "configuration": {
+    "tokenizerRegistry": "anthropic-2025-05"
+  },
+  "calculatedAt": "2025-06-01T14:00:05.400Z"
+}

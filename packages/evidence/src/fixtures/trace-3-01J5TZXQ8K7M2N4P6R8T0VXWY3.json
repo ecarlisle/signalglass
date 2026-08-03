@@ -1,0 +1,168 @@
+{
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": {
+    "name": "dev-basic",
+    "version": "1.2.0"
+  },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:04.400Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-3-0001",
+      "kind": "model",
+      "name": "model:claude-sonnet-4",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 7,
+      "startedAt": "2025-06-01T14:00:00.200Z",
+      "finishedAt": "2025-06-01T14:00:04.300Z",
+      "durationMs": 4100,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    {
+      "eventId": "evt-3-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": null,
+      "seq": 0,
+      "kind": "interaction_start",
+      "capturedAt": "2025-06-01T14:00:00.123Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-3-0002",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 1,
+      "kind": "span_start",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-3-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 2,
+      "kind": "model_request",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "requestEnvelope": {
+        "model": "claude-sonnet-4",
+        "provider": "anthropic",
+        "providerNativeFidelity": "structurally_faithful",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Summarize the last 20 commits."
+          }
+        ],
+        "providerNative": {
+          "stream": true,
+          "temperature": 0.2
+        }
+      }
+    },
+    {
+      "eventId": "evt-3-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 3,
+      "kind": "model_response_chunk",
+      "capturedAt": "2025-06-01T14:00:04.010Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "responseEnvelope": {
+        "chunkIndex": 0,
+        "providerNativeFidelity": "structurally_faithful",
+        "providerNative": {
+          "type": "content_block_delta",
+          "delta": {
+            "type": "text_delta",
+            "text": "The last 20 commits cover "
+          }
+        }
+      }
+    },
+    {
+      "eventId": "evt-3-0005",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 4,
+      "kind": "model_response_chunk",
+      "capturedAt": "2025-06-01T14:00:04.020Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "responseEnvelope": {
+        "chunkIndex": 1,
+        "providerNativeFidelity": "structurally_faithful",
+        "providerNative": {
+          "type": "content_block_delta",
+          "delta": {
+            "type": "text_delta",
+            "text": "dependency bumps, the ingress rewrite, and "
+          }
+        }
+      }
+    },
+    {
+      "eventId": "evt-3-0006",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 5,
+      "kind": "model_response_chunk",
+      "capturedAt": "2025-06-01T14:00:04.030Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "responseEnvelope": {
+        "chunkIndex": 2,
+        "providerNativeFidelity": "structurally_faithful",
+        "providerNative": {
+          "type": "content_block_delta",
+          "delta": {
+            "type": "text_delta",
+            "text": " doc updates."
+          }
+        }
+      }
+    },
+    {
+      "eventId": "evt-3-0007",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 6,
+      "kind": "model_usage",
+      "capturedAt": "2025-06-01T14:00:04.300Z",
+      "evidenceStatus": "captured",
+      "observationRole": "provider_reported",
+      "usage": {
+        "input_tokens": 1410,
+        "output_tokens": 42
+      }
+    },
+    {
+      "eventId": "evt-3-0008",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": "span-3-0001",
+      "seq": 7,
+      "kind": "span_end",
+      "capturedAt": "2025-06-01T14:00:04.300Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-3-0009",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY3",
+      "spanId": null,
+      "seq": 8,
+      "kind": "interaction_end",
+      "capturedAt": "2025-06-01T14:00:04.400Z",
+      "evidenceStatus": "captured"
+    }
+  ]
+}

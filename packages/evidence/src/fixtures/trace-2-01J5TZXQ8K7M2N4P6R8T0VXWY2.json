@@ -1,0 +1,133 @@
+{
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": {
+    "name": "dev-basic",
+    "version": "1.2.0"
+  },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:05.411Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-2-0001",
+      "kind": "model",
+      "name": "model:claude-sonnet-4",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 4,
+      "startedAt": "2025-06-01T14:00:00.200Z",
+      "finishedAt": "2025-06-01T14:00:05.300Z",
+      "durationMs": 5100,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    {
+      "eventId": "evt-2-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "spanId": null,
+      "seq": 0,
+      "kind": "interaction_start",
+      "capturedAt": "2025-06-01T14:00:00.123Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-2-0002",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "spanId": "span-2-0001",
+      "seq": 1,
+      "kind": "span_start",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-2-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "spanId": "span-2-0001",
+      "seq": 2,
+      "kind": "model_request",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "requestEnvelope": {
+        "model": "claude-sonnet-4",
+        "provider": "anthropic",
+        "providerNativeFidelity": "structurally_faithful",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a helpful software engineering assistant."
+          },
+          {
+            "role": "user",
+            "content": "Fix the failing TypeScript build in this repo."
+          }
+        ],
+        "providerNative": {
+          "stream": false,
+          "temperature": 0.2,
+          "max_tokens": 4096
+        }
+      },
+      "contextContributions": [
+        {
+          "artifactId": "art-2-0001",
+          "locator": {
+            "type": "whole"
+          },
+          "position": 0,
+          "provenanceState": "recorded"
+        }
+      ]
+    },
+    {
+      "eventId": "evt-2-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "spanId": "span-2-0001",
+      "seq": 3,
+      "kind": "model_response",
+      "capturedAt": "2025-06-01T14:00:05.300Z",
+      "evidenceStatus": "captured",
+      "observationRole": "provider_reported",
+      "responseEnvelope": {
+        "finishReason": "end_turn",
+        "providerNativeFidelity": "structurally_faithful",
+        "providerNative": {
+          "id": "msg_01J5TZXQ8K7M2N4P6R8T0VXWY2",
+          "content": [
+            {
+              "type": "text",
+              "text": "I fixed the build. Run pnpm typecheck to verify."
+            }
+          ],
+          "usage": {
+            "input_tokens": 1842,
+            "output_tokens": 57
+          }
+        }
+      }
+    },
+    {
+      "eventId": "evt-2-0005",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "spanId": "span-2-0001",
+      "seq": 4,
+      "kind": "span_end",
+      "capturedAt": "2025-06-01T14:00:05.300Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-2-0006",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY2",
+      "spanId": null,
+      "seq": 5,
+      "kind": "interaction_end",
+      "capturedAt": "2025-06-01T14:00:05.411Z",
+      "evidenceStatus": "captured"
+    }
+  ]
+}

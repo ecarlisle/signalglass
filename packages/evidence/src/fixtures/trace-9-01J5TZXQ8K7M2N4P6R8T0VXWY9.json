@@ -1,0 +1,88 @@
+{
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": {
+    "name": "dev-standard",
+    "version": "2.0.0"
+  },
+  "captureSurface": "ingress_proxy",
+  "observationBoundary": "client_sent",
+  "startedAt": "2025-06-02T09:30:00.000Z",
+  "finishedAt": "2025-06-02T09:30:12.800Z",
+  "status": "completed",
+  "events": [
+    {
+      "eventId": "evt-9-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+      "spanId": null,
+      "seq": 0,
+      "kind": "interaction_start",
+      "capturedAt": "2025-06-02T09:30:00.000Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-9-0002",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+      "spanId": null,
+      "seq": 1,
+      "kind": "model_request",
+      "capturedAt": "2025-06-02T09:30:00.100Z",
+      "evidenceStatus": "redacted",
+      "observationRole": "client_sent",
+      "redaction": {
+        "policy": "secrets-v1",
+        "reasons": [
+          "authorization-header"
+        ]
+      }
+    },
+    {
+      "eventId": "evt-9-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+      "spanId": null,
+      "seq": 2,
+      "kind": "model_response",
+      "capturedAt": "2025-06-02T09:30:12.400Z",
+      "evidenceStatus": "missing",
+      "observationRole": "returned",
+      "missing": {
+        "reason": "capture_failed",
+        "note": "Connection reset before the response body was read.",
+        "reportedBy": {
+          "captureSurface": "ingress_proxy",
+          "observationBoundary": "returned"
+        }
+      }
+    },
+    {
+      "eventId": "evt-9-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+      "spanId": null,
+      "seq": 3,
+      "kind": "model_usage",
+      "capturedAt": "2025-06-02T09:30:12.600Z",
+      "evidenceStatus": "unknown",
+      "observationRole": "unobservable",
+      "usage": {
+        "evidenceStatus": "unknown",
+        "reason": "not_reported_by_provider",
+        "inputTokens": {
+          "evidenceStatus": "unknown"
+        },
+        "outputTokens": {
+          "evidenceStatus": "unknown"
+        }
+      }
+    },
+    {
+      "eventId": "evt-9-0005",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY9",
+      "spanId": null,
+      "seq": 4,
+      "kind": "interaction_end",
+      "capturedAt": "2025-06-02T09:30:12.800Z",
+      "evidenceStatus": "captured"
+    }
+  ]
+}

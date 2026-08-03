@@ -1,0 +1,99 @@
+{
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": {
+    "name": "dev-basic",
+    "version": "1.2.0"
+  },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:02.500Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-5-0001",
+      "kind": "mcp",
+      "name": "mcp:site-intelligence:get_site_overview",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 4,
+      "startedAt": "2025-06-01T14:00:02.100Z",
+      "finishedAt": "2025-06-01T14:00:02.400Z",
+      "durationMs": 300,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    {
+      "eventId": "evt-5-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+      "spanId": null,
+      "seq": 0,
+      "kind": "interaction_start",
+      "capturedAt": "2025-06-01T14:00:00.123Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-5-0002",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+      "spanId": "span-5-0001",
+      "seq": 1,
+      "kind": "span_start",
+      "capturedAt": "2025-06-01T14:00:02.100Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-5-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+      "spanId": "span-5-0001",
+      "seq": 2,
+      "kind": "mcp_request",
+      "capturedAt": "2025-06-01T14:00:02.100Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "mcp": {
+        "server": "site-intelligence",
+        "tool": "get_site_overview",
+        "arguments": {}
+      }
+    },
+    {
+      "eventId": "evt-5-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+      "spanId": "span-5-0001",
+      "seq": 3,
+      "kind": "mcp_result",
+      "capturedAt": "2025-06-01T14:00:02.400Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "mcpResult": {
+        "content": [
+          {
+            "type": "text",
+            "text": "386 indexed pages; 0 warnings."
+          }
+        ]
+      }
+    },
+    {
+      "eventId": "evt-5-0005",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+      "spanId": "span-5-0001",
+      "seq": 4,
+      "kind": "span_end",
+      "capturedAt": "2025-06-01T14:00:02.400Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-5-0006",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY5",
+      "spanId": null,
+      "seq": 5,
+      "kind": "interaction_end",
+      "capturedAt": "2025-06-01T14:00:02.500Z",
+      "evidenceStatus": "captured"
+    }
+  ]
+}

@@ -1,0 +1,138 @@
+{
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": {
+    "name": "dev-basic",
+    "version": "1.2.0"
+  },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:05.600Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-8-0001",
+      "kind": "model",
+      "name": "model:claude-sonnet-4",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 6,
+      "startedAt": "2025-06-01T14:00:00.200Z",
+      "finishedAt": "2025-06-01T14:00:05.500Z",
+      "durationMs": 5300,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    {
+      "eventId": "evt-8-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": null,
+      "seq": 0,
+      "kind": "interaction_start",
+      "capturedAt": "2025-06-01T14:00:00.123Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-8-0002",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 1,
+      "kind": "span_start",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-8-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 2,
+      "kind": "model_request",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured",
+      "observationRole": "application_constructed",
+      "requestEnvelope": {
+        "model": "claude-sonnet-4",
+        "provider": "anthropic",
+        "providerNativeFidelity": "structurally_faithful",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Fix the failing TypeScript build in this repo."
+          }
+        ],
+        "providerNative": {
+          "stream": false
+        }
+      }
+    },
+    {
+      "eventId": "evt-8-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 3,
+      "kind": "error",
+      "capturedAt": "2025-06-01T14:00:04.500Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "actor": "model",
+      "lifecycleTarget": "none",
+      "lifecycleEffect": "none",
+      "error": {
+        "type": "timeout",
+        "message": "No upstream response was received within 30000ms; the failure was observed at the client boundary when the response did not arrive."
+      }
+    },
+    {
+      "eventId": "evt-8-0005",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 4,
+      "kind": "retry",
+      "capturedAt": "2025-06-01T14:00:05.100Z",
+      "evidenceStatus": "captured",
+      "observationRole": "application_constructed",
+      "retry": {
+        "originalRequestEventId": "evt-8-0003",
+        "errorEventId": "evt-8-0004",
+        "attempt": 2,
+        "observedDelayMs": 500
+      }
+    },
+    {
+      "eventId": "evt-8-0006",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 5,
+      "kind": "cancelled",
+      "capturedAt": "2025-06-01T14:00:05.400Z",
+      "evidenceStatus": "captured",
+      "observationRole": "application_constructed",
+      "lifecycleTarget": "none",
+      "lifecycleEffect": "cancel",
+      "cancellation": {
+        "requestedBy": "user"
+      }
+    },
+    {
+      "eventId": "evt-8-0007",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": "span-8-0001",
+      "seq": 6,
+      "kind": "span_end",
+      "capturedAt": "2025-06-01T14:00:05.500Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-8-0008",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8",
+      "spanId": null,
+      "seq": 7,
+      "kind": "interaction_end",
+      "capturedAt": "2025-06-01T14:00:05.600Z",
+      "evidenceStatus": "captured"
+    }
+  ]
+}

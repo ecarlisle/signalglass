@@ -1,0 +1,22 @@
+{
+  "artifactId": "art-6-0001",
+  "kind": "fragment",
+  "evidenceStatus": "captured",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY6",
+  "evidenceSchemaVersion": "1.0.0",
+  "contentFidelity": "structurally_faithful",
+  "contentType": "application/json",
+  "contentCanonicalizer": {
+    "name": "rfc8785-jcs",
+    "version": "1.0.0"
+  },
+  "contentHash": "sha256:9f2c4a1d3e5b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+  "payloadRef": {
+    "excerpt": "{\"guideline\": \"Keep the context window small\", \"source\": \"context-window-best-practices\"}"
+  },
+  "provenance": {
+    "source": "retrieval",
+    "query": "context window best practices",
+    "uri": "https://example.com/docs/context-window"
+  }
+}
