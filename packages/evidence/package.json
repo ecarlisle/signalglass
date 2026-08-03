@@ -5,8 +5,8 @@
   "description": "Provider-neutral canonical evidence primitives, runtime validation, deterministic normalization, and serialization for SignalGlass (Spec 014 foundation).",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "scripts": {

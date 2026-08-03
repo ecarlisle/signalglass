@@ -130,16 +130,16 @@ export {
 } from './version.js';
 export type { VersionCheck } from './version.js';
 
-// Deterministic helpers
+// Deterministic helpers (public contract facades over src/internal/*, §1.3)
 export { projectCanonicalEvent } from './project.js';
 export type { ProjectedEvent } from './project.js';
 export { deriveCompleteness } from './completeness.js';
 export { sortUtf8, toJsonView } from './normalize.js';
-export { canonicalJson, isJsonSafe } from './internal/jcs.js';
-export { sha256Hex, sha256Value, utf8Encode } from './internal/sha256.js';
-export { base64Encode, base64Decode, isCanonicalBase64 } from './internal/base64.js';
-export { isContentHash, isContentType, isJsonContentType, isSemanticVersion, majorVersion } from './internal/formats.js';
-export { isTimestamp } from './internal/time.js';
+export { canonicalJson, isJsonSafe } from './canonical.js';
+export { sha256Hex, sha256Value, utf8Encode } from './hash.js';
+export { base64Encode, base64Decode, isCanonicalBase64 } from './base64.js';
+export { isContentHash, isContentType, isJsonContentType, isSemanticVersion, majorVersion } from './formats.js';
+export { isTimestamp } from './time.js';
 
 // Runtime validation and parse/serialize
 export { parseEvidenceRecord, normalizeEvidenceRecord } from './validate.js';
