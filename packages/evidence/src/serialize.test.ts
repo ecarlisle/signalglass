@@ -93,6 +93,28 @@ describe('SHA-256 and JCS primitives', () => {
     expect(canonicalJson({ x: 'a\nb' })).toBe('{"x":"a\\nb"}');
     expect(canonicalJson({ z: 1.0, y: -0 })).toBe('{"y":0,"z":1}');
   });
+
+  it('preserves astral-plane characters as complete surrogate pairs (regression)', () => {
+    // "😀" is U+1F600 (UTF-16 D83D DE00). The low surrogate must not be
+    // dropped or double-encoded by escapeString.
+    const out = canonicalJson({ emoji: '😀' });
+    expect(out).toBe(JSON.stringify({ emoji: '😀' }));
+    // Verbatim pair, never a lone `\uD83D` escape text with a lost low unit.
+    expect(out).not.toContain('\\uD83D');
+    // Round trip through JSON.parse keeps the full character.
+    const round = JSON.parse(out) as { emoji: string };
+    expect(round.emoji).toBe('😀');
+    expect([...round.emoji].length).toBe(1);
+  });
+
+  it('escapes lone surrogates as \\uXXXX and replaces them in UTF-8 encoding', () => {
+    const lone = 'a\uD800b'; // lone high surrogate between ASCII letters
+    const json = canonicalJson({ s: lone });
+    expect(json).toBe('{"s":"a\\uD800b"}');
+    // The escaped text contains no raw surrogate units, so UTF-8 encoding is
+    // well-formed; a raw lone surrogate encodes as U+FFFD (WHATWG behavior).
+    expect(sha256Hex(utf8Encode(lone))).toBe(sha256Hex(utf8Encode('a\uFFFDb')));
+  });
 });
 
 describe('byte_faithful retained-byte serialization', () => {

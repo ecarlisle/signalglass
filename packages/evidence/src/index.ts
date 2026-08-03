@@ -97,9 +97,7 @@ export type {
 } from './types-event.js';
 export type {
   EvidenceObservation,
-  SpanTerminalState,
   SpanRecord,
-  TraceTerminalState,
   EvidenceTrace,
 } from './types-trace.js';
 export type {

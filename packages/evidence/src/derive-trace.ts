@@ -14,6 +14,7 @@ import type { Condition } from './types-base.js';
 import type { ValidationIssue } from './types-analysis.js';
 import type { LifecycleEffect, LifecycleTarget, TraceStatus, SpanStatus } from './vocabulary.js';
 import { isRecord } from './internal/guards.js';
+import { isSpanKind } from './guards.js';
 
 export type TraceMetadata = {
   evidenceSchemaVersion: string;
@@ -245,20 +246,33 @@ type SpanMeta = {
   participants?: string[];
 };
 
-/** Span declaration metadata from the span_start observation payload. */
+/** Span declaration metadata from the span_start observation payload. Kind is
+ * validated against the closed SPAN_KINDS vocabulary and `parentSpanId` is
+ * required to be null or a non-empty opaque string (never coerced), so
+ * malformed declarations surface as a `span_start_missing_metadata` issue. */
 function readSpanMetadata(obs: EvidenceObservation | undefined): SpanMeta | null {
   if (!obs || !isRecord(obs.payload)) return null;
   const span = obs.payload['span'];
   if (!isRecord(span)) return null;
   const kind = span['kind'];
   const name = span['name'];
-  if (typeof kind !== 'string' || typeof name !== 'string') return null;
+  if (typeof kind !== 'string' || !isSpanKind(kind) || typeof name !== 'string') return null;
   const parent = span['parentSpanId'];
+  let parentSpanId: string | null;
+  if (parent === null || parent === undefined) {
+    parentSpanId = null;
+  } else if (typeof parent === 'string' && parent.length > 0) {
+    parentSpanId = parent;
+  } else {
+    // Numeric/object parentSpanId is invalid container metadata; reject
+    // rather than silently coercing it through String().
+    return null;
+  }
   const participants = span['participants'];
   return {
     kind: kind as SpanRecord['kind'],
     name,
-    parentSpanId: parent === null || parent === undefined ? null : String(parent),
+    parentSpanId,
     ...(Array.isArray(participants) && participants.every((p) => typeof p === 'string')
       ? { participants: participants as string[] }
       : {}),

@@ -39,20 +39,11 @@ export type EvidenceObservation = {
 };
 
 /**
- * Span terminal-state union: finish fields present exactly when a terminal
- * state was observed (§4.7). `endSeq` only for `completed` spans; `finishedAt`
- * for every observed terminal state; never `null`.
- */
-export type SpanTerminalState =
-  | { status: 'completed'; endSeq: number; finishedAt: string }
-  | { status: 'failed'; finishedAt: string }
-  | { status: 'cancelled'; finishedAt: string }
-  | { status: 'unknown' };
-
-/**
  * Span record (Spec 014 §2.2.2). Content lives on events, never on spans.
  * `parentSpanId: null` for root spans; `startSeq` matches the observed
- * `span_start`; `endSeq` present only for `completed` spans.
+ * `span_start`. Terminal-finish rules (§4.7) are enforced by the validators:
+ * `endSeq` present only for `completed` spans (equals the observed `span_end`
+ * seq); `finishedAt` present iff a terminal state was observed; never `null`.
  */
 export type SpanRecord = {
   spanId: string;
@@ -71,19 +62,11 @@ export type SpanRecord = {
   durationMs?: number;
 };
 
-/** Trace terminal-state union: `finishedAt` present iff a terminal state was
- * observed (§4.7). */
-export type TraceTerminalState =
-  | { status: 'completed'; finishedAt: string }
-  | { status: 'failed'; finishedAt: string }
-  | { status: 'cancelled'; finishedAt: string }
-  | { status: 'unknown' };
-
 /**
  * Canonical trace view (Spec 014 §2.2.1). The deterministic normalized view
  * of one interaction; not an independently authoritative serialized record.
- * `interactionId === traceId` is validated. `finishedAt` is absent (never
- * `null`) when status is `unknown`.
+ * `interactionId === traceId` is validated. Terminal-finish rule (§4.7):
+ * `finishedAt` is absent (never `null`) when status is `unknown`.
  */
 export type EvidenceTrace = {
   interactionId: string;

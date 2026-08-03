@@ -119,8 +119,11 @@ describe('per-record guards', () => {
   });
 
   it('isSpanRecord / isEventRecord minimal structure', () => {
-    expect(isSpanRecord({ spanId: 's1', kind: 'model', name: 'n', parentSpanId: null, startSeq: 1, startedAt: '2025-06-01T14:00:00.000Z', status: 'completed' })).toBe(true);
-    expect(isSpanRecord({ ...{ spanId: 's1', kind: 'model', name: 'n', parentSpanId: null, startSeq: 1, startedAt: '2025-06-01T14:00:00.000Z', status: 'completed' }, kind: 'model' })).toBe(true);
+    const span = { spanId: 's1', kind: 'model', name: 'n', parentSpanId: null, startSeq: 1, startedAt: '2025-06-01T14:00:00.000Z', status: 'completed' };
+    expect(isSpanRecord(span)).toBe(true);
+    expect(isSpanRecord({ ...span, kind: 'database' })).toBe(false); // kind outside the closed vocabulary
+    expect(isSpanRecord({ ...span, parentSpanId: 123 })).toBe(false); // no coercion of non-string parent
+    expect(isSpanRecord({ ...span, startSeq: -1 })).toBe(false); // negative sequence
     expect(isEventRecord({ eventId: 'e1', traceId: 't', spanId: null, seq: 0, kind: 'interaction_start', capturedAt: '2025-06-01T14:00:00.000Z', evidenceStatus: 'captured' })).toBe(true);
   });
 

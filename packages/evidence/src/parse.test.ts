@@ -105,6 +105,42 @@ describe('parseEvidenceRecord', () => {
     if (!res.ok) expect(res.issues.map((i) => i.code)).toContain('analysis_disagrees_with_derivation');
   });
 
+  it('never throws on malformed serialized analysis shapes (regression)', () => {
+    const record = buildRecord();
+    const base = JSON.parse(serializeEvidenceRecord(record)) as Record<string, unknown>;
+    // Each malformed shape previously raised a TypeError instead of issues.
+    const badAnalyses = [
+      { duplicateObservations: [{ classification: 'exact_replay' }] },
+      { duplicateObservations: [{ classification: 'same_id_different_seq' }] },
+      { duplicateObservations: [{ classification: 'same_id_different_seq', retainedPosition: null, discardedPositions: [{}] }] },
+      { duplicateObservations: [{ classification: 'exact_replay', eventId: 'e', seq: 0, observationIds: 'not-array' }] },
+      { duplicateObservations: 'nope' },
+      { validationIssues: 'nope' },
+      { sequenceGaps: [null] },
+    ];
+    for (const bad of badAnalyses) {
+      const input = { ...base, analysis: { ...(base['analysis'] as object), ...bad } } as unknown;
+      expect(() => parseEvidenceRecord(input)).not.toThrow();
+      const res = parseEvidenceRecord(input);
+      expect(res.ok).toBe(false); // never throws; rejects via disagreement
+      if (!res.ok) expect(res.issues.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('never descends prototype keys when preserving additive fields (regression)', () => {
+    const record = buildRecord();
+    const base = JSON.parse(serializeEvidenceRecord(record)) as Record<string, unknown>;
+    const input = { ...base, '__proto__': { polluted: true }, constructor: { x: 1 }, future: 7 } as Record<string, unknown>;
+    const res = parseEvidenceRecord(input);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const rec = res.record as unknown as Record<string, unknown>;
+      expect(rec['future']).toBe(7);
+      expect(Object.prototype.hasOwnProperty.call(rec as object, 'polluted')).toBe(false);
+      expect(Object.getPrototypeOf(rec as object)).toBe(Object.prototype);
+    }
+  });
+
   it('preserves raw array order and observation ids losslessly through serialize-parse-serialize', () => {
     const observations = minimalObservations().reverse();
     const record = buildRecord(observations);

@@ -292,7 +292,6 @@ function emitGap(
   let prevId: string | null = null;
   for (const s of retainedSeqs) {
     if (s < startSeq) prevId = retainedById.get(s)!.eventId;
-    if (s >= startSeq && s < endSeq) continue;
   }
   let nextId: string | null = null;
   for (const s of retainedSeqs) {
@@ -306,6 +305,8 @@ function emitGap(
       ? [prevId, nextId]
       : prevId !== null
         ? [prevId]
-        : [];
+        : nextId !== null
+          ? [nextId]
+          : [];
   out.push({ startSeq, endSeq, adjacentRetainedEventIds: adjacent });
 }

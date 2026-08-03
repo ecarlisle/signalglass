@@ -26,7 +26,13 @@ function escapeString(s: string): string {
   for (let i = 0; i < s.length; i++) {
     const cp = s.codePointAt(i) ?? 0;
     const c = s[i]!;
-    if (cp > 0xffff) i++; // consume the low surrogate of a valid pair
+    if (cp > 0xffff) {
+      // Valid surrogate pair: emit both UTF-16 units verbatim and skip the
+      // low surrogate so it is never dropped or double-encoded.
+      out += c + s[i + 1];
+      i++;
+      continue;
+    }
     if (c === '"') out += '\\"';
     else if (c === "\\") out += "\\\\";
     else if (c === "\b") out += "\\b";

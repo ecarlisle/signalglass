@@ -39,9 +39,10 @@ export function serializeEvidenceRecord(record: EvidenceRecord): string {
     const v = (record as unknown as Record<string, unknown>)[k];
     if (v !== undefined) out[k] = v;
   }
-  // Preserve unknown top-level additive fields (record-level passthrough).
+  // Preserve unknown top-level additive fields (record-level passthrough),
+  // never descending prototype keys.
   for (const k of Object.keys(record as unknown as Record<string, unknown>)) {
-    if (!RECORD_KEYS.includes(k)) out[k] = (record as unknown as Record<string, unknown>)[k];
+    if (!RECORD_KEYS.includes(k) && k !== '__proto__' && k !== 'constructor' && k !== 'prototype') out[k] = (record as unknown as Record<string, unknown>)[k];
   }
   return JSON.stringify(toJsonView(out));
 }

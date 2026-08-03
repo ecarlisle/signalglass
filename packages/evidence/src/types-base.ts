@@ -73,15 +73,17 @@ export type ContextContribution = {
   provenanceState: 'recorded' | 'inferred_after';
 };
 
+import type { EvidenceStatus } from './vocabulary.js';
+
 /** Usage values with per-field evidence status (Spec 013 §3.3). */
 export type UsageValue = {
   value?: number;
-  evidenceStatus?: string;
+  evidenceStatus?: EvidenceStatus;
   reason?: string;
 };
 
 export type UsageRecord = {
-  evidenceStatus: string;
+  evidenceStatus: EvidenceStatus;
   reason?: string;
   inputTokens?: UsageValue;
   outputTokens?: UsageValue;

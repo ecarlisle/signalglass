@@ -216,7 +216,8 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
   // Preserve unknown top-level additive fields (§5.3) at the record level.
   const known = new Set(['rawObservations', 'trace', 'analysis', 'completeness', 'evidenceSchemaVersion', 'captureBoundary']);
   for (const k of Object.keys(input)) {
-    if (!known.has(k)) (record as Record<string, unknown>)[k] = input[k];
+    if (known.has(k) || k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    (record as Record<string, unknown>)[k] = input[k];
   }
   return { ok: true, record: record as EvidenceRecord };
 }
@@ -288,13 +289,13 @@ export function traceSemanticEqual(a: unknown, b: unknown): boolean {
 
 function duplicateKeyNoDigest(d: Record<string, unknown>): string {
   if (d['classification'] === 'exact_replay') {
-    return `exact_replay|${String(d['eventId'])}|${String(d['seq'])}|ids=${sortUtf8((d['observationIds'] ?? []) as string[]).join(',')}`;
+    return `exact_replay|${String(d['eventId'])}|${String(d['seq'])}|ids=${sortUtf8(asStrings(d['observationIds'])).join(',')}`;
   }
-  const discarded = (d['discardedPositions'] as Record<string, unknown>[])
-    .map((p) => `${String(p['seq'])}:${sortUtf8((p['observationIds'] ?? []) as string[]).join(',')}:${String(p['positionIndependentlyRepresented'])}`)
+  const discarded = asArray(d['discardedPositions'])
+    .map((p) => `${String(isRecord(p) ? p['seq'] : '')}:${sortUtf8(asStrings(isRecord(p) ? p['observationIds'] : null)).join(',')}:${String(isRecord(p) ? p['positionIndependentlyRepresented'] : '')}`)
     .join(';');
-  const retained = d['retainedPosition'] as Record<string, unknown>;
-  return `same_id_different_seq|${String(d['eventId'])}|ret=${String(retained['seq'])}:${sortUtf8((retained['observationIds'] ?? []) as string[]).join(',')}|disc=${discarded}`;
+  const retained = isRecord(d['retainedPosition']) ? d['retainedPosition'] : {};
+  return `same_id_different_seq|${String(d['eventId'])}|ret=${String(retained['seq'])}:${sortUtf8(asStrings(retained['observationIds'])).join(',')}|disc=${discarded}`;
 }
 
 function sortedGaps(value: unknown): unknown[] {
@@ -309,18 +310,64 @@ function sortedGaps(value: unknown): unknown[] {
   });
 }
 
+/** Treat non-array inputs as empty arrays for shape-hardened comparisons. */
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/** Array-valued strings, ignoring non-string members. */
+function asStrings(value: unknown): string[] {
+  return asArray(value).filter((v): v is string => typeof v === 'string');
+}
+
+/** True when `value` is an array whose members are all plain records. */
+function isRecordArray(value: unknown): value is Record<string, unknown>[] {
+  return Array.isArray(value) && value.every(isRecord);
+}
+
+/**
+ * Strict shape gate over a serialized analysis: every required array and
+ * entry must be structurally well-formed or the analysis disagrees (and never
+ * throws). Malformed shapes must reject rather than silently normalize.
+ */
+function analysisShapeIsWellFormed(b: Record<string, unknown>): boolean {
+  if (!isRecordArray(b['duplicateObservations'])) return false;
+  if (!isRecordArray(b['sequenceGaps'])) return false;
+  if (!isRecordArray(b['validationIssues'])) return false;
+  for (const d of b['duplicateObservations']) {
+    if (d['classification'] === 'exact_replay') {
+      if (typeof d['eventId'] !== 'string' || typeof d['seq'] !== 'number' || !Array.isArray(d['observationIds'])) return false;
+    } else if (d['classification'] === 'same_id_different_seq') {
+      if (!isRecord(d['retainedPosition']) || !Array.isArray(d['discardedPositions'])) return false;
+      const rp = d['retainedPosition'];
+      if (typeof rp['seq'] !== 'number' || !Array.isArray(rp['observationIds'])) return false;
+      for (const p of d['discardedPositions']) {
+        if (!isRecord(p) || !Array.isArray(p['observationIds'])) return false;
+      }
+    } else {
+      return false;
+    }
+  }
+  for (const g of b['sequenceGaps']) {
+    if (typeof g['startSeq'] !== 'number' || typeof g['endSeq'] !== 'number') return false;
+  }
+  return true;
+}
+
 /**
  * Semantic analysis equality: duplicate collections compared without emission
  * order (set-like `observationIds` canonicalized), optional digests verified
  * when present, gaps by ordered (startSeq, endSeq), issues by code+path.
+ * Malformed serialized shapes never throw; they simply disagree and reject.
  */
 export function analysisSemanticEqual(a: unknown, b: unknown): boolean {
   if (!isRecord(a) || !isRecord(b)) return false;
   if (a['completenessDerivationAlgorithmVersion'] !== b['completenessDerivationAlgorithmVersion']) {
     return false;
   }
-  const da = (a['duplicateObservations'] ?? []) as Record<string, unknown>[];
-  const db = (b['duplicateObservations'] ?? []) as Record<string, unknown>[];
+  if (!analysisShapeIsWellFormed(b)) return false;
+  const da = asArray(a['duplicateObservations']).filter(isRecord);
+  const db = asArray(b['duplicateObservations']).filter(isRecord);
   const ka = da.map(duplicateKeyNoDigest).sort();
   const kb = db.map(duplicateKeyNoDigest).sort();
   if (!jsonEqual(ka, kb)) return false;
@@ -340,8 +387,8 @@ export function analysisSemanticEqual(a: unknown, b: unknown): boolean {
   for (let i = 0; i < ga.length; i++) {
     if (!jsonEqual(toJsonView(ga[i]), toJsonView(gb[i]))) return false;
   }
-  const ia = ((a['validationIssues'] ?? []) as Record<string, unknown>[]).map((x) => `${String(x['code'])}|${String(x['path'])}`).sort();
-  const ib = ((b['validationIssues'] ?? []) as Record<string, unknown>[]).map((x) => `${String(x['code'])}|${String(x['path'])}`).sort();
+  const ia = asArray(a['validationIssues']).map((x) => `${String(isRecord(x) ? x['code'] : '')}|${String(isRecord(x) ? x['path'] : '')}`).sort();
+  const ib = asArray(b['validationIssues']).map((x) => `${String(isRecord(x) ? x['code'] : '')}|${String(isRecord(x) ? x['path'] : '')}`).sort();
   return jsonEqual(ia, ib);
 }
 

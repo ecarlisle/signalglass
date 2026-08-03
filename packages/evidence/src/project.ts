@@ -37,10 +37,18 @@ export function projectCanonicalEvent(observation: EvidenceObservation): Project
   } as EventRecord;
   if (isControl) return baseEvent;
   // Payload-bearing kind: merge the kind-specific payload fields, preserving
-  // every kind-specific field including unknown additive ones.
+  // every kind-specific field including unknown additive ones. Container
+  // metadata always wins: a malformed or hostile payload cannot overwrite
+  // eventId/traceId/spanId/seq/kind/capturedAt/evidenceStatus. Prototype
+  // keys are never copied.
   const payload = observation.payload;
   if (!isRecord(payload)) return baseEvent;
-  return Object.assign({}, baseEvent, payload) as EventRecord;
+  const merged: Record<string, unknown> = {};
+  for (const k of Object.keys(payload)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    merged[k] = (payload as Record<string, unknown>)[k];
+  }
+  return Object.assign({}, baseEvent, merged) as EventRecord;
 }
 
 /** True when `kind` is a member of the closed event-kind vocabulary. */

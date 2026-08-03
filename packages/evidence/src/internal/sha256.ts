@@ -104,12 +104,19 @@ export function sha256Hex(bytes: Uint8Array): string {
   return out;
 }
 
-/** UTF-8 encode without relying on TextEncoder availability differences. */
+/** UTF-8 encode without relying on TextEncoder availability differences.
+ * Lone surrogates (unpaired UTF-16 code units) are replaced with U+FFFD,
+ * matching the WHATWG Encoding Standard so byte output is always well-formed
+ * UTF-8 and consistent with platform TextEncoder behavior. */
 export function utf8Encode(text: string): Uint8Array {
   const bytes: number[] = [];
   for (let i = 0; i < text.length; i++) {
     let cp = text.codePointAt(i) ?? 0;
-    if (cp > 0xffff) i++; // surrogate pair consumed by codePointAt
+    if (cp > 0xffff) {
+      i++; // valid surrogate pair consumed by codePointAt
+    } else if (cp >= 0xd800 && cp <= 0xdfff) {
+      cp = 0xfffd; // lone surrogate -> U+FFFD (WHATWG replacement)
+    }
     if (cp <= 0x7f) bytes.push(cp);
     else if (cp <= 0x7ff) {
       bytes.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));

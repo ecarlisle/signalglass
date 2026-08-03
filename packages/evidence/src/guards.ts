@@ -47,7 +47,7 @@ export { isContentHash, isContentType, isSemanticVersion };
 /** A partial void guard over the artifact-level §6.1 matrix features. */
 export function isContextArtifact(value: unknown): value is ContextArtifact {
   if (!isRecord(value)) return false;
-  if (typeof value['artifactId'] !== 'string' || typeof value['kind'] !== 'string') return false;
+  if (typeof value['artifactId'] !== 'string' || !isArtifactKind(value['kind'])) return false;
   if (!isEvidenceStatus(value['evidenceStatus'])) return false;
   return true;
 }
@@ -89,7 +89,9 @@ export function isEvidenceObservation(value: unknown): value is EvidenceObservat
     isEventKind(v['kind']) &&
     isTimestamp(v['capturedAt']) &&
     isEvidenceStatus(v['evidenceStatus']) &&
-    (v['observationRole'] === null || isObservationRole(v['observationRole'])) &&
+    // Control events may omit observationRole (absent/undefined); payload-bearing
+    // events carry null or a valid role. The parser accepts the same set.
+    (v['observationRole'] == null || isObservationRole(v['observationRole'])) &&
     isTimestamp(v['rawCapturedAt'])
   );
 }

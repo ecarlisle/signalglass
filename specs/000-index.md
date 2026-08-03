@@ -86,7 +86,6 @@ implementation increment of that contract: canonical evidence primitives
 beside the existing runtime model, plus the compatibility projections;
 its dependency-free foundation package (`@signalglass/evidence`) is
 implemented and the remaining slices are pending.
-acceptance authorizes implementation, which has not yet begun.
 
 ## References
 
