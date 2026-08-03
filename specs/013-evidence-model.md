@@ -71,7 +71,8 @@ concepts must be expressed as compatibility projections in implementation (see
 | Entity | Responsibility | Canonical? |
 |---|---|---|
 | **Interaction** | The enclosing logical AI exchange or task execution being observed (one agent step, one user turn, or an equivalent logical unit). The domain entity whose evidence is recorded. | Yes |
-| **Trace** | The authoritative serialized evidence record of one interaction. Each interaction is serialized as exactly one trace; `traceId` is the same identifier value as the interaction's `id`. | Yes |
+| **Evidence record** | The authoritative serialized record of one interaction: raw observations plus the deterministic trace, structural analysis, completeness, capture boundary, and schema version. | Yes |
+| **Trace** | The deterministic canonical view derived from an evidence record's raw observations. `traceId` is the same identifier value as the interaction's `id`; the trace is not independently authoritative. | Derived canonical view |
 | **Span** | A structured, hierarchically organized segment of an interaction with a lifecycle (start/end): a model request, a tool call, an MCP call, a retrieval, a context-provider call, or context assembly. Carries hierarchy, timing, and status. | Yes |
 | **Event** | A discrete observed occurrence attached to a span or to the trace root. Carries content, evidence status, and the deterministic sequence position. | Yes |
 | **Run** | A derived, session-level grouping of one or more interactions (for example, an agent's task execution). A projection, not a canonical evidence container. | No (projection) |
@@ -81,20 +82,20 @@ concepts must be expressed as compatibility projections in implementation (see
 | **Context artifact** | A referenceable unit of context (message, file, document, retrieved fragment, MCP response, tool result, repository content) with payload and provenance metadata. | Yes |
 | **Context contribution** | The recorded act of adding context into a model request, referencing artifacts by deterministic locator. | Yes |
 | **Observation boundary** | The declared scope of what a capture surface could and could not observe, recorded with the evidence. | Yes (metadata) |
-| **Trace completeness** | A derived description of which evidence was captured, redacted, truncated, missing, or unknown, and what the boundary could not observe. Never invents evidence. | Derived |
+| **Completeness record (`EvidenceRecord.completeness`)** | A derived description computed from the canonical trace, structural analysis, and capture boundary; serialized exactly once on `EvidenceRecord.completeness`, never duplicated on the trace. Never invents evidence. | Derived |
 | **Measurement record** | A deterministic derivation over evidence (token counts, latency, duration, cost) with algorithm/version and input references. | Derived |
 | **Interpretation record** | A labeled, optional human-facing explanation or judgment derived from measurements and evidence. | Derived |
 
-### 1.2 An interaction is serialized as exactly one trace
+### 1.2 An interaction is serialized as exactly one evidence record
 
-**Rule:** An interaction is a domain entity; a trace is the authoritative
-serialized evidence record of that entity. Each interaction is serialized as
-exactly one trace, and `interactionId` (the interaction's id) and `traceId`
-(the trace's id) are the same identifier value. This document uses
-"interaction" when referring to the domain object and "trace" when referring
-to its serialized record; they are two views of one entity, not two containers.
+**Rule:** An interaction is a domain entity; `EvidenceRecord` is its only
+authoritative serialized evidence record. Each record preserves authoritative
+raw observations and carries one deterministic canonical trace view plus its
+structural analysis, completeness, capture boundary, and schema version.
+Within that trace, `interactionId` (the interaction's id) and `traceId` (the
+trace view's id) are the same identifier value.
 
-**Canonical serialized shape.** The serialized trace record carries both
+**Canonical trace shape.** The derived trace view carries both
 `interactionId` and `traceId` at the top level, with equal values. This
 equality is an invariant that serialization MUST enforce and that consumers
 MAY rely on. `traceId` is the reference identifier: events, spans, envelopes,
@@ -102,9 +103,10 @@ artifacts, and derived records reference the trace by `traceId` only, never by
 `interactionId`. Neither field is omitted, and readers are never required to
 infer one from the other.
 
-**Rationale:** Two competing top-level containers would make "interaction" and
-"trace" ambiguous forever. One serialization keeps identity, ordering,
-completeness, and lifecycle in a single place.
+**Rationale:** One authoritative `EvidenceRecord` prevents a normalized trace
+from competing with the raw observations that reproduce it. Identity and
+lifecycle remain on the trace view; completeness has one serialized owner on
+the enclosing evidence record.
 
 **Rejected alternatives:**
 
@@ -141,7 +143,7 @@ ordering key lives on every content-bearing record.
 - `interactionId` — the domain identifier of the interaction; the same value
   as `traceId` (§1.2). Serialized at the trace top level; nested records never
   use it to reference the trace.
-- `traceId` — stable, opaque identifier of the serialized trace record; MUST
+- `traceId` — stable, opaque identifier of the canonical trace view; MUST
   equal `interactionId` (§1.2). MUST be unique within a SignalGlass
   installation; SHOULD be globally unique (ULID-style values are recommended).
   Nested records reference the trace by `traceId` only.
@@ -149,11 +151,55 @@ ordering key lives on every content-bearing record.
 - `parentSpanId` — MAY be absent on root spans. Establishes **hierarchy only**;
   it MUST NOT be used for ordering.
 - Event `eventId` — stable, opaque event identifier, unique within the trace.
+- Observation `observationId` — stable, opaque identifier assigned at the
+  capture boundary to every raw observation, unique within the evidence
+  record and immutable. Duplicate provenance references observation ids,
+  never raw-array positions.
 - Artifact, measurement, and interpretation records carry their own stable ids.
 
 Identifiers MUST be assigned at capture time, MUST be immutable, and MUST NOT be
 derived from content. Content-derived identity (for example, a hash) is a
 separate `contentHash` field, never an id.
+
+Opaque identifiers MUST NOT determine ordering, collision resolution, or
+winner selection. Permuting the same already identified raw observations MUST
+produce semantically equivalent trace, duplicate relationships, gaps,
+completeness, and normalized validation issues. The authoritative serialized
+record MAY preserve raw array order for lossless round trips, but that order is
+not semantic and is never a tie-breaker. Capture order, if needed as evidence,
+must be recorded explicitly rather than inferred from an array index.
+
+### 2.1.1 Canonical event projection for replay comparison
+
+Duplicate classification operates on one normative projection:
+
+```ts
+declare function projectCanonicalEvent(
+  observation: EvidenceObservation
+): EventRecord;
+```
+
+The projection removes `observationId`, `rawCapturedAt`, and every other field
+classified solely as raw-capture provenance or observation-container metadata.
+It retains every field belonging to the canonical event: `eventId`, `traceId`,
+`spanId`, `seq`, `kind`, `capturedAt`, `evidenceStatus`, `observationRole`, all
+kind-specific payload fields, and applicable unknown additive event fields
+preserved by the forward-compatibility contract (§10). Projection MUST NOT
+alter, redact, normalize away, or silently discard event evidence to make two
+observations compare equal.
+
+This projection is the sole input for exact-replay classification,
+same-ID/same-sequence content-conflict detection, parser verification of
+serialized duplicate analysis, and any optional canonical-content digest.
+Exact replay means the projected canonical events are semantically equal,
+including equal `eventId` and `seq`.
+
+When recorded, a canonical-content digest is an integrity/comparison aid over
+the RFC 8785 (JCS) canonical JSON bytes of `projectCanonicalEvent` encoded as
+UTF-8 and hashed with SHA-256. It records the projection algorithm version and
+the value as `sha256:` followed by 64 lowercase hexadecimal characters. It is
+distinct from payload `contentHash` and envelope `nativeContentHash`, and MUST
+NOT determine ordering, precedence, collision resolution, or winner selection.
 
 `null` is reserved for structural absence: a root span's absent
 `parentSpanId`, or an event attached to the trace root via `spanId`. Evidence
@@ -234,21 +280,90 @@ survives replay.
 
 ### 2.4 Duplicate and dropped events
 
-- **Duplicates:** the same `eventId` appearing twice in one trace is a
-  duplicate. Persistence MUST detect it and record a single event plus a
-  completeness note (`duplicateDetected`), never two distinct events. The
-  first observed copy wins (the one assigned the lowest `seq`); a conflicting
-  later copy MUST be reported in the completeness record, never silently
-  merged or resolved. Collapsing a duplicate does not create a sequence gap;
-  the retained sequence stays contiguous.
-- **Dropped events:** a `seq` gap (§2.2) proves that an assigned sequence
-  position is absent from the retained evidence: at least one event that
-  reached the sequencing surface was dropped before persistence or removed
-  from retention. The completeness record MUST report the gap and the
-  adjacent event ids; SignalGlass MUST NOT invent the missing event. An event
-  that failed before a sequence number was assigned produces no gap; it is
-  disclosed through the completeness record's boundary statement or an
-  explicit `missing` record (§4.1), never inferred from sequence position.
+**Processing order (normative):** validators MUST apply duplicate and gap
+analysis in this deterministic order:
+
+1. Validate raw observations and their unique immutable `observationId`
+   values.
+2. Apply `projectCanonicalEvent` to every observation.
+3. Group semantically equal same-ID/same-sequence projections as exact replay
+   groups, preserving every participating observation identity.
+4. Reject multiple conflicting projections within any same-ID/same-sequence
+   position.
+5. Resolve each same-ID/different-sequence group by retaining its lowest
+   sequence position and recording every observation identity at every
+   retained or discarded position.
+6. Reject different-ID/same-sequence collisions among the remaining canonical
+   candidates.
+7. Validate retained event-ID and sequence uniqueness.
+8. Derive gaps from retained sequence positions.
+9. Derive completeness only for a trace that remains valid after structural
+   validation, and serialize it only as `EvidenceRecord.completeness`.
+
+**Collision cases:**
+
+- **Exact replay:** two or more observations have semantically equal
+  `projectCanonicalEvent` results, including identical `eventId` and `seq`.
+  - Collapse to one retained event.
+  - Preserve every raw observation and record the complete set of
+    participating observation identities without selecting a representative.
+  - Report the replay duplicate in the completeness record
+    (`duplicateDetected`).
+  - Do not report a sequence gap because the assigned position remains
+    represented.
+
+- **Same-ID, same-sequence content conflict:** same `eventId` and same
+  `seq`, but conflicting `projectCanonicalEvent` results (any retained
+  canonical event field differs).
+  - They are not exact replays.
+  - **Reject the trace as invalid**. Do not select a winner based on
+    "first observed," opaque identifier ordering, content hashes, or
+    arrival order.
+  - Emit a structured validation issue identifying the event-ID/content
+    conflict without echoing sensitive payload content.
+  - Do not derive or serialize a valid canonical trace or authoritative
+    completeness record from an arbitrarily selected candidate.
+
+- **Different-ID, same-sequence collision:** after same-ID/different-sequence
+  resolution, different retained `eventId` candidates claim the same `seq`.
+  - **Reject the trace as invalid** because canonical sequence uniqueness
+    is violated.
+  - Do not use identifier ordering, arrival order, timestamps, or content
+    hashes as a tie-breaker.
+  - Emit a structured sequence-collision validation issue.
+  - Do not retain an arbitrary winner or infer a gap while both
+    candidates claim the same assigned position.
+
+- **Same-ID, different-sequence conflict:** the same `eventId` occurs at two
+  or more different `seq` positions; any position may itself contain an exact
+  replay group.
+  - Retain the lowest-`seq` position because `seq` provides a deterministic
+    distinction in this case, preserving every observation identity at that
+    position.
+  - Report the duplicate conflict in the completeness record.
+  - Record every higher discarded position once, with all observation
+    identities at that position and whether another independently valid
+    retained event occupies it. Each unoccupied discarded position is a gap;
+    an independently occupied position is not.
+  - Never renumber retained events.
+
+**Dropped events:** a `seq` gap (§2.2) proves that an assigned sequence
+position is absent from retained evidence; the completeness record reports
+the gap and adjacent event ids; SignalGlass MUST NOT invent the missing
+event. An event that failed before a sequence number was assigned produces
+no gap; it is disclosed through the completeness record's boundary
+statement or an explicit `missing` record (§4.1), never inferred from
+sequence position.
+
+**Architectural principles preserved:**
+
+- Sequencing occurs at the observation boundary.
+- Canonical events are never reordered or renumbered during validation.
+- Duplicate processing must not silently alter observed evidence.
+- Uncertainty and incompleteness remain visible.
+- Completeness represents incomplete but structurally valid evidence; it
+  must not convert an ambiguous or structurally invalid collision into a
+  valid trace.
 
 ## 3. Span and event semantics
 
@@ -351,13 +466,22 @@ evidence complete and falsifiable without overstating what was stored.
 ### 3.3 Errors, cancellation, and retries
 
 - `error` events MUST declare the failing actor (`agent`, `model`, `tool`,
-  `mcp`, `retrieval`, `context_provider`, or `capture`), the observed error,
-  and the observation role under which the error was observed (§5.1). An error
-  claimed at one boundary MUST NOT be attributed to another boundary without
-  evidence; the error payload describes what the declaring surface observed,
-  not provider-internal state.
-- `cancelled` events MUST identify who or what requested cancellation and
-  carry the observation role under which the cancellation was observed.
+  `mcp`, `retrieval`, `context_provider`, or `capture`), `lifecycleTarget`
+  ∈ {`trace`, `span`, `none`}, `lifecycleEffect` ∈ {`fail`, `none`}, the
+  observed error, and the observation role under which the error was
+  observed (§5.1). Lifecycle targeting and terminal effects are determined
+  exclusively from the structured `lifecycleTarget` and `lifecycleEffect`
+  fields — never from `actor`, `observationRole`, or free-form payload
+  text. An error claimed at one boundary MUST NOT be attributed to another
+  boundary without evidence; the error payload describes what the declaring
+  surface observed, not provider-internal state.
+- `cancelled` events MUST declare `lifecycleTarget` ∈ {`trace`, `span`,
+  `none`}, `lifecycleEffect: "cancel"`, who or what requested cancellation,
+  and the observation role under which the cancellation was observed.
+  `lifecycleTarget: "none"` records a cancellation request or occurrence that
+  terminates no trace or span; it is non-terminal and is coherent with later
+  normal completion. Only a target matching a trace or span sets that record's
+  lifecycle status to `cancelled`.
 - `retry` events MUST reference the original request's `eventId` and record the
   retry policy inputs observed (attempt count, delay) without asserting the
   provider's internal policy. The associated error event MAY be referenced
@@ -398,9 +522,10 @@ the value of explicit uncertainty labeling. Collapsing states into `null` or
 existed"; the statuses above keep that distinction, and `inferred` is reserved
 so raw evidence is never quietly guessed.
 
-### 4.3 Trace completeness
+### 4.3 Evidence-record completeness
 
-Each trace carries a derived **completeness record** computed from its events:
+Each `EvidenceRecord` carries one derived **completeness record**, computed
+from its canonical trace, structural analysis, and capture boundary:
 
 - counts of events and payloads by status;
 - `seq` gaps (assigned sequence positions absent from retained evidence) and
@@ -412,7 +537,10 @@ Each trace carries a derived **completeness record** computed from its events:
   observe.
 
 Completeness MUST be derived from the record, never fabricated, and MUST NOT
-invent events to fill gaps.
+invent events to fill gaps. It MUST NOT also be serialized on the canonical
+trace view;
+parsing recomputes it and rejects disagreement without repairing or
+overwriting the authoritative record.
 
 ## 5. Observation boundaries
 
@@ -704,7 +832,7 @@ each policy keeps its own version and its own recording location (§9.2).
 - **Redaction stages stay distinct.** Collection-time redaction yields
   `evidenceStatus: "redacted"` at capture and is part of the evidence.
   Persistence-time removal is a deletion/tombstone operation (administrative)
-  and the affected trace's completeness record notes it. Export-time
+  and the affected `EvidenceRecord.completeness` notes it. Export-time
   sanitization is a projection under the export policy and MUST NOT overwrite
   authoritative evidence.
 - The capture profile in effect MUST be recorded on the trace (profile name and
@@ -860,7 +988,8 @@ example conflicts with the prose above, the prose wins.
 
 ## 14. Acceptance criteria
 
-- [ ] One interaction produces exactly one trace record.
+- [ ] One interaction produces exactly one authoritative `EvidenceRecord`
+  containing one deterministic canonical trace view.
 - [ ] Every event carries a strictly increasing, contiguous `seq`; no record
   relies on timestamps for ordering.
 - [ ] Raw evidence carries exactly one of the six evidence statuses; `inferred`
@@ -882,8 +1011,23 @@ No production code changes are made by this spec; it is documentation-only.
 The mapping below is a contract for future implementation specs:
 
 - identity/ordering: `seq` contiguity, tie resolution, duplicate and gap
-  handling;
+  handling; unique observation identities; exact replay equality through
+  `projectCanonicalEvent` excluding `observationId`, `rawCapturedAt`, and
+  capture-only container metadata while retaining every canonical and unknown
+  additive event field; canonical projection disagreement rejected; optional
+  canonical-content digests verified against the versioned JCS/UTF-8 contract;
+- duplicate provenance: two-copy and three-or-more-copy exact replays without
+  a representative; multiple sequence positions and replay groups at retained
+  or discarded positions for one event id; complete identity sets and gap
+  status per discarded position; raw-array permutation equivalence; duplicate,
+  fabricated, or omitted provenance identities rejected; deterministic
+  set-like serialization without evidence precedence;
 - evidence status: status transitions and completeness aggregation;
+- documentation conformance: Interaction and Trace remain distinctly
+  classified, `EvidenceRecord.completeness` is the sole serialized owner, and
+  example lifecycle targets/effects, declaring parties, and observation roles
+  are valid; the recoverable error and target-`none` cancellation request do
+  not prevent later normal completion;
 - measurement determinism: same inputs → same values; cost derivation;
 - projection round-trips: evidence → `Trace`/`AgentRun` and back;
 - policy independence: changing export policy does not alter persistence.

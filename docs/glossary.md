@@ -36,7 +36,7 @@ The second SignalGlass mode. SignalGlass acts as an OpenAI-compatible ingress/pr
 ## Trace
 A live-captured session representing a complete provider exchange. A trace can be converted into an `AgentRun` for offline-style analysis.
 
-> **Legacy v0.x — superseded by [Spec 013 — Evidence model](../specs/013-evidence-model.md).** Under the evidence model, a trace is the canonical serialized record of one interaction, carrying both `traceId` and `interactionId` at the top level (equal values; the equality is an invariant), with nested records referencing `traceId`.
+> **Legacy v0.x — superseded by [Spec 013 — Evidence model](../specs/013-evidence-model.md).** Under the evidence model, a trace is the deterministic canonical view derived from an authoritative `EvidenceRecord`; it carries both `traceId` and `interactionId` at the top level (equal values; the equality is an invariant), with nested records referencing `traceId`.
 
 ## TraceEvent
 A single event in a trace. Current event types include `message`, `instruction`, `context`, `transformation`, `tool_call`, `tool_result`, `provider_request`, `provider_response`, `provider_error`, `inference`, and `egress_response`.
@@ -67,8 +67,11 @@ A rule-of-thumb detection that is useful but not certain. SignalGlass labels heu
 ## Evidence
 An observed, recorded fact about an AI interaction (a payload, event, or envelope), with an explicit evidence status and observation boundary. Evidence is the unit of truth for the target architecture; see [Spec 013](../specs/013-evidence-model.md).
 
+## Evidence primitive
+A canonical TypeScript representation of a Spec 013 evidence record (trace envelope, span, event, request/response envelope, context artifact, context contribution, completeness record, or their vocabulary types), as defined by [Spec 014 — Evidence primitives](../specs/014-evidence-primitives.md) (Draft). Evidence primitives are added beside the existing v0.x runtime models, are provider-neutral, and carry runtime validation and JSON-safe serialization; they are not measurements or interpretations.
+
 ## Interaction
-The enclosing logical AI exchange or task execution being observed (one agent step, one user turn). The domain entity whose evidence is recorded; each interaction is serialized as exactly one trace.
+The enclosing logical AI exchange or task execution being observed (one agent step, one user turn). The domain entity whose evidence is serialized as exactly one authoritative `EvidenceRecord` containing one deterministic canonical trace view.
 
 ## Span
 A structured segment of an interaction with a lifecycle (start/end): a model request, tool call, MCP call, retrieval, context-provider call, or context assembly. Spans carry hierarchy, timing, and status; events carry content.
@@ -100,5 +103,5 @@ A named, versioned bundle of policy references and configuration settings that s
 ## Projection
 A derived representation of evidence (for example, a Run, a legacy `Trace`/`AgentRun` shape, or a redacted export). Projections never alter or overwrite authoritative evidence.
 
-## Trace completeness
-A derived description of which evidence was captured, redacted, truncated, missing, or unknown for an interaction, including `seq` gaps (assigned sequence positions absent from retained evidence), boundary statements, and explicit `missing` records. Never invents evidence.
+## Evidence-record completeness
+The derived `EvidenceRecord.completeness` description of which evidence was captured, redacted, truncated, missing, or unknown for an interaction, including `seq` gaps (assigned sequence positions absent from retained evidence), boundary statements, and explicit `missing` records. It is serialized once on the evidence record, never on the canonical trace view, and never invents evidence.
