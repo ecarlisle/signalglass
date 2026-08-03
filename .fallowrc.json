@@ -1,15 +1,10 @@
 {
   "$schema": "https://json.schemastore.org/fallowrc.json",
-  "ignorePatterns": [
-    "dist/**",
-    "node_modules/**",
-    ".pi/**",
-    ".signalglass/**",
-    "scripts/**"
-  ],
+  "entry": ["scripts/validate-evidence-examples.mjs"],
+  "ignorePatterns": [".pi/**", ".signalglass/**"],
   "rules": {
     "unused-files": "error",
-    "unused-dependencies": "off",
+    "unused-dependencies": "warn",
     "unresolved-imports": "warn",
     "unlisted-dependencies": "off"
   }
