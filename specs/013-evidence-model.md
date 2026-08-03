@@ -234,21 +234,58 @@ survives replay.
 
 ### 2.4 Duplicate and dropped events
 
-- **Duplicates:** the same `eventId` appearing twice in one trace is a
-  duplicate. Persistence MUST detect it and record a single event plus a
-  completeness note (`duplicateDetected`), never two distinct events. The
-  first observed copy wins (the one assigned the lowest `seq`); a conflicting
-  later copy MUST be reported in the completeness record, never silently
-  merged or resolved. Collapsing a duplicate does not create a sequence gap;
-  the retained sequence stays contiguous.
-- **Dropped events:** a `seq` gap (§2.2) proves that an assigned sequence
-  position is absent from the retained evidence: at least one event that
-  reached the sequencing surface was dropped before persistence or removed
-  from retention. The completeness record MUST report the gap and the
-  adjacent event ids; SignalGlass MUST NOT invent the missing event. An event
-  that failed before a sequence number was assigned produces no gap; it is
-  disclosed through the completeness record's boundary statement or an
-  explicit `missing` record (§4.1), never inferred from sequence position.
+**Processing order (normative):** validators MUST apply duplicate and gap
+analysis in this deterministic order:
+
+1. Classify duplicate and replay candidates by `eventId` and `seq`.
+2. Apply the deterministic duplicate-handling rules below.
+3. Validate retained event-ID uniqueness.
+4. Validate retained sequence uniqueness.
+5. Derive and report gaps from the retained sequence positions.
+6. Derive completeness from the resulting canonical record and declared
+   capture boundary.
+
+**Duplicate cases:**
+
+- **Exact replay:** two copies have identical canonical event content,
+  including identical `eventId` and `seq`.
+  - Retain one canonical event.
+  - Report the replay duplicate in the completeness record (`duplicateDetected`).
+  - Do not report a sequence gap because the assigned position remains
+    represented.
+
+- **Same-ID, same-sequence conflict:** two copies have the same `eventId`
+  and `seq` but conflicting canonical content (any field differs).
+  - They are not exact replays.
+  - Retain the first observed copy (lowest `seq` per the deterministic rule).
+  - Report the content conflict in the completeness record.
+  - Do not invent a gap because the sequence position remains occupied.
+  - The trace is valid-but-incomplete; conflicting records prevent a
+    trustworthy canonical event from being established, so the trace MUST
+    be marked incomplete.
+
+- **Same-ID, different-sequence conflict:** a later copy uses the same
+  `eventId` but a different assigned `seq`.
+  - Retain the earliest copy (lowest `seq`) per the deterministic rule.
+  - Report the duplicate conflict in the completeness record.
+  - Treat the discarded assigned sequence position as a gap **unless**
+    another valid retained event independently occupies it.
+  - Never renumber retained events.
+
+**Dropped events:** a `seq` gap (§2.2) proves that an assigned sequence
+position is absent from retained evidence; the completeness record reports
+the gap and adjacent event ids; SignalGlass MUST NOT invent the missing
+event. An event that failed before a sequence number was assigned produces
+no gap; it is disclosed through the completeness record's boundary
+statement or an explicit `missing` record (§4.1), never inferred from
+sequence position.
+
+**Architectural principles preserved:**
+
+- Sequencing occurs at the observation boundary.
+- Canonical events are never reordered or renumbered during validation.
+- Duplicate processing must not silently alter observed evidence.
+- Uncertainty and incompleteness remain visible.
 
 ## 3. Span and event semantics
 
@@ -351,13 +388,18 @@ evidence complete and falsifiable without overstating what was stored.
 ### 3.3 Errors, cancellation, and retries
 
 - `error` events MUST declare the failing actor (`agent`, `model`, `tool`,
-  `mcp`, `retrieval`, `context_provider`, or `capture`), the observed error,
-  and the observation role under which the error was observed (§5.1). An error
-  claimed at one boundary MUST NOT be attributed to another boundary without
-  evidence; the error payload describes what the declaring surface observed,
-  not provider-internal state.
-- `cancelled` events MUST identify who or what requested cancellation and
-  carry the observation role under which the cancellation was observed.
+  `mcp`, `retrieval`, `context_provider`, or `capture`), `lifecycleTarget`
+  ∈ {`trace`, `span`, `none`}, `lifecycleEffect` ∈ {`fail`, `none`}, the
+  observed error, and the observation role under which the error was
+  observed (§5.1). Lifecycle targeting and terminal effects are determined
+  exclusively from the structured `lifecycleTarget` and `lifecycleEffect`
+  fields — never from `actor`, `observationRole`, or free-form payload
+  text. An error claimed at one boundary MUST NOT be attributed to another
+  boundary without evidence; the error payload describes what the declaring
+  surface observed, not provider-internal state.
+- `cancelled` events MUST declare `lifecycleTarget` ∈ {`trace`, `span`,
+  `none`}, `lifecycleEffect: "cancel"`, who or what requested cancellation,
+  and the observation role under which the cancellation was observed.
 - `retry` events MUST reference the original request's `eventId` and record the
   retry policy inputs observed (attempt count, delay) without asserting the
   provider's internal policy. The associated error event MAY be referenced

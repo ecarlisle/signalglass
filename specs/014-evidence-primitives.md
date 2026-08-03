@@ -108,9 +108,9 @@ The narrowest appropriate boundary is a new workspace package
 the existing packages exactly as Spec 001 structures them (own `package.json`,
 `tsconfig.json`, `src/index.ts`, exports pointing at `./dist/index.js` and
 `./dist/index.d.ts`; `vitest.config.ts` gains a matching workspace alias in
-the implementation PR). This matches the architectural foundation's
-incremental-migration principle: "new evidence primitives are added beside
-the current v0.x models."
+the implementation PR). This matches the architectural foundation’s
+incremental-migration principle: “new evidence primitives are added beside
+the current v0.x models.”
 
 Rationale for a separate package rather than a module inside
 `@signalglass/core`:
@@ -119,12 +119,21 @@ Rationale for a separate package rather than a module inside
   estimation, smells, recommendations, traces). The evidence core MUST NOT
   depend on analysis, and placing canonical records inside the analysis
   package would entangle the layers the foundation keeps separate.
-- A zero-dependency package makes the "evidence core depends on nothing"
+- A zero-dependency package makes the “evidence core depends on nothing”
   rule mechanically enforceable (`package.json` has no runtime
   dependencies).
 - Legacy consumers already depend on `@signalglass/core`; adding
   `@signalglass/evidence` as a dependency of `@signalglass/core` gives every
   consumer access without changing their imports.
+
+**Import contract:** canonical evidence types, validators, serialization, and
+  helpers are imported **directly from `@signalglass/evidence`**.
+  `@signalglass/core` depends on `@signalglass/evidence` so its compatibility
+  projections can consume canonical records, but existing `@signalglass/core`
+  imports do **not** expose evidence-package APIs automatically. Compatibility
+  projection functions remain exported from `@signalglass/core`. No broad
+  re-export through `@signalglass/core` is introduced unless an existing
+  repository requirement clearly supports it.
 
 Compatibility projections (canonical → legacy `Trace`/`TraceEvent`, legacy `Trace`/`TraceEvent` → legacy `AgentRun`, canonical → legacy `AgentRun`) live in `@signalglass/core`
 as new modules (`packages/core/src/evidenceProjections/`), beside the legacy
@@ -338,9 +347,12 @@ defining a provider-neutral record kind does not implement MCP observation.
     `{ name, kind }`, payload;
   - `context_assembled` — snapshot reference or hash of assembled context;
   - `error` — `actor` ∈ {`agent`, `model`, `tool`, `mcp`, `retrieval`,
-    `context_provider`, `capture`}, observed error payload,
+    `context_provider`, `capture`}, `lifecycleTarget` ∈ {`trace`, `span`,
+    `none`}, `lifecycleEffect` ∈ {`fail`, `none`}, observed error payload,
     `observationRole`;
-  - `cancelled` — who/what requested cancellation, `observationRole`;
+  - `cancelled` — `lifecycleTarget` ∈ {`trace`, `span`, `none`},
+    `lifecycleEffect: "cancel"`, who/what requested cancellation,
+    `observationRole`;
   - `retry` — `originalRequestEventId`, `errorEventId?`, attempt count, delay.
 - **Discriminant/id rules:** `kind` is the discriminant (closed vocabulary
   above); `eventId` opaque, unique within trace; `seq` is the sole
@@ -352,7 +364,10 @@ defining a provider-neutral record kind does not implement MCP observation.
   events; `null` never represents status.
 - **Validation:** kind ∈ vocabulary; seq rules (§4.1); status ∈ vocabulary;
   role ∈ vocabulary on payload-bearing kinds; retry references resolve;
-  error/cancelled carry roles; status/fidelity matrix rules (§5.4).
+  error/cancelled carry `lifecycleTarget`, `lifecycleEffect`, and roles;
+  `lifecycleTarget: "span"` requires non-null `spanId` matching the attached
+  span; `lifecycleTarget: "trace"` requires `spanId: null`; status/fidelity
+  matrix rules (§5.4).
 - **Relationships:** belongs to a span or trace root; may reference other
   events (`retry.originalRequestEventId`, `errorEventId`); may carry
   envelopes and context contributions.
@@ -554,6 +569,12 @@ defining a provider-neutral record kind does not implement MCP observation.
   with the meanings and validator rules in §4.7. Status is evidence-scoped
   lifecycle state, never a quality judgment; absence of an observed error is
   not proof of success; `unknown` represents an unobservable terminal state.
+- `LifecycleTarget` — `trace` | `span` | `none`. Declares which record
+  an `error` or `cancelled` event targets for terminal effect.
+- `LifecycleEffect` — `fail` | `cancel` | `none`. Declares the terminal
+  effect on the targeted record. `error` events carry `fail` or `none`;
+  `cancelled` events carry `cancel`. A `none` effect means the event
+  terminates no lifecycle (recoverable/informational).
 
 ### 2.3 Explicitly deferred primitives and capabilities
 
@@ -676,17 +697,57 @@ as part of Spec 014:
 
 ### 4.4 Duplicates, drops, and gaps
 
-- Duplicates: same `eventId` twice in one trace is a duplicate. Persistence
-  MUST detect it and record a single event plus a completeness note; the
-  first observed copy (lowest `seq`) wins; a conflicting later copy MUST be
-  reported in the completeness record, never silently merged. Collapsing a
-  duplicate does not create a gap.
-- Drops: a `seq` gap proves an assigned sequence position is absent from
-  retained evidence; the completeness record reports the gap and adjacent
-  event ids. SignalGlass MUST NOT invent the missing event. An event that
-  failed before assignment produces no gap and is disclosed through the
-  boundary statement or an explicit `missing` record — never inferred from
-  sequence position.
+**Processing order (normative):** validators MUST apply duplicate and gap
+analysis in this deterministic order:
+
+1. Classify duplicate and replay candidates by `eventId` and `seq`.
+2. Apply the deterministic duplicate-handling rules below.
+3. Validate retained event-ID uniqueness.
+4. Validate retained sequence uniqueness.
+5. Derive and report gaps from the retained sequence positions.
+6. Derive completeness from the resulting canonical record and declared
+   capture boundary.
+
+**Duplicate cases:**
+
+- **Exact replay:** two copies have identical canonical event content,
+  including identical `eventId` and `seq`.
+  - Retain one canonical event.
+  - Report the replay duplicate in the completeness record (`duplicateDetected`).
+  - Do not report a sequence gap because the assigned position remains
+    represented.
+
+- **Same-ID, same-sequence conflict:** two copies have the same `eventId`
+  and `seq` but conflicting canonical content (any field differs).
+  - They are not exact replays.
+  - Retain the first observed copy (lowest `seq` per the deterministic rule).
+  - Report the content conflict in the completeness record.
+  - Do not invent a gap because the sequence position remains occupied.
+  - The trace is valid-but-incomplete; conflicting records prevent a
+    trustworthy canonical event from being established, so the trace MUST
+    be marked incomplete.
+
+- **Same-ID, different-sequence conflict:** a later copy uses the same
+  `eventId` but a different assigned `seq`.
+  - Retain the earliest copy (lowest `seq`) per the deterministic rule.
+  - Report the duplicate conflict in the completeness record.
+  - Treat the discarded assigned sequence position as a gap **unless**
+    another valid retained event independently occupies it.
+  - Never renumber retained events.
+
+**Drops:** a `seq` gap proves an assigned sequence position is absent from
+retained evidence; the completeness record reports the gap and adjacent
+event ids. SignalGlass MUST NOT invent the missing event. An event that
+failed before assignment produces no gap and is disclosed through the
+boundary statement or an explicit `missing` record — never inferred from
+sequence position.
+
+**Architectural principles preserved:**
+
+- Sequencing occurs at the observation boundary.
+- Canonical events are never reordered or renumbered during validation.
+- Duplicate processing must not silently alter observed evidence.
+- Uncertainty and incompleteness remain visible.
 
 ### 4.5 Hash selection and scope
 
@@ -776,30 +837,34 @@ type SpanTerminalState =
   for lifecycle fields).
 - **Validation rules.** The status MUST be declared by the capture surface
   at capture and MUST be coherent with the observed lifecycle events (the
-  validator checks this).
+  validator checks this). Lifecycle targeting and terminal effects are
+  determined exclusively from the structured `lifecycleTarget` and
+  `lifecycleEffect` fields on `error` and `cancelled` events — never from
+  `actor`, `observationRole`, or free-form payload text.
   - `completed` (trace/span) requires the observed normal terminal event
     (`interaction_end`/`span_end`) as the record's final applicable event;
     validators MUST NOT accept `completed` without it. A `completed` status
-    is valid only when no prior event in the record's applicable scope
-    explicitly declared terminal failure or cancellation of that same record.
-  - `failed` requires an observed `error` event explicitly declaring failure
-    of that trace or span (with its declared `actor` and observation role,
-    Spec 013 §3.3) as the record's final applicable event. Such a terminal
-    failure declaration MUST be the final applicable event for that record;
-    a later `interaction_end`/`span_end` for the same record contradicts the
-    earlier terminal declaration and MUST fail validation. A recoverable
-    `error` that does not declare failure of the containing trace or span
-    does not set its lifecycle status. An `error` terminating a child span
-    (tool, MCP, retrieval, etc.) does not automatically fail the containing
+    is valid only when no prior event in the record's applicable scope has
+    `lifecycleTarget` matching that record and `lifecycleEffect` ∈
+    {`fail`, `cancel`}.
+  - `failed` requires an observed `error` event with `lifecycleEffect:
+    "fail"` and `lifecycleTarget` matching the record (`trace` or `span`)
+    as the record's final applicable event. Such a terminal failure
+    declaration MUST be the final applicable event for that record; a later
+    `interaction_end`/`span_end` for the same record contradicts the earlier
+    terminal declaration and MUST fail validation. An `error` with
+    `lifecycleEffect: "none"` (recoverable/informational) does not set
+    lifecycle status. An `error` with `lifecycleTarget: "span"` and
+    `lifecycleEffect: "fail"` does not automatically fail the containing
     trace or parent spans.
-  - `cancelled` requires an observed `cancelled` event explicitly declaring
-    cancellation of that trace or span as the record's final applicable
-    event. Such a terminal cancellation declaration MUST be the final
-    applicable event for that record; a later `interaction_end`/`span_end`
-    for the same record contradicts the earlier terminal declaration and MUST
-    fail validation. A `cancelled` event observed at another scope (e.g.,
-    a child span or unrelated trace) does not automatically cancel this
-    record.
+  - `cancelled` requires an observed `cancelled` event with
+    `lifecycleEffect: "cancel"` and `lifecycleTarget` matching the record
+    as the record's final applicable event. Such a terminal cancellation
+    declaration MUST be the final applicable event for that record; a later
+    `interaction_end`/`span_end` for the same record contradicts the earlier
+    terminal declaration and MUST fail validation. A `cancelled` event with
+    `lifecycleTarget` not matching the record does not automatically cancel
+    it.
   - `unknown` requires no terminal event; validators MUST NOT require
     `interaction_end`/`span_end` when the lifecycle was not observed to
     finish.
@@ -811,31 +876,35 @@ type SpanTerminalState =
     example `completed` without `interaction_end`, or a present
     `finishedAt`/`endSeq` not equal to the cited terminal event's
     `capturedAt`/`seq`) is rejected.
-  - **Final observed event scope.**
+  - **Final applicable event scope.**
     - For a trace terminal state, the final applicable event is the event
       with the greatest canonical `seq` in the trace; the required terminal
-      event (`interaction_end` for `completed`, the terminal failure-declaring
-      `error` for `failed`, the terminal cancellation-declaring `cancelled`
-      for `cancelled`) MUST be that event.
+      event (`interaction_end` for `completed`, an `error` with
+      `lifecycleTarget: "trace"` and `lifecycleEffect: "fail"` for
+      `failed`, a `cancelled` with `lifecycleTarget: "trace"` and
+      `lifecycleEffect: "cancel"` for `cancelled`) MUST be that event.
     - For a span terminal state, the final applicable event is the event
       with the greatest canonical `seq` among events attached to that span
       (`spanId` match); the required terminal event (`span_end` for
-      `completed`, the terminal failure-declaring `error` for `failed`, the
-      terminal cancellation-declaring `cancelled` for `cancelled`) MUST be
-      that event.
+      `completed`, an `error` with `lifecycleTarget: "span"` and
+      `lifecycleEffect: "fail"` for `failed`, a `cancelled` with
+      `lifecycleTarget: "span"` and `lifecycleEffect: "cancel"` for
+      `cancelled`) MUST be that event.
     - Later events belonging to unrelated spans must not invalidate a failed,
       cancelled, or completed span.
-    - An `error` only terminates a span when it explicitly declares failure
-      of that span (its `actor` and payload claim that span). An `error` or
-      `cancelled` that does not claim the trace must not automatically
-      terminate the whole trace.
+    - An `error` only terminates a span when `lifecycleTarget: "span"` and
+      `lifecycleEffect: "fail"`. An `error` or `cancelled` with
+      `lifecycleTarget: "trace"` does not automatically terminate child
+      spans, and one with `lifecycleTarget: "none"` terminates no lifecycle.
     - Timestamps never determine which event is final; `seq` is the sole
       authority.
-  - **Preserved example.** A tool-span `error` declaring failure of the tool
-    span, followed by the trace's `interaction_end`, yields a `failed`
-    tool span and a `completed` trace — the child span's terminal declaration
-    does not propagate to the trace. A trace-level `error` declaring failure
-    of the trace, followed by `interaction_end`, is contradictory and invalid.
+  - **Preserved example.** A tool-span `error` with `lifecycleTarget:
+    "span"`, `lifecycleEffect: "fail"`, followed by the trace's
+    `interaction_end`, yields a `failed` tool span and a `completed` trace
+    — the child span's terminal declaration does not propagate to the trace.
+    A trace-level `error` with `lifecycleTarget: "trace"`,
+    `lifecycleEffect: "fail"`, followed by `interaction_end`, is
+    contradictory and invalid.
 - **Completeness.** Unobserved termination is missing lifecycle evidence and
   MUST be reported: the completeness record's boundary statement (or an
   explicit `missing` record) discloses that termination was not observed
@@ -948,12 +1017,14 @@ type ParseResult<T> =
   only for `completed` spans and equals the observed `span_end` event's `seq`
   (§4.7).
 - **Lifecycle coherence:** status-driven presence rules (§4.7) — `completed`
-  requires the observed `interaction_end`/`span_end` as the record's final
-  observed event; `failed`/`cancelled` require their observed
-  `error`/`cancelled` evidence as the final observed event and never
-  fabricate a normal end event; `unknown` requires no terminal event; present
-  `finishedAt`/`endSeq` equal the cited terminal event's `capturedAt`/`seq`;
-  wall-clock absence never upgrades `unknown`.
+  requires the observed `interaction_end`/`span_end` as the record's
+  final applicable event with no prior `lifecycleTarget`/`lifecycleEffect`
+  declaration targeting that record; `failed`/`cancelled` require an `error`
+  with `lifecycleEffect: "fail"` or `cancelled` with `lifecycleEffect:
+  "cancel"` targeting the record as the final applicable event; `unknown`
+  requires no terminal event; present `finishedAt`/`endSeq` equal the cited
+  terminal event's `capturedAt`/`seq`; wall-clock absence never upgrades
+  `unknown`.
 - **Final observed event scope:** trace final event = greatest `seq` in trace;
   span final event = greatest `seq` among that span's events; required
   terminal event must be that final event; later unrelated span events do not
@@ -1043,12 +1114,26 @@ everything that must survive round trips at the value level:
   status and MAY carry a `MissingDeclaration` (`reportedBy` records which
   surface/boundary reported the absence); they carry no content, no fidelity,
   no content type, and no hash.
-- A trace with a `seq` gap or a serialized completeness record that disagrees
-  with its events is valid **only as an explicitly incomplete trace**: the
-  completeness record MUST document the gap, and parsers MUST NOT repair or
-  renumber. An incomplete trace is still parseable; consumers are told about
-  the incompleteness through the completeness record, never through silence.
+- A trace with a real sequence gap whose serialized completeness metadata
+  **accurately documents that gap** (counts, gap positions, duplicate
+  detections, boundary statement all match the deterministic derivation)
+  remains parseable as an explicitly incomplete trace. The completeness
+  record MUST document the gap; parsers MUST NOT repair or renumber.
+- A trace whose serialized completeness metadata **contradicts** its
+  retained events or the deterministic `deriveCompleteness` derivation
+  (incorrect status counts, claimed nonexistent gaps, omitted duplicate
+  or gap information, contradictory completeness status) is **invalid and
+  MUST be rejected**. An `incomplete` label never overrides contradictory
+  metadata.
 - Parsing never fabricates events, content, or values to fill gaps.
+- **Negative test requirements (validators MUST reject):**
+  - Undocumented sequence gap (gap exists but completeness record omits it).
+  - Completeness metadata claiming a nonexistent gap.
+  - Incorrect status counts in completeness record.
+  - Omitted duplicate or gap information.
+  - Contradictory completeness status.
+  - A correctly documented incomplete trace (all gaps, duplicates, and
+    boundary statement match derivation) MUST remain parseable.
 
 ## 6. Compatibility projections
 
@@ -1328,6 +1413,17 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   declaration, no fabricated durations);
 - deterministic event ordering (contiguous `seq`, duplicate and gap
   handling, completeness consistency);
+- lifecycle targeting: `error` and `cancelled` events carry `lifecycleTarget`
+  and `lifecycleEffect`; validators enforce target/effect semantics;
+  `lifecycleTarget: "span"` requires matching `spanId`; `lifecycleTarget:
+  "trace"` requires `spanId: null`; `lifecycleEffect: "none"` does not
+  set status; child-span failure does not auto-fail trace; terminal
+  declaration must be final applicable event; later unrelated spans do not
+  invalidate;
+- duplicate handling: exact replay (no gap), same-ID same-seq conflict
+  (valid-but-incomplete, no gap), same-ID different-seq conflict (gap on
+  discarded position unless independently occupied); processing order
+  (§4.4) enforced; retained events never renumbered;
 - incomplete lifecycle records: `unknown` traces and spans without
   `finishedAt`, `endSeq`, or terminal events parse and validate; `completed`
   spans carry `endSeq` matching the observed `span_end` and require that
@@ -1336,7 +1432,13 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   never fabricate `span_end`; `failed`/`cancelled` traces carry `finishedAt`
   matching their terminal event and never fabricate `interaction_end`;
   present `finishedAt`/`endSeq` match the cited terminal event; wall-clock
-  absence never upgrades `unknown`; completeness reports unobserved termination;
+  absence never upgrades `unknown`; completeness reports unobserved
+  termination;
+- completeness validation: correctly documented incomplete traces remain
+  parseable; contradictory completeness metadata (incorrect status counts,
+  nonexistent/omitted gaps, contradictory status) MUST be rejected;
+  negative tests for undocumented gaps, claimed nonexistent gaps, incorrect
+  status counts, omitted duplicate/gap info, contradictory status;
 - JSON serialization and parsing round trips, including unknown-field
   preservation at value level (lexical bytes not claimed) and retained-byte
   encoding: canonical RFC 4648 §4 Base64 accepted including zero-padding
@@ -1478,7 +1580,10 @@ first slice; every decision needed to implement it is specified above.
   (§2.2), with no competing names for Spec 013 concepts.
 - [ ] The package/module boundary is explicit: `packages/evidence`
   (`@signalglass/evidence`) with projections in `@signalglass/core`
-  (`packages/core/src/evidenceProjections/`) (§1.1).
+  (`packages/core/src/evidenceProjections/`) (§1.1). Canonical evidence
+  types, validators, serialization, and helpers are imported directly from
+  `@signalglass/evidence`; `@signalglass/core` does not re-export its
+  dependency's API.
 - [ ] Public exports and dependency rules are defined: zero runtime
   dependencies; no provider/storage/analysis imports; projections depend on
   the evidence package, never the reverse (§1.2–§1.4).
@@ -1545,9 +1650,30 @@ first slice; every decision needed to implement it is specified above.
   matching their terminal event and never fabricate `interaction_end`;
   present `finishedAt`/`endSeq` are supported by observed evidence (§2.2,
   §4.7, §5.4).
+- [ ] Lifecycle targeting is structurally represented: `error` and
+  `cancelled` events carry `lifecycleTarget` ∈ {`trace`, `span`, `none`}
+  and `lifecycleEffect` ∈ {`fail`, `cancel`, `none`}; validators enforce
+  target/effect semantics — `lifecycleTarget: "span"` requires matching
+  `spanId`; `lifecycleTarget: "trace"` requires `spanId: null`;
+  `lifecycleEffect: "none"` does not set status; child-span failure does
+  not auto-fail trace; terminal declaration must be final applicable event;
+  timestamps never determine targeting (§2.2.3, §4.7, §5.4).
 - [ ] Completeness is classified per Spec 013 as a derived record;
   `deriveCompleteness` is pure, deterministic, and free of measurement,
   cost, interpretation, or optimization logic (§2.1, §2.2.9).
+- [ ] Duplicate handling and sequence gaps follow the deterministic
+  processing order (§4.4): exact replay (no gap), same-ID same-seq conflict
+  (valid-but-incomplete, no gap), same-ID different-seq conflict (gap on
+  discarded position unless independently occupied); retained events are
+  never renumbered; processing order (classify → apply rules → validate
+  IDs → validate seq → derive gaps → derive completeness) is normative.
+- [ ] Completeness metadata contradiction is rejected: a trace whose
+  serialized completeness disagrees with the deterministic derivation from
+  retained evidence (incorrect status counts, claimed nonexistent gaps,
+  omitted duplicate/gap info, contradictory status) is invalid and MUST be
+  rejected; a correctly documented incomplete trace remains parseable;
+  negative tests for undocumented gaps, nonexistent gaps, incorrect counts,
+  omitted info, and contradictory status are required (§5.8).
 
 ## Tests
 
@@ -1556,9 +1682,11 @@ spec. The test plan in §9 is the contract for the future implementation
 PRs, mapped to the acceptance criteria above (valid construction, malformed
 records, all union variants, version-compatibility acceptance and
 unknown-discriminant/breaking-version refusal, reference integrity, timing,
-deterministic ordering, incomplete-lifecycle representation, serialization
-and retained-byte Base64 canonicality, hash selection, media types,
-completeness, canonical evidence → legacy `Trace`/`TraceEvent`, legacy
+deterministic ordering, lifecycle targeting (`lifecycleTarget`/`lifecycleEffect`),
+duplicate handling (exact replay, same-ID same-seq, same-ID different-seq),
+completeness contradiction rejection, incomplete-lifecycle representation,
+serialization and retained-byte Base64 canonicality, hash selection, media
+types, completeness, canonical evidence → legacy `Trace`/`TraceEvent`, legacy
 `Trace`/`TraceEvent` → legacy `AgentRun`, canonical evidence → legacy
 `AgentRun`, projection report composition, projection success/failure
 results, explicit loss, projection determinism, no fabrication, and
