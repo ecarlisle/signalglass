@@ -10,8 +10,12 @@ import {
 } from './internal/base64.js';
 import { canonicalJson } from './internal/jcs.js';
 import { sha256Hex, utf8Encode } from './internal/sha256.js';
-import { parseEvidenceRecord, normalizeEvidenceRecord } from './validate.js';
-import { serializeEvidenceRecord } from './serialize.js';
+import {
+  parseEvidenceRecord,
+  normalizeEvidenceRecord,
+  isArtifactKind,
+} from '@signalglass/evidence';
+import { serializeEvidenceRecord } from '@signalglass/evidence';
 import { minimalObservations, buildBoundary, buildRecord, PROFILE } from './fixtures.js';
 
 const V = '1.0.0';
@@ -192,9 +196,17 @@ describe('Version-compatibility fixture coverage (Spec 014 §5.3)', () => {
   });
 
   it('rejects unknown discriminants in artifact kinds', () => {
-    const record = buildRecord();
-    const bad = JSON.parse(serializeEvidenceRecord(record)) as Record<string, unknown>;
-    // Would need an artifact in the trace - skipped for this test level
+    // The public artifact kind validator is isArtifactKind
+    expect(isArtifactKind('teleport')).toBe(false);
+    expect(isArtifactKind('message')).toBe(true);
+    expect(isArtifactKind('file')).toBe(true);
+    expect(isArtifactKind('fragment')).toBe(true);
+    expect(isArtifactKind('tool_result')).toBe(true);
+    expect(isArtifactKind('mcp_response')).toBe(true);
+    expect(isArtifactKind('retrieval_result')).toBe(true);
+    expect(isArtifactKind('context_provider_result')).toBe(true);
+    expect(isArtifactKind('repository_content')).toBe(true);
+    expect(isArtifactKind('manual')).toBe(true);
   });
 
   it('rejects unknown discriminants in fidelity values', () => {

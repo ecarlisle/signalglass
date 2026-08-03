@@ -24,6 +24,10 @@ the compatibility-projection and migration slices remain pending.
 - Capture profiles as separate **collection**, **persistence**, and **export** decisions. A metadata-only profile must not collect full payloads in the first place. A redacted profile may discard content at its declared capture boundary. Full-fidelity capture is explicit, appropriately protected, and never the universal default.
 - Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification; to be re-framed as projections.
 
+### Deterministic fixtures and negative controls
+
+Deterministic serialized fixtures for the nine normative examples in `docs/evidence-model.md`, fixture-backed positive tests, deterministic negative controls covering status/fidelity/availability, media types/hashes, sequence/duplicates/gaps, and versions/discriminants, retained-byte Base64 fixture coverage, and version-compatibility fixture coverage — implemented per Spec 014 §8.2.
+
 ### Capture fidelity
 
 - Native request/response evidence captured without semantic transformation; byte-exact preservation verified and documented where claimed.
