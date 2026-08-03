@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/fallowrc.json",
+  "ignorePatterns": [
+    "dist/**",
+    "node_modules/**",
+    ".pi/**",
+    ".signalglass/**",
+    "scripts/**"
+  ],
+  "rules": {
+    "unused-files": "error",
+    "unused-dependencies": "off",
+    "unresolved-imports": "warn",
+    "unlisted-dependencies": "off"
+  }
+}
