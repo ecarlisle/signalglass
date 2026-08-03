@@ -6,10 +6,15 @@ Accepted — ready for implementation.
 
 This specification defines the first additive TypeScript implementation
 increment of the accepted Spec 013 evidence contract. Acceptance authorizes
-implementation of the slices defined in this specification; it does not mean
-that the evidence primitives already exist or that any acceptance criterion
-has been satisfied. No runtime code is written by this spec and no acceptance
-criterion below is satisfied yet (all unchecked).
+implementation of the slices defined in this specification.
+
+The **foundation slice** (Spec 014 §8.1) — the dependency-free
+[`@signalglass/evidence`](../packages/evidence/README.md) package of canonical
+types, runtime validators, parse/serialize, and deterministic normalization
+— is implemented and satisfies the acceptance criteria checked below (20 of
+27). The compatibility-projection, migration, and parity slices remain
+pending, so the spec is not yet **Implemented**: criteria 1, 2, 3, 6, 7, 10,
+and 15 remain unchecked.
 
 ## Purpose
 
@@ -1970,10 +1975,10 @@ first slice; every decision needed to implement it is specified above.
 - [ ] Public exports and dependency rules are defined: zero runtime
   dependencies; no provider/storage/analysis imports; projections depend on
   the evidence package, never the reverse (§1.2–§1.4).
-- [ ] The TypeScript type contract and the runtime-validation contract agree,
+- [x] The TypeScript type contract and the runtime-validation contract agree,
   and both are consistent with `scripts/validate-evidence-examples.mjs`
   (§5.1).
-- [ ] The compatible-version policy is explicit and consistent with Spec
+- [x] The compatible-version policy is explicit and consistent with Spec
   013 §10: compatible additive minor/patch revisions within a supported
   MAJOR are accepted; unknown or breaking MAJOR versions and unknown
   discriminants are refused with structured errors; unknown additive
@@ -1990,29 +1995,31 @@ first slice; every decision needed to implement it is specified above.
   successful exact, successful lossy/partial, and explicit failure
   (`ok: false`) outcomes — a projection never returns an invalid canonical
   view and never throws on expected invalid or lossy input (§6.2).
-- [ ] Deterministic ordering and identity behavior is defined: `seq` is the
+- [x] Deterministic ordering and identity behavior is defined: `seq` is the
   only ordering key; ids are opaque, capture-time, and never
   ordering-significant; ties resolve by `seq`; monotonic durations declare a
   clock basis (§3–§4, §7).
-- [ ] Initial and deferred primitive inventories are distinguishable; the
+- [x] Initial and deferred primitive inventories are distinguishable; the
   evidence core contains no measurements, interpretations, cost, smells,
   recommendations, or optimization logic (§2.2–§2.3).
 - [ ] Implementation slices are independently testable and mergeable, with
   no flag-day migration and no storage, capture, collector, adapter, or
   ingress migration in any slice; Spec 014 implementation ends at the
   package, validators/fixtures, projections, and parity verification (§8).
-- [ ] Evidence remains separate from measurements and interpretations
+- [x] Evidence remains separate from measurements and interpretations
   (§2.1); derived and administrative records never merge into payload
   status.
-- [ ] No storage, collector, adapter, ingress, Graphify, MCP/tool
+- [x] No storage, collector, adapter, ingress, Graphify, MCP/tool
   capture-and-instrumentation, or dashboard implementation is included in
   this spec's scope or planned slices; provider-neutral MCP/tool record
   kinds are type-system vocabulary only (§2.2, §8).
-- [ ] Documentation and index references are consistent: the spec index
-  lists Spec 014 as Accepted (ready to implement, not yet implemented),
-  and the roadmap and glossary reference it without claiming
-  implementation exists.
-- [ ] The retained-byte serialization contract is pinned: RFC 4648 §4
+- [x] Documentation and index references are consistent: the spec index
+  lists Spec 014 as Accepted (not fully Implemented); the roadmap,
+  glossary, and package README distinguish the implemented evidence
+  foundation slice from the pending compatibility-projection, migration,
+  and parity work, and no documentation claims Spec 014 is fully
+  Implemented.
+- [x] The retained-byte serialization contract is pinned: RFC 4648 §4
   standard-alphabet Base64 with the canonical padding (zero, one, or two
   `=` characters exactly as the encoded length requires), canonical
   emission, noncanonical forms rejected (omitted/superfluous/malformed
@@ -2022,7 +2029,7 @@ first slice; every decision needed to implement it is specified above.
   values; generation is outside the evidence core; validators enforce
   syntax, uniqueness, and reference integrity; projections preserve valid
   legacy ids and report synthesized ids as `inferred` (§3.2).
-- [ ] The trace/span status vocabulary is defined and validated as
+- [x] The trace/span status vocabulary is defined and validated as
   evidence-scoped lifecycle state — `completed` | `failed` | `cancelled` |
   `unknown` — never a quality judgment; absence of an observed error is not
   success; incomplete records are representable: `unknown` traces/spans
@@ -2034,7 +2041,7 @@ first slice; every decision needed to implement it is specified above.
   matching their terminal event and never fabricate `interaction_end`;
   present `finishedAt`/`endSeq` are supported by observed evidence (§2.2,
   §4.7, §5.4).
-- [ ] Lifecycle targeting is structurally represented: `error` and
+- [x] Lifecycle targeting is structurally represented: `error` and
   `cancelled` events carry `lifecycleTarget` ∈ {`trace`, `span`, `none`}
   and `lifecycleEffect` ∈ {`fail`, `cancel`, `none`}; validators enforce
   target/effect semantics — `lifecycleTarget: "span"` requires matching
@@ -2042,46 +2049,46 @@ first slice; every decision needed to implement it is specified above.
   `lifecycleEffect: "none"` does not set status; child-span failure does
   not auto-fail trace; terminal declaration must be final applicable event;
   timestamps never determine targeting (§2.2.3, §4.7, §5.4).
-- [ ] The normative evidence-model examples validate lifecycle target/effect,
+- [x] The normative evidence-model examples validate lifecycle target/effect,
   declaring-party, and observation-role requirements: the recoverable timeout
   changes no lifecycle status, and the target-`none` cancellation request is
   non-terminal and coherent with the later completed span and trace (§2.2.3,
   §4.7, §9.1; `docs/evidence-model.md` example 8).
-- [ ] Completeness is classified per Spec 013 as a derived record;
+- [x] Completeness is classified per Spec 013 as a derived record;
   `deriveCompleteness(trace, analysis, boundary)` is pure, deterministic,
   and free of measurement, cost, interpretation, or optimization logic
   (§2.1, §2.2.9).
-- [ ] `EvidenceRecord` is the only authoritative serialized evidence record;
+- [x] `EvidenceRecord` is the only authoritative serialized evidence record;
   its `rawObservations` are authoritative captured evidence, while
   `EvidenceTrace`, structural analysis, and completeness are deterministic
   derivations. `EvidenceRecord.completeness` is the only serialized
   completeness location, and disagreement with recomputation is rejected
   without repair (§2.2.1, §2.2.9, §5.2, §5.7–§5.8).
-- [ ] Every raw observation has a unique immutable opaque `observationId`;
+- [x] Every raw observation has a unique immutable opaque `observationId`;
   duplicate provenance uses only stable observation identities; array order,
   timestamps, arrival order, identifiers, and digests never affect collision
   resolution. Permutations of the same identified observations yield
   semantically equivalent normalized trace, analysis, gaps, completeness, and
   issues, while authoritative round trips preserve the raw serialized order
   and every identity (§4.4, §5.2, §5.7, §9.1).
-- [ ] `projectCanonicalEvent` is the sole replay/content-conflict comparison:
+- [x] `projectCanonicalEvent` is the sole replay/content-conflict comparison:
   it excludes observation-container provenance including `observationId` and
   `rawCapturedAt`, retains every canonical and applicable unknown additive
   event field, and governs parser verification and any versioned JCS/UTF-8
   SHA-256 canonical-content digest (§5.2, §9.1).
-- [ ] Duplicate provenance is a discriminated union: exact replay groups have
+- [x] Duplicate provenance is a discriminated union: exact replay groups have
   no representative and contain every identity; same-ID/different-sequence
   groups preserve every identity at the lowest-`seq` retained position and at
   each uniquely represented ascending discarded position, including its
   independent-occupancy/gap state. Set-like identity collections have
   deterministic serialization without evidence precedence (§4.4, §5.2,
   §5.7, §9.1).
-- [ ] Normalized exports that omit `rawObservations` declare omitted evidence,
+- [x] Normalized exports that omit `rawObservations` declare omitted evidence,
   their reduced verification boundary, and duplicate analysis as reported
   derived metadata; they do not claim authoritative duplicate provenance or
   independent revalidation without the authoritative `EvidenceRecord` (§5.7–
   §5.8).
-- [ ] Structural analysis and normalization: `parseEvidenceRecord` returns
+- [x] Structural analysis and normalization: `parseEvidenceRecord` returns
   `EvidenceRecordParseResult` containing the full `EvidenceRecord` with
   `rawObservations`, retained canonical trace, structural analysis
   (duplicate observations, sequence gaps, validation issues), and derived
@@ -2089,7 +2096,7 @@ first slice; every decision needed to implement it is specified above.
   exact replay provenance survives parse–serialize–parse; semantic
   round-trip equality for `rawObservations`, retained events, structural
   analysis, gaps, capture boundary, and completeness (§5.2, §5.7).
-- [ ] Duplicate handling and sequence gaps follow the deterministic
+- [x] Duplicate handling and sequence gaps follow the deterministic
   processing order (§4.4): exact replay (no gap), same-ID same-seq content
   conflict (reject trace as invalid), different-ID same-seq collision (reject
   trace as invalid), same-ID different-seq conflict (each unoccupied
@@ -2100,7 +2107,7 @@ first slice; every decision needed to implement it is specified above.
   collisions among remaining candidates → validate retained uniqueness →
   derive gaps → derive completeness) is normative; completeness must not
   convert an ambiguous or structurally invalid collision into a valid trace.
-- [ ] Completeness metadata contradiction is rejected: an `EvidenceRecord`
+- [x] Completeness metadata contradiction is rejected: an `EvidenceRecord`
   whose serialized `completeness` disagrees with the deterministic derivation
   from retained evidence, structural analysis, and capture boundary (incorrect
   status counts, claimed nonexistent gaps, omitted duplicate/gap info,
@@ -2111,10 +2118,10 @@ first slice; every decision needed to implement it is specified above.
 
 ## Tests
 
-Spec 014 is documentation-only; no production code changes are made by this
-spec. The test plan in §9 is the contract for the future implementation
-PRs, mapped to the acceptance criteria above (valid construction, malformed
-records, all union variants, version-compatibility acceptance and
+The §9 test plan is the contract for implementation PRs, mapped to the
+acceptance criteria above. The foundation slice executes it in the colocated
+Vitest suites under `packages/evidence/src/*.test.ts` (valid construction,
+malformed records, all union variants, version-compatibility acceptance and
 unknown-discriminant/breaking-version refusal, reference integrity, timing,
 deterministic ordering, lifecycle targeting (`lifecycleTarget`/`lifecycleEffect`),
 duplicate handling (exact replay, same-ID same-seq content conflict,
