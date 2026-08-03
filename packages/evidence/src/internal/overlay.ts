@@ -28,13 +28,18 @@ export function isUnsafeKey(key: string): boolean {
   return UNSAFE_KEYS.has(key);
 }
 
-/** Recursively clone a JSON-safe value (Uint8Array copied by content). */
+/** Recursively clone a JSON-safe value (Uint8Array copied by content).
+ * Unsafe prototype keys (`__proto__`, `constructor`, `prototype`) are
+ * excluded at every depth, never merely at the overlaid structural node. */
 export function cloneJsonSafe(value: unknown): unknown {
   if (value instanceof Uint8Array) return value.slice();
   if (Array.isArray(value)) return value.map(cloneJsonSafe);
   if (isRecord(value)) {
     const out: Record<string, unknown> = {};
-    for (const k of Object.keys(value)) out[k] = cloneJsonSafe(value[k]);
+    for (const k of Object.keys(value)) {
+      if (UNSAFE_KEYS.has(k)) continue;
+      out[k] = cloneJsonSafe(value[k]);
+    }
     return out;
   }
   return value;

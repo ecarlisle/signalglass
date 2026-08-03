@@ -8,11 +8,9 @@
 import { describe, expect, it } from 'vitest';
 import { parseEvidenceRecord } from './validate.js';
 import { serializeEvidenceRecord } from './serialize.js';
-import { minimalObservations, buildBoundary, buildRecord, obs, T4, PROFILE } from './fixtures.js';
+import { minimalObservations, buildRecord, obs, T0, T2, T4 } from './fixtures.js';
 import type { EvidenceObservation } from './types-trace.js';
 import type { EvidenceRecord } from './types-record.js';
-
-const V = '1.0.0';
 
 /** Record with a same-ID/different-seq duplicate and an unoccupied discarded
  * position (gap), so analysis carries nested duplicate and gap records. */
@@ -241,7 +239,103 @@ describe('unknown-field boundary enforcement', () => {
   });
 });
 
-void V;
-void obs;
-void buildBoundary;
-void PROFILE;
+// ---------------------------------------------------------------------------
+// Additive-field hardening: recursive unsafe-key exclusion and semantic
+// (order-independent) alignment for gaps, matching the agreement contract.
+// ---------------------------------------------------------------------------
+
+/** Record whose retained events sit at seqs 0, 2, 4, so interior positions 1
+ * and 3 form two distinct gap runs: [1,2) and [3,4). */
+function twoGapRecord(): EvidenceRecord {
+  return buildRecord([
+    obs({
+      observationId: 'g0', eventId: 'evt-start', seq: 0,
+      kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0,
+    }),
+    obs({
+      observationId: 'g1', eventId: 'evt-req', seq: 2,
+      kind: 'model_request', capturedAt: T2, rawCapturedAt: T2,
+      observationRole: 'client_sent',
+      payload: {
+        requestEnvelope: {
+          model: 'm', provider: 'p', providerNativeFidelity: 'structurally_faithful',
+          messages: [{ role: 'user', content: 'x' }],
+          providerNative: {},
+        },
+      },
+    }),
+    obs({
+      observationId: 'g2', eventId: 'evt-end', seq: 4,
+      kind: 'interaction_end', capturedAt: T4, rawCapturedAt: T4,
+    }),
+  ]);
+}
+
+describe('recursive unsafe-key exclusion in additive preservation', () => {
+  it('excludes __proto__, constructor, and prototype at every nesting depth of an unknown additive object', () => {
+    const record = duplicateRecord();
+    const json = jsonOf(record);
+    const evil: Record<string, unknown> = { harmless: 1, nested: { deep: { keep: true } } };
+    Object.defineProperty(evil, '__proto__', { value: { polluted: 1 }, enumerable: true });
+    Object.defineProperty(evil['nested'] as Record<string, unknown>, '__proto__', { value: { deepPolluted: 1 }, enumerable: true });
+    evil['constructor'] = { x: 1 };
+    (evil['nested'] as Record<string, unknown>)['prototype'] = { y: 1 };
+    json['futureRoot'] = evil;
+
+    const parsed = parseOk(json);
+    const v = extra<Record<string, unknown>>(parsed, 'futureRoot');
+    // Valid content survives; unsafe keys do not, at any depth.
+    expect(v['harmless']).toBe(1);
+    expect((v['nested'] as Record<string, unknown>)['deep']).toEqual({ keep: true });
+    expect(Object.getPrototypeOf(v)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(v['nested'])).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(v, 'constructor')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(v['nested'], 'prototype')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(v['nested'], 'deepPolluted')).toBe(false);
+
+    // Neither parsing nor serialization leaves any unsafe key behind.
+    const out = JSON.stringify(JSON.parse(serializeEvidenceRecord(parsed)));
+    expect(out).not.toContain('deepPolluted');
+    expect(out).not.toContain('polluted');
+    expect(out).not.toContain('"constructor"');
+    expect(out).not.toContain('"prototype"');
+  });
+});
+
+describe('semantic identity alignment of gaps', () => {
+  it('keeps unknown fields attached to the equivalent gap when the serialized analysis reorders gaps', () => {
+    const record = twoGapRecord();
+    expect(record.analysis.sequenceGaps).toHaveLength(2);
+    const json = jsonOf(record);
+    const analysis = json['analysis'] as Record<string, unknown>;
+    const gaps = analysis['sequenceGaps'] as Record<string, unknown>[];
+    expect(gaps.map((g) => `${g['startSeq']}-${g['endSeq']}`)).toEqual(['1-2', '3-4']);
+    // Attach distinct unknown fields to each gap, then reorder the array.
+    gaps[0]!['origin'] = 'first-gap'; // [1,2)
+    gaps[1]!['origin'] = 'second-gap'; // [3,4)
+    analysis['sequenceGaps'] = [gaps[1], gaps[0]];
+
+    const parsed = parseOk(json);
+    const g1 = parsed.analysis.sequenceGaps.find((g) => g.startSeq === 1 && g.endSeq === 2);
+    const g2 = parsed.analysis.sequenceGaps.find((g) => g.startSeq === 3 && g.endSeq === 4);
+    expect(extra(g1, 'origin')).toBe('first-gap');
+    expect(extra(g2, 'origin')).toBe('second-gap');
+
+    const again = reparse(serializeEvidenceRecord(parsed));
+    expect(extra(again.analysis.sequenceGaps.find((g) => g.startSeq === 1 && g.endSeq === 2), 'origin')).toBe('first-gap');
+    expect(extra(again.analysis.sequenceGaps.find((g) => g.startSeq === 3 && g.endSeq === 4), 'origin')).toBe('second-gap');
+    // Canonical (derived) order is restored, not the reordered serialized order.
+    expect(again.analysis.sequenceGaps.map((g) => g.startSeq)).toEqual([1, 3]);
+  });
+
+  it('rejects a reordered serialized completeness.seqGaps (order is contractually required)', () => {
+    const record = twoGapRecord();
+    const json = jsonOf(record);
+    const comp = json['completeness'] as Record<string, unknown>;
+    const gaps = comp['seqGaps'] as Record<string, unknown>[];
+    comp['seqGaps'] = [gaps[1]!, gaps[0]!];
+    const res = parseEvidenceRecord(json);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.issues.map((i) => i.code)).toContain('completeness_disagrees_with_derivation');
+  });
+});

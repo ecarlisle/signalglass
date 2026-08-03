@@ -2014,9 +2014,11 @@ first slice; every decision needed to implement it is specified above.
   this spec's scope or planned slices; provider-neutral MCP/tool record
   kinds are type-system vocabulary only (§2.2, §8).
 - [ ] Documentation and index references are consistent: the spec index
-  lists Spec 014 as Accepted (ready to implement, not yet implemented),
-  and the roadmap and glossary reference it without claiming
-  implementation exists.
+  lists Spec 014 as Accepted (not fully Implemented); the roadmap,
+  glossary, and package README distinguish the implemented evidence
+  foundation slice from the pending compatibility-projection, migration,
+  and parity work, and no documentation claims Spec 014 is fully
+  Implemented.
 - [x] The retained-byte serialization contract is pinned: RFC 4648 §4
   standard-alphabet Base64 with the canonical padding (zero, one, or two
   `=` characters exactly as the encoded length requires), canonical

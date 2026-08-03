@@ -148,13 +148,19 @@ const ANALYSIS_SPEC: NodeSpec = {
       keyOf: duplicateKey,
       spec: DUP_SPEC,
     },
-    sequenceGaps: { kind: 'array', spec: GAP_SPEC },
-    validationIssues: { kind: 'array', spec: ISSUE_SPEC },
+    // Gaps and issues are compared order-independently during agreement, so
+    // preservation must align them by their complete schema-owned identity,
+    // never by array position (additive fields are not part of the key).
+    sequenceGaps: { kind: 'arrayByKey', keyOf: gapKey, spec: GAP_SPEC },
+    validationIssues: { kind: 'arrayByKey', keyOf: issueKey, spec: ISSUE_SPEC },
   },
 };
 
 const COMPLETENESS_SPEC: NodeSpec = {
   keys: ['eventsByStatus', 'seqGaps', 'duplicatesDetected', 'boundaryStatement'],
+  // `seqGaps` alignment stays positional: completeness agreement requires
+  // canonical array order (a reordered serialized `seqGaps` rejects), so
+  // positional overlay cannot misattach unknown fields.
   children: {
     seqGaps: { kind: 'array', spec: GAP_SPEC },
   },
@@ -184,6 +190,16 @@ function duplicateKey(d: Record<string, unknown>): string {
     .join(';');
   const retained = toRecord(d['retainedPosition']);
   return `same_id_different_seq|${String(d['eventId'])}|ret=${String(retained['seq'])}:${sortUtf8(asStrings(retained['observationIds'])).join(',')}|disc=${discarded}`;
+}
+
+/** Semantic identity of a gap: its complete schema-owned fields. */
+function gapKey(g: Record<string, unknown>): string {
+  return `gap|${String(g['startSeq'])}:${String(g['endSeq'])}:${sortUtf8(asStrings(g['adjacentRetainedEventIds'])).join(',')}`;
+}
+
+/** Semantic identity of a validation issue: its complete schema-owned fields. */
+function issueKey(i: Record<string, unknown>): string {
+  return `issue|${String(i['code'])}:${String(i['path'])}:${String(i['message'])}`;
 }
 
 function sortedEvents(value: unknown): unknown[] {

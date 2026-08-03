@@ -10,6 +10,7 @@ import type { EvidenceStructuralAnalysis } from './types-analysis.js';
 import type { EvidenceRecord, CaptureBoundary, TraceCompleteness, EvidenceRecordParseResult } from './types-record.js';
 import type { Condition } from './types-base.js';
 import { isRecord } from './internal/guards.js';
+import { cloneJsonSafe } from './internal/overlay.js';
 import { isSupportedEvidenceSchemaVersion } from './version.js';
 import { COMPLETENESS_DERIVATION_ALGORITHM_VERSION } from './version.js';
 import { collapseObservations } from './normalize.js';
@@ -225,11 +226,12 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
     evidenceSchemaVersion,
     captureBoundary,
   };
-  // Preserve unknown top-level additive fields (§5.3) at the record level.
+  // Preserve unknown top-level additive fields (§5.3) at the record level,
+  // as sanitized clones so unsafe prototype keys never survive.
   const known = new Set(['rawObservations', 'trace', 'analysis', 'completeness', 'evidenceSchemaVersion', 'captureBoundary']);
   for (const k of Object.keys(input)) {
     if (known.has(k) || k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
-    (record as Record<string, unknown>)[k] = input[k];
+    (record as Record<string, unknown>)[k] = cloneJsonSafe(input[k]);
   }
   return { ok: true, record: record as EvidenceRecord };
 }
