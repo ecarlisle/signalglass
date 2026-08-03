@@ -103,5 +103,5 @@ A named, versioned bundle of policy references and configuration settings that s
 ## Projection
 A derived representation of evidence (for example, a Run, a legacy `Trace`/`AgentRun` shape, or a redacted export). Projections never alter or overwrite authoritative evidence.
 
-## Trace completeness
-A derived description of which evidence was captured, redacted, truncated, missing, or unknown for an interaction, including `seq` gaps (assigned sequence positions absent from retained evidence), boundary statements, and explicit `missing` records. Never invents evidence.
+## Evidence-record completeness
+The derived `EvidenceRecord.completeness` description of which evidence was captured, redacted, truncated, missing, or unknown for an interaction, including `seq` gaps (assigned sequence positions absent from retained evidence), boundary statements, and explicit `missing` records. It is serialized once on the evidence record, never on the canonical trace view, and never invents evidence.

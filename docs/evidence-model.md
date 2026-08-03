@@ -25,7 +25,8 @@ into versioned **capture profiles**.
 | Record | Canonical? | Holds |
 |---|---|---|
 | Evidence record | Yes | Authoritative raw observations plus trace, analysis, completeness, capture boundary, and schema identity |
-| Interaction / Trace | Derived canonical view | Identity, lifecycle, conditions, spans, and events |
+| Interaction | Yes (domain entity) | Logical AI exchange whose evidence is recorded |
+| Trace | Derived canonical view | Identity, lifecycle, conditions, spans, and events |
 | Span | Yes | Hierarchy, timing, status; aggregates its events |
 | Event | Yes | Content, evidence status, sequence position |
 | Request / Response envelope | Yes | Normalized fields + provider-native payload at a declared fidelity |
@@ -51,8 +52,18 @@ into versioned **capture profiles**.
   ordering. `durationMs` comes from a monotonic clock.
 - Spans declare `startSeq`/`endSeq`; nested spans reference `parentSpanId`
   (hierarchy only). Spans with overlapping `seq` ranges are concurrent.
-- Duplicates are detected by `eventId` and collapsed without creating a
-  sequence gap.
+- Exact replays have the same `eventId`, `seq`, and semantically equal
+  canonical event projection (all canonical event fields, excluding raw-only
+  provenance such as `observationId` and `rawCapturedAt`). They collapse to
+  one event in the trace view
+  without a gap while every raw observation remains preserved. Same-ID,
+  same-sequence observations with conflicting projected content are rejected,
+  as are different event IDs that claim the same retained canonical sequence
+  position. For the same event ID at different sequence positions, the
+  lowest-`seq` position is retained and every discarded position is a gap
+  unless another valid retained event independently occupies it. Retained
+  events are never renumbered; arrival order, raw array order, timestamps,
+  opaque identifiers, and digests never select a winner.
 - A `seq` gap proves that an assigned sequence position is absent from the
   retained evidence (an event that reached the sequencing surface was dropped
   before persistence or removed from retention). A gap cannot detect an event
@@ -906,6 +917,8 @@ path to the caller). The retry references the **original request event**
       "evidenceStatus": "captured",
       "observationRole": "returned",
       "actor": "model",
+      "lifecycleTarget": "none",
+      "lifecycleEffect": "none",
       "error": {
         "type": "timeout",
         "message": "No upstream response was received within 30000ms; the failure was observed at the client boundary when the response did not arrive."
@@ -936,6 +949,8 @@ path to the caller). The retry references the **original request event**
       "capturedAt": "2025-06-01T14:00:05.400Z",
       "evidenceStatus": "captured",
       "observationRole": "application_constructed",
+      "lifecycleTarget": "none",
+      "lifecycleEffect": "cancel",
       "cancellation": {
         "requestedBy": "user"
       }
@@ -945,6 +960,13 @@ path to the caller). The retry references the **original request event**
   ]
 }
 ```
+
+The timeout is recoverable (`lifecycleTarget: "none"`, `lifecycleEffect:
+"none"`) and therefore does not fail the span or trace. The later cancellation
+event records the user's request with `lifecycleTarget: "none"` and
+`lifecycleEffect: "cancel"`; it terminates no lifecycle. The subsequent
+`span_end` and `interaction_end` therefore remain coherent with the completed
+span and trace.
 
 ### 9. Mixed evidence statuses with an explicit `missing` record
 

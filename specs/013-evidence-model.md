@@ -82,7 +82,7 @@ concepts must be expressed as compatibility projections in implementation (see
 | **Context artifact** | A referenceable unit of context (message, file, document, retrieved fragment, MCP response, tool result, repository content) with payload and provenance metadata. | Yes |
 | **Context contribution** | The recorded act of adding context into a model request, referencing artifacts by deterministic locator. | Yes |
 | **Observation boundary** | The declared scope of what a capture surface could and could not observe, recorded with the evidence. | Yes (metadata) |
-| **Trace completeness** | A derived description of which evidence was captured, redacted, truncated, missing, or unknown, and what the boundary could not observe. Never invents evidence. | Derived |
+| **Completeness record (`EvidenceRecord.completeness`)** | A derived description computed from the canonical trace, structural analysis, and capture boundary; serialized exactly once on `EvidenceRecord.completeness`, never duplicated on the trace. Never invents evidence. | Derived |
 | **Measurement record** | A deterministic derivation over evidence (token counts, latency, duration, cost) with algorithm/version and input references. | Derived |
 | **Interpretation record** | A labeled, optional human-facing explanation or judgment derived from measurements and evidence. | Derived |
 
@@ -169,6 +169,38 @@ record MAY preserve raw array order for lossless round trips, but that order is
 not semantic and is never a tie-breaker. Capture order, if needed as evidence,
 must be recorded explicitly rather than inferred from an array index.
 
+### 2.1.1 Canonical event projection for replay comparison
+
+Duplicate classification operates on one normative projection:
+
+```ts
+declare function projectCanonicalEvent(
+  observation: EvidenceObservation
+): EventRecord;
+```
+
+The projection removes `observationId`, `rawCapturedAt`, and every other field
+classified solely as raw-capture provenance or observation-container metadata.
+It retains every field belonging to the canonical event: `eventId`, `traceId`,
+`spanId`, `seq`, `kind`, `capturedAt`, `evidenceStatus`, `observationRole`, all
+kind-specific payload fields, and applicable unknown additive event fields
+preserved by the forward-compatibility contract (§10). Projection MUST NOT
+alter, redact, normalize away, or silently discard event evidence to make two
+observations compare equal.
+
+This projection is the sole input for exact-replay classification,
+same-ID/same-sequence content-conflict detection, parser verification of
+serialized duplicate analysis, and any optional canonical-content digest.
+Exact replay means the projected canonical events are semantically equal,
+including equal `eventId` and `seq`.
+
+When recorded, a canonical-content digest is an integrity/comparison aid over
+the RFC 8785 (JCS) canonical JSON bytes of `projectCanonicalEvent` encoded as
+UTF-8 and hashed with SHA-256. It records the projection algorithm version and
+the value as `sha256:` followed by 64 lowercase hexadecimal characters. It is
+distinct from payload `contentHash` and envelope `nativeContentHash`, and MUST
+NOT determine ordering, precedence, collision resolution, or winner selection.
+
 `null` is reserved for structural absence: a root span's absent
 `parentSpanId`, or an event attached to the trace root via `spanId`. Evidence
 statuses and measured values MUST NOT be represented by `null` or by omitted
@@ -251,31 +283,38 @@ survives replay.
 **Processing order (normative):** validators MUST apply duplicate and gap
 analysis in this deterministic order:
 
-1. Classify exact replays and collision candidates by `eventId`, `seq`,
-   and canonical content, carrying provenance by `observationId` rather than
-   array position.
-2. Collapse exact replays.
-3. Reject same-ID/same-sequence content conflicts.
-4. Reject different-ID/same-sequence collisions.
-5. Resolve same-ID/different-sequence conflicts by retaining the lowest-`seq`
-   candidate.
-6. Validate retained event-ID and sequence uniqueness.
-7. Derive gaps from retained sequence positions.
-8. Derive completeness only for a trace that remains valid after structural
+1. Validate raw observations and their unique immutable `observationId`
+   values.
+2. Apply `projectCanonicalEvent` to every observation.
+3. Group semantically equal same-ID/same-sequence projections as exact replay
+   groups, preserving every participating observation identity.
+4. Reject multiple conflicting projections within any same-ID/same-sequence
+   position.
+5. Resolve each same-ID/different-sequence group by retaining its lowest
+   sequence position and recording every observation identity at every
+   retained or discarded position.
+6. Reject different-ID/same-sequence collisions among the remaining canonical
+   candidates.
+7. Validate retained event-ID and sequence uniqueness.
+8. Derive gaps from retained sequence positions.
+9. Derive completeness only for a trace that remains valid after structural
    validation, and serialize it only as `EvidenceRecord.completeness`.
 
 **Collision cases:**
 
-- **Exact replay:** two copies have identical canonical event content,
-  including identical `eventId` and `seq`.
+- **Exact replay:** two or more observations have semantically equal
+  `projectCanonicalEvent` results, including identical `eventId` and `seq`.
   - Collapse to one retained event.
+  - Preserve every raw observation and record the complete set of
+    participating observation identities without selecting a representative.
   - Report the replay duplicate in the completeness record
     (`duplicateDetected`).
   - Do not report a sequence gap because the assigned position remains
     represented.
 
 - **Same-ID, same-sequence content conflict:** same `eventId` and same
-  `seq`, but conflicting canonical content (any field differs).
+  `seq`, but conflicting `projectCanonicalEvent` results (any retained
+  canonical event field differs).
   - They are not exact replays.
   - **Reject the trace as invalid**. Do not select a winner based on
     "first observed," opaque identifier ordering, content hashes, or
@@ -285,8 +324,8 @@ analysis in this deterministic order:
   - Do not derive or serialize a valid canonical trace or authoritative
     completeness record from an arbitrarily selected candidate.
 
-- **Different-ID, same-sequence collision:** different `eventId` values
-  with the same `seq`.
+- **Different-ID, same-sequence collision:** after same-ID/different-sequence
+  resolution, different retained `eventId` candidates claim the same `seq`.
   - **Reject the trace as invalid** because canonical sequence uniqueness
     is violated.
   - Do not use identifier ordering, arrival order, timestamps, or content
@@ -295,13 +334,17 @@ analysis in this deterministic order:
   - Do not retain an arbitrary winner or infer a gap while both
     candidates claim the same assigned position.
 
-- **Same-ID, different-sequence conflict:** same `eventId` with different
-  `seq` values.
-  - Retain the lowest-`seq` copy because `seq` provides a deterministic
-    distinction in this case.
+- **Same-ID, different-sequence conflict:** the same `eventId` occurs at two
+  or more different `seq` positions; any position may itself contain an exact
+  replay group.
+  - Retain the lowest-`seq` position because `seq` provides a deterministic
+    distinction in this case, preserving every observation identity at that
+    position.
   - Report the duplicate conflict in the completeness record.
-  - Report the discarded sequence position as a gap unless another
-    independently valid retained event occupies it.
+  - Record every higher discarded position once, with all observation
+    identities at that position and whether another independently valid
+    retained event occupies it. Each unoccupied discarded position is a gap;
+    an independently occupied position is not.
   - Never renumber retained events.
 
 **Dropped events:** a `seq` gap (§2.2) proves that an assigned sequence
@@ -435,6 +478,10 @@ evidence complete and falsifiable without overstating what was stored.
 - `cancelled` events MUST declare `lifecycleTarget` ∈ {`trace`, `span`,
   `none`}, `lifecycleEffect: "cancel"`, who or what requested cancellation,
   and the observation role under which the cancellation was observed.
+  `lifecycleTarget: "none"` records a cancellation request or occurrence that
+  terminates no trace or span; it is non-terminal and is coherent with later
+  normal completion. Only a target matching a trace or span sets that record's
+  lifecycle status to `cancelled`.
 - `retry` events MUST reference the original request's `eventId` and record the
   retry policy inputs observed (attempt count, delay) without asserting the
   provider's internal policy. The associated error event MAY be referenced
@@ -490,7 +537,8 @@ from its canonical trace, structural analysis, and capture boundary:
   observe.
 
 Completeness MUST be derived from the record, never fabricated, and MUST NOT
-invent events to fill gaps. It MUST NOT also be serialized on `EvidenceTrace`;
+invent events to fill gaps. It MUST NOT also be serialized on the canonical
+trace view;
 parsing recomputes it and rejects disagreement without repairing or
 overwriting the authoritative record.
 
@@ -963,8 +1011,23 @@ No production code changes are made by this spec; it is documentation-only.
 The mapping below is a contract for future implementation specs:
 
 - identity/ordering: `seq` contiguity, tie resolution, duplicate and gap
-  handling;
+  handling; unique observation identities; exact replay equality through
+  `projectCanonicalEvent` excluding `observationId`, `rawCapturedAt`, and
+  capture-only container metadata while retaining every canonical and unknown
+  additive event field; canonical projection disagreement rejected; optional
+  canonical-content digests verified against the versioned JCS/UTF-8 contract;
+- duplicate provenance: two-copy and three-or-more-copy exact replays without
+  a representative; multiple sequence positions and replay groups at retained
+  or discarded positions for one event id; complete identity sets and gap
+  status per discarded position; raw-array permutation equivalence; duplicate,
+  fabricated, or omitted provenance identities rejected; deterministic
+  set-like serialization without evidence precedence;
 - evidence status: status transitions and completeness aggregation;
+- documentation conformance: Interaction and Trace remain distinctly
+  classified, `EvidenceRecord.completeness` is the sole serialized owner, and
+  example lifecycle targets/effects, declaring parties, and observation roles
+  are valid; the recoverable error and target-`none` cancellation request do
+  not prevent later normal completion;
 - measurement determinism: same inputs → same values; cost derivation;
 - projection round-trips: evidence → `Trace`/`AgentRun` and back;
 - policy independence: changing export policy does not alter persistence.
