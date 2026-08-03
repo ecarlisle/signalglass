@@ -1,9 +1,9 @@
 # `@signalglass/evidence`
 
 > **Foundation slice of [Spec 014 — Evidence primitives](../specs/014-evidence-primitives.md).**
-> Spec 014 is **Accepted — ready for implementation** (full acceptance pending
-> the compatibility-projection and migration slices). This package ships the
-> first additive slice: canonical evidence primitives.
+> Spec 014 is **Accepted, not fully Implemented**: this package delivers the
+> implemented foundation slice, while compatibility projections, migration,
+> and parity work remain pending.
 
 Dependency-free, provider-neutral canonical evidence primitives: the
 authoritative evidence record types, runtime validators, JSON-safe

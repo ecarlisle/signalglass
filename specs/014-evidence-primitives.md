@@ -11,10 +11,10 @@ implementation of the slices defined in this specification.
 The **foundation slice** (Spec 014 §8.1) — the dependency-free
 [`@signalglass/evidence`](../packages/evidence/README.md) package of canonical
 types, runtime validators, parse/serialize, and deterministic normalization
-— is implemented and satisfies the acceptance criteria checked below (19 of
+— is implemented and satisfies the acceptance criteria checked below (20 of
 27). The compatibility-projection, migration, and parity slices remain
 pending, so the spec is not yet **Implemented**: criteria 1, 2, 3, 6, 7, 10,
-13, and 15 remain unchecked.
+and 15 remain unchecked.
 
 ## Purpose
 
@@ -2013,7 +2013,7 @@ first slice; every decision needed to implement it is specified above.
   capture-and-instrumentation, or dashboard implementation is included in
   this spec's scope or planned slices; provider-neutral MCP/tool record
   kinds are type-system vocabulary only (§2.2, §8).
-- [ ] Documentation and index references are consistent: the spec index
+- [x] Documentation and index references are consistent: the spec index
   lists Spec 014 as Accepted (not fully Implemented); the roadmap,
   glossary, and package README distinguish the implemented evidence
   foundation slice from the pending compatibility-projection, migration,
