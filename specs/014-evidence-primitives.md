@@ -2,12 +2,14 @@
 
 ## Status
 
-Draft — proposed but not ready for implementation. This spec defines the
-first **additive** TypeScript implementation increment of the accepted
-[Spec 013 — Evidence model](013-evidence-model.md) contract. Acceptance of
-this spec would authorize implementation; it would not mean that any evidence
-primitives already exist. No runtime code is written by this spec and no
-acceptance criterion below is satisfied yet (all unchecked).
+Accepted — ready for implementation.
+
+This specification defines the first additive TypeScript implementation
+increment of the accepted Spec 013 evidence contract. Acceptance authorizes
+implementation of the slices defined in this specification; it does not mean
+that the evidence primitives already exist or that any acceptance criterion
+has been satisfied. No runtime code is written by this spec and no acceptance
+criterion below is satisfied yet (all unchecked).
 
 ## Purpose
 
@@ -44,14 +46,13 @@ model, without a breaking replacement or a storage/capture migration.
   storage, reports, CLI, and the dashboard until those consumers migrate.
   Spec 014 defines deterministic compatibility projections so legacy
   consumers keep working while canonical evidence is introduced beside them.
-- **Acceptance ≠ implementation.** Marking this spec Accepted would
-  authorize implementation of the slices in §8; it would not mean the
-  primitives exist. Spec 013's §14 acceptance criteria stay unchecked
-  regardless of what Spec 014 achieves.
+- **Acceptance ≠ implementation.** Acceptance authorizes implementation of
+  the slices in §8; it does not mean the primitives exist. Spec 013's §14
+  acceptance criteria stay unchecked regardless of what Spec 014 achieves.
 
 ## Scope
 
-- The proposed package/module boundary for canonical evidence primitives and
+- The package/module boundary for canonical evidence primitives and
   its dependency rules (§1).
 - TypeScript representations of the initial Spec 013 records: trace envelope,
   spans, events (all canonical kinds), request/response envelopes, context
@@ -99,7 +100,7 @@ Spec 014 explicitly does not cover, and its implementation must not include:
 - **MAY** — an optional capability.
 - **Undefined** — no contract is offered; implementations MUST NOT rely on it.
 
-## 1. Proposed implementation surface
+## 1. Implementation surface
 
 ### 1.1 Package boundary
 
@@ -584,7 +585,7 @@ function deriveCompleteness(
 - `EvidenceSchemaVersion` — semantic-version string (`MAJOR.MINOR.PATCH`,
   as in the normative examples' `1.0.0`), recorded directly or inherited
   through the trace reference (Spec 013 §10, `docs/versioning.md`).
-- `TraceStatus` / `SpanStatus` — an explicit Draft decision ratified with
+- `TraceStatus` / `SpanStatus` — an explicit decision ratified with
   this spec (§4.7): `completed` | `failed` | `cancelled` | `unknown`,
   with the meanings and validator rules in §4.7. Status is evidence-scoped
   lifecycle state, never a quality judgment; absence of an observed error is
@@ -836,7 +837,7 @@ sequence position.
 
 ### 4.7 Trace and span status
 
-Status is an explicit Draft decision ratified with this spec; it describes
+Status is an explicit decision ratified with this spec; it describes
 observed lifecycle state and is tightly scoped evidence/administrative state,
 never a quality judgment.
 
@@ -1946,7 +1947,7 @@ Narrow and explicit:
 
 Decisions necessary for the first slice that the repository can already
 settle are settled in this spec (§1–§8). Three questions previously reported
-as open are now **resolved in this Draft** and removed from this section:
+as open are now **resolved in this spec** and removed from this section:
 identifier generation (§3.2 — caller-supplied ids; generation is outside the
 evidence core), retained-byte serialization (§5.7 — RFC 4648 §4 Base64
 with canonical padding), trace/span status vocabulary (§4.7 — `completed` |
@@ -2008,8 +2009,9 @@ first slice; every decision needed to implement it is specified above.
   this spec's scope or planned slices; provider-neutral MCP/tool record
   kinds are type-system vocabulary only (§2.2, §8).
 - [ ] Documentation and index references are consistent: the spec index
-  lists Spec 014 as Draft, and the roadmap and glossary reference it
-  without claiming implementation exists.
+  lists Spec 014 as Accepted (ready to implement, not yet implemented),
+  and the roadmap and glossary reference it without claiming
+  implementation exists.
 - [ ] The retained-byte serialization contract is pinned: RFC 4648 §4
   standard-alphabet Base64 with the canonical padding (zero, one, or two
   `=` characters exactly as the encoded length requires), canonical
