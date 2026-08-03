@@ -237,39 +237,56 @@ survives replay.
 **Processing order (normative):** validators MUST apply duplicate and gap
 analysis in this deterministic order:
 
-1. Classify duplicate and replay candidates by `eventId` and `seq`.
-2. Apply the deterministic duplicate-handling rules below.
-3. Validate retained event-ID uniqueness.
-4. Validate retained sequence uniqueness.
-5. Derive and report gaps from the retained sequence positions.
-6. Derive completeness from the resulting canonical record and declared
-   capture boundary.
+1. Classify exact replays and collision candidates by `eventId`, `seq`,
+   and canonical content.
+2. Collapse exact replays.
+3. Reject same-ID/same-sequence content conflicts.
+4. Reject different-ID/same-sequence collisions.
+5. Resolve same-ID/different-sequence conflicts by retaining the lowest-`seq`
+   candidate.
+6. Validate retained event-ID and sequence uniqueness.
+7. Derive gaps from retained sequence positions.
+8. Derive completeness only for a trace that remains valid after structural
+   validation.
 
-**Duplicate cases:**
+**Collision cases:**
 
 - **Exact replay:** two copies have identical canonical event content,
   including identical `eventId` and `seq`.
-  - Retain one canonical event.
-  - Report the replay duplicate in the completeness record (`duplicateDetected`).
+  - Collapse to one retained event.
+  - Report the replay duplicate in the completeness record
+    (`duplicateDetected`).
   - Do not report a sequence gap because the assigned position remains
     represented.
 
-- **Same-ID, same-sequence conflict:** two copies have the same `eventId`
-  and `seq` but conflicting canonical content (any field differs).
+- **Same-ID, same-sequence content conflict:** same `eventId` and same
+  `seq`, but conflicting canonical content (any field differs).
   - They are not exact replays.
-  - Retain the first observed copy (lowest `seq` per the deterministic rule).
-  - Report the content conflict in the completeness record.
-  - Do not invent a gap because the sequence position remains occupied.
-  - The trace is valid-but-incomplete; conflicting records prevent a
-    trustworthy canonical event from being established, so the trace MUST
-    be marked incomplete.
+  - **Reject the trace as invalid**. Do not select a winner based on
+    "first observed," opaque identifier ordering, content hashes, or
+    arrival order.
+  - Emit a structured validation issue identifying the event-ID/content
+    conflict without echoing sensitive payload content.
+  - Do not derive or serialize a valid canonical trace or authoritative
+    completeness record from an arbitrarily selected candidate.
 
-- **Same-ID, different-sequence conflict:** a later copy uses the same
-  `eventId` but a different assigned `seq`.
-  - Retain the earliest copy (lowest `seq`) per the deterministic rule.
+- **Different-ID, same-sequence collision:** different `eventId` values
+  with the same `seq`.
+  - **Reject the trace as invalid** because canonical sequence uniqueness
+    is violated.
+  - Do not use identifier ordering, arrival order, timestamps, or content
+    hashes as a tie-breaker.
+  - Emit a structured sequence-collision validation issue.
+  - Do not retain an arbitrary winner or infer a gap while both
+    candidates claim the same assigned position.
+
+- **Same-ID, different-sequence conflict:** same `eventId` with different
+  `seq` values.
+  - Retain the lowest-`seq` copy because `seq` provides a deterministic
+    distinction in this case.
   - Report the duplicate conflict in the completeness record.
-  - Treat the discarded assigned sequence position as a gap **unless**
-    another valid retained event independently occupies it.
+  - Report the discarded sequence position as a gap unless another
+    independently valid retained event occupies it.
   - Never renumber retained events.
 
 **Dropped events:** a `seq` gap (§2.2) proves that an assigned sequence
@@ -286,6 +303,9 @@ sequence position.
 - Canonical events are never reordered or renumbered during validation.
 - Duplicate processing must not silently alter observed evidence.
 - Uncertainty and incompleteness remain visible.
+- Completeness represents incomplete but structurally valid evidence; it
+  must not convert an ambiguous or structurally invalid collision into a
+  valid trace.
 
 ## 3. Span and event semantics
 

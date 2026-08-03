@@ -700,39 +700,56 @@ as part of Spec 014:
 **Processing order (normative):** validators MUST apply duplicate and gap
 analysis in this deterministic order:
 
-1. Classify duplicate and replay candidates by `eventId` and `seq`.
-2. Apply the deterministic duplicate-handling rules below.
-3. Validate retained event-ID uniqueness.
-4. Validate retained sequence uniqueness.
-5. Derive and report gaps from the retained sequence positions.
-6. Derive completeness from the resulting canonical record and declared
-   capture boundary.
+1. Classify exact replays and collision candidates by `eventId`, `seq`,
+   and canonical content.
+2. Collapse exact replays.
+3. Reject same-ID/same-sequence content conflicts.
+4. Reject different-ID/same-sequence collisions.
+5. Resolve same-ID/different-sequence conflicts by retaining the lowest-`seq`
+   candidate.
+6. Validate retained event-ID and sequence uniqueness.
+7. Derive gaps from retained sequence positions.
+8. Derive completeness only for a trace that remains valid after structural
+   validation.
 
-**Duplicate cases:**
+**Collision cases:**
 
 - **Exact replay:** two copies have identical canonical event content,
   including identical `eventId` and `seq`.
-  - Retain one canonical event.
-  - Report the replay duplicate in the completeness record (`duplicateDetected`).
+  - Collapse to one retained event.
+  - Report the replay duplicate in the completeness record
+    (`duplicateDetected`).
   - Do not report a sequence gap because the assigned position remains
     represented.
 
-- **Same-ID, same-sequence conflict:** two copies have the same `eventId`
-  and `seq` but conflicting canonical content (any field differs).
+- **Same-ID, same-sequence content conflict:** same `eventId` and same
+  `seq`, but conflicting canonical content (any field differs).
   - They are not exact replays.
-  - Retain the first observed copy (lowest `seq` per the deterministic rule).
-  - Report the content conflict in the completeness record.
-  - Do not invent a gap because the sequence position remains occupied.
-  - The trace is valid-but-incomplete; conflicting records prevent a
-    trustworthy canonical event from being established, so the trace MUST
-    be marked incomplete.
+  - **Reject the trace as invalid**. Do not select a winner based on
+    "first observed," opaque identifier ordering, content hashes, or
+    arrival order.
+  - Emit a structured validation issue identifying the event-ID/content
+    conflict without echoing sensitive payload content.
+  - Do not derive or serialize a valid canonical trace or authoritative
+    completeness record from an arbitrarily selected candidate.
 
-- **Same-ID, different-sequence conflict:** a later copy uses the same
-  `eventId` but a different assigned `seq`.
-  - Retain the earliest copy (lowest `seq`) per the deterministic rule.
+- **Different-ID, same-sequence collision:** different `eventId` values
+  with the same `seq`.
+  - **Reject the trace as invalid** because canonical sequence uniqueness
+    is violated.
+  - Do not use identifier ordering, arrival order, timestamps, or content
+    hashes as a tie-breaker.
+  - Emit a structured sequence-collision validation issue.
+  - Do not retain an arbitrary winner or infer a gap while both
+    candidates claim the same assigned position.
+
+- **Same-ID, different-sequence conflict:** same `eventId` with different
+  `seq` values.
+  - Retain the lowest-`seq` copy because `seq` provides a deterministic
+    distinction in this case.
   - Report the duplicate conflict in the completeness record.
-  - Treat the discarded assigned sequence position as a gap **unless**
-    another valid retained event independently occupies it.
+  - Report the discarded sequence position as a gap unless another
+    independently valid retained event occupies it.
   - Never renumber retained events.
 
 **Drops:** a `seq` gap proves an assigned sequence position is absent from
@@ -748,6 +765,9 @@ sequence position.
 - Canonical events are never reordered or renumbered during validation.
 - Duplicate processing must not silently alter observed evidence.
 - Uncertainty and incompleteness remain visible.
+- Completeness represents incomplete but structurally valid evidence; it
+  must not convert an ambiguous or structurally invalid collision into a
+  valid trace.
 
 ### 4.5 Hash selection and scope
 
@@ -1420,10 +1440,12 @@ Future implementation tests MUST cover, using Vitest and fixed fixtures:
   set status; child-span failure does not auto-fail trace; terminal
   declaration must be final applicable event; later unrelated spans do not
   invalidate;
-- duplicate handling: exact replay (no gap), same-ID same-seq conflict
-  (valid-but-incomplete, no gap), same-ID different-seq conflict (gap on
-  discarded position unless independently occupied); processing order
-  (§4.4) enforced; retained events never renumbered;
+- duplicate handling: exact replay (no gap), same-ID same-seq content
+  conflict (reject trace as invalid), different-ID same-seq collision (reject
+  trace as invalid), same-ID different-seq conflict (gap on discarded
+  position unless independently occupied); processing order (§4.4) enforced;
+  retained events never renumbered; permutation of conflicting input records
+  produces same rejection result and normalized validation issues;
 - incomplete lifecycle records: `unknown` traces and spans without
   `finishedAt`, `endSeq`, or terminal events parse and validate; `completed`
   spans carry `endSeq` matching the observed `span_end` and require that
@@ -1662,11 +1684,16 @@ first slice; every decision needed to implement it is specified above.
   `deriveCompleteness` is pure, deterministic, and free of measurement,
   cost, interpretation, or optimization logic (§2.1, §2.2.9).
 - [ ] Duplicate handling and sequence gaps follow the deterministic
-  processing order (§4.4): exact replay (no gap), same-ID same-seq conflict
-  (valid-but-incomplete, no gap), same-ID different-seq conflict (gap on
-  discarded position unless independently occupied); retained events are
-  never renumbered; processing order (classify → apply rules → validate
-  IDs → validate seq → derive gaps → derive completeness) is normative.
+  processing order (§4.4): exact replay (no gap), same-ID same-seq content
+  conflict (reject trace as invalid), different-ID same-seq collision (reject
+  trace as invalid), same-ID different-seq conflict (gap on discarded
+  position unless independently occupied); retained events are never
+  renumbered; processing order (classify exact replays & collisions →
+  collapse exact replays → reject same-ID/same-seq conflicts → reject
+  different-ID/same-seq collisions → resolve same-ID/different-seq →
+  validate IDs → validate seq → derive gaps → derive completeness) is
+  normative; completeness must not convert an ambiguous or structurally
+  invalid collision into a valid trace.
 - [ ] Completeness metadata contradiction is rejected: a trace whose
   serialized completeness disagrees with the deterministic derivation from
   retained evidence (incorrect status counts, claimed nonexistent gaps,
@@ -1683,7 +1710,8 @@ PRs, mapped to the acceptance criteria above (valid construction, malformed
 records, all union variants, version-compatibility acceptance and
 unknown-discriminant/breaking-version refusal, reference integrity, timing,
 deterministic ordering, lifecycle targeting (`lifecycleTarget`/`lifecycleEffect`),
-duplicate handling (exact replay, same-ID same-seq, same-ID different-seq),
+duplicate handling (exact replay, same-ID same-seq content conflict,
+  different-ID same-seq collision, same-ID different-seq),
 completeness contradiction rejection, incomplete-lifecycle representation,
 serialization and retained-byte Base64 canonicality, hash selection, media
 types, completeness, canonical evidence → legacy `Trace`/`TraceEvent`, legacy
