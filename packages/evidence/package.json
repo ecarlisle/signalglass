@@ -1,0 +1,20 @@
+{
+  "name": "@signalglass/evidence",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Provider-neutral canonical evidence primitives, runtime validation, deterministic normalization, and serialization for SignalGlass (Spec 014 foundation).",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vitest": "^1.6.0"
+  }
+}

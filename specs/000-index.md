@@ -66,7 +66,7 @@ Infrastructure specifications ([001](001-workspace.md), [005](005-provider-adapt
 | [011](011-cli.md) | CLI | Implemented (analyze, ingress, traces) |
 | [012](012-versioning-and-releases.md) | Versioning and releases | Accepted — references legacy v0.x public surfaces |
 | [013](013-evidence-model.md) | Evidence model | **Accepted — canonical evidence contract** |
-| [014](014-evidence-primitives.md) | Evidence primitives | **Accepted — ready to implement**; additive TypeScript primitives and compatibility projections for the accepted evidence contract (Spec 013); not yet implemented |
+| [014](014-evidence-primitives.md) | Evidence primitives | **Accepted — ready to implement**; additive TypeScript primitives and compatibility projections for the accepted evidence contract (Spec 013). Slice 1 foundation (`@signalglass/evidence`, dependency-free) implemented; projections and migration slices pending |
 
 ## Project framing
 
@@ -81,9 +81,11 @@ The v0.x models behind these modes (`AgentRun`, `Trace`/`TraceEvent`) are
 targeted to be expressed as compatibility projections over the canonical
 evidence model defined by [Spec 013](013-evidence-model.md) (Accepted;
 implementation pending). [Spec 014 — Evidence primitives](014-evidence-primitives.md)
-(Accepted; implementation pending) defines the first additive TypeScript
+(Accepted; implementation in progress) defines the first additive TypeScript
 implementation increment of that contract: canonical evidence primitives
 beside the existing runtime model, plus the compatibility projections;
+its dependency-free foundation package (`@signalglass/evidence`) is
+implemented and the remaining slices are pending.
 acceptance authorizes implementation, which has not yet begun.
 
 ## References

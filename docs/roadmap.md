@@ -14,7 +14,10 @@ is accepted): interactions, spans, events, capture profiles, and versioning.
 [Spec 014 — Evidence primitives](../specs/014-evidence-primitives.md)
 (Accepted) defines the additive TypeScript evidence primitives and
 compatibility projections before any storage or capture migration;
-acceptance authorizes implementation, which has not yet begun.
+acceptance authorizes implementation. Slice 1 (the dependency-free
+[`@signalglass/evidence`](../packages/evidence/README.md) foundation:
+types, validators, parse/serialize, normalization) is implemented;
+the compatibility-projection and migration slices remain pending.
 
 - Interaction/span/event model with span parentage (`parentSpanId`) and events attached to spans (`spanId`).
 - Evidence records carry an evidence-schema version; derived measurement records carry an algorithm/derivation version plus references to their inputs.
