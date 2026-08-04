@@ -19,11 +19,13 @@ import type {
   TraceEventType,
 } from '../traces.js';
 import { createDefaultCapturePolicy } from '../traces.js';
+import { parseEvidenceRecord } from '@signalglass/evidence';
 import type {
   EvidenceRecord,
   EventRecord,
   ObservationRole,
   TraceStatus,
+  ValidationIssue,
 } from '@signalglass/evidence';
 import {
   EVIDENCE_TO_LEGACY_TRACE_PROJECTION_VERSION,
@@ -63,7 +65,43 @@ function observationRoleToContentPhase(
   return OBSERVATION_ROLE_TO_CONTENT_PHASE[role] ?? null;
 }
 
-/** Legacy trace status from canonical lifecycle status (partial). */
+/**
+ * Translate an authoritative-validator rejection into safe `ProjectionIssue`s
+ * with stable codes and accurate paths. The validator's messages are
+ * structural (they never echo captured content or secrets), so they are
+ * carried through unchanged. The codes are bucketed into the projection's
+ * stable issue-code vocabulary.
+ */
+const VALIDATION_CODE_TO_PROJECTION_CODE: Readonly<Record<string, string>> = {
+  unsupported_evidence_schema_version: PROJECTION_ISSUE_CODES.unsupportedSchemaVersion,
+  trace_disagrees_with_derivation: PROJECTION_ISSUE_CODES.traceDerivationConflict,
+  analysis_disagrees_with_derivation: PROJECTION_ISSUE_CODES.traceDerivationConflict,
+  completeness_disagrees_with_derivation: PROJECTION_ISSUE_CODES.traceDerivationConflict,
+  terminal_declaration_not_final: PROJECTION_ISSUE_CODES.lifecycleInvalid,
+  cancelled_invalid_effect: PROJECTION_ISSUE_CODES.lifecycleInvalid,
+  cancelled_invalid_target: PROJECTION_ISSUE_CODES.lifecycleInvalid,
+  error_invalid_effect: PROJECTION_ISSUE_CODES.lifecycleInvalid,
+  error_invalid_target: PROJECTION_ISSUE_CODES.lifecycleInvalid,
+  error_invalid_actor: PROJECTION_ISSUE_CODES.lifecycleInvalid,
+  target_span_requires_span: PROJECTION_ISSUE_CODES.lifecycleInvalid,
+  target_trace_requires_null_span: PROJECTION_ISSUE_CODES.lifecycleInvalid,
+};
+
+function validationIssuesToProjectionIssues(
+  issues: readonly ValidationIssue[],
+): ProjectionIssue[] {
+  return issues.map((validation) => ({
+    path: validation.path,
+    stage: STAGE,
+    code: VALIDATION_CODE_TO_PROJECTION_CODE[validation.code] ??
+      PROJECTION_ISSUE_CODES.invalidEvidenceRecord,
+    message: validation.message,
+  }));
+}
+
+/**
+ * Legacy trace status from canonical lifecycle status (partial).
+ */
 function legacyStatusFromTraceStatus(
   status: TraceStatus,
 ): { status: Trace['status']; reason: string } {
@@ -104,26 +142,22 @@ function deriveTraceProviderModel(events: readonly EventRecord[]): {
  * Project the canonical `EvidenceRecord`'s deterministic trace view into a
  * legacy `Trace`/`TraceEvent` view.
  *
+ * The authoritative input is validated first through the public
+ * `@signalglass/evidence` `parseEvidenceRecord` contract — the complete
+ * record including its raw observations and deterministic derived views.
+ * Structurally invalid, unsupported-version, derivationally inconsistent,
+ * or lifecycle-invalid records return `ok: false` with translated
+ * `ProjectionIssue`s; the projection never duplicates evidence validation
+ * rules and never imports evidence internals.
+ *
  * Returns `ok: false` only when no valid legacy trace view can be
- * constructed (a record without a usable canonical trace view). Lossy input
- * always returns `ok: true` with `partial`/`inferred`/`unavailable` report
- * entries. Never throws on expected invalid input.
+ * constructed. Lossy input always returns `ok: true` with
+ * `partial`/`inferred`/`unavailable` report entries. Never throws on
+ * expected invalid input; the supplied record is never mutated.
  */
 export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<Trace> {
-  if (
-    record == null ||
-    record.trace == null ||
-    !Array.isArray(record.trace.events)
-  ) {
-    const issues: ProjectionIssue[] = [
-      {
-        path: 'record',
-        stage: STAGE,
-        code: PROJECTION_ISSUE_CODES.invalidEvidenceRecord,
-        message:
-          'Cannot build a legacy trace view: the input lacks a usable canonical trace view with an events collection.',
-      },
-    ];
+  const parsed = parseEvidenceRecord(record);
+  if (!parsed.ok) {
     return {
       ok: false,
       report: {
@@ -134,11 +168,11 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
             : 'unknown',
         mappings: [],
       },
-      issues,
+      issues: validationIssuesToProjectionIssues(parsed.issues),
     };
   }
 
-  const trace = record.trace;
+  const trace = parsed.record.trace;
   const mappings: ProjectionMapping[] = [];
 
   // ---- Trace identity and timing (exact) ----
@@ -168,7 +202,7 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
       path: 'trace.finishedAt',
       stage: STAGE,
       outcome: 'unavailable',
-      reason: 'canonical trace has no observed terminal time (status "unknown"); legacy endedAt is omitted',
+      reason: `canonical trace has no observed terminal time (status "${trace.status}"); legacy endedAt is omitted`,
     });
   }
 
@@ -306,8 +340,6 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
     }
   });
 
-  const legacyStatus = legacyStatusFromTraceStatus(trace.status).status;
-
   const view: Trace = {
     id: trace.traceId,
     startedAt: trace.startedAt,
@@ -316,7 +348,7 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
     ...(derived.model != null ? { model: derived.model } : {}),
     mode: 'standard',
     capturePolicy: createDefaultCapturePolicy('standard'),
-    status: legacyStatus,
+    status: statusMapping.status,
     events,
   };
 

@@ -18,8 +18,9 @@
  * event collection returns `ok: false` with a structured issue.
  */
 import type { AgentRun, ContextBlock, Turn } from '../types.js';
-import type { Trace } from '../traces.js';
+import type { ContentPhase, Trace, TraceEvent, TraceEventType } from '../traces.js';
 import { traceToAgentRun } from '../traceToAgentRun.js';
+import { SOURCE_TYPES } from '../sourceTypes.js';
 import {
   LEGACY_TRACE_SCHEMA_VERSION,
   LEGACY_TRACE_TO_AGENT_RUN_PROJECTION_VERSION,
@@ -35,23 +36,101 @@ import type {
 
 const STAGE: ProjectionStage = 'legacy_trace_to_agent_run';
 
+const LEGACY_TRACE_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'message',
+  'instruction',
+  'context',
+  'transformation',
+  'inference',
+  'tool_call',
+  'tool_result',
+  'provider_request',
+  'provider_response',
+  'provider_error',
+  'egress_response',
+]);
+
+const LEGACY_CONTENT_PHASES: ReadonlySet<string> = new Set([
+  'said',
+  'sent',
+  'transformed',
+  'requested',
+  'observed',
+  'generated',
+  'returned',
+]);
+
+const LEGACY_SOURCE_TYPES: ReadonlySet<string> = new Set(SOURCE_TYPES);
+
+/**
+ * Projection-boundary validator for legacy `TraceEvent` entries, driven by a
+ * declarative field table (object shape plus required `id`/`traceId`/
+ * `timestamp`/`type` fields and the applicable optional `contentPhase`/
+ * `sourceType` vocabulary). Messages never echo event contents or values;
+ * failures anchor to `events[index]`. The legacy package has no public
+ * runtime validator, so this small boundary check guards the wrapped legacy
+ * conversion.
+ */
+const LEGACY_EVENT_FIELD_CHECKS: ReadonlyArray<{
+  read: (event: Record<string, unknown>) => unknown;
+  optional: boolean;
+  invalid: (value: unknown) => boolean;
+  message: string;
+}> = [
+  { read: (event) => event['id'], optional: false, invalid: (v) => typeof v !== 'string' || v.length === 0, message: 'legacy trace event is missing a valid id field' },
+  { read: (event) => event['traceId'], optional: false, invalid: (v) => typeof v !== 'string' || v.length === 0, message: 'legacy trace event is missing a valid traceId field' },
+  { read: (event) => event['timestamp'], optional: false, invalid: (v) => typeof v !== 'string' || v.length === 0, message: 'legacy trace event is missing a valid timestamp field' },
+  { read: (event) => event['type'], optional: false, invalid: (v) => typeof v !== 'string' || !LEGACY_TRACE_EVENT_TYPES.has(v), message: 'legacy trace event type is not in the legacy TraceEventType vocabulary' },
+  { read: (event) => event['contentPhase'], optional: true, invalid: (v) => typeof v !== 'string' || !LEGACY_CONTENT_PHASES.has(v), message: 'legacy trace event contentPhase is not in the legacy ContentPhase vocabulary' },
+  { read: (event) => event['sourceType'], optional: true, invalid: (v) => typeof v !== 'string' || !LEGACY_SOURCE_TYPES.has(v), message: 'legacy trace event sourceType is not in the legacy SourceType vocabulary' },
+];
+
+function validateLegacyEventEntry(
+  entry: unknown,
+  index: number,
+): ProjectionIssue | null {
+  const path = `events[${index}]`;
+  if (entry == null || typeof entry !== 'object' || Array.isArray(entry)) {
+    return {
+      path,
+      stage: STAGE,
+      code: PROJECTION_ISSUE_CODES.invalidLegacyEvent,
+      message:
+        'legacy trace event is not a plain object; the entry cannot be projected',
+    };
+  }
+  const event = entry as Record<string, unknown>;
+  for (const field of LEGACY_EVENT_FIELD_CHECKS) {
+    const value = field.read(event);
+    if ((!field.optional || value !== undefined) && field.invalid(value)) {
+      return {
+        path, stage: STAGE, code: PROJECTION_ISSUE_CODES.invalidLegacyEvent, message: field.message,
+      };
+    }
+  }
+  return null;
+}
+
 /**
  * Deterministic identifier generator for the wrapped legacy conversion
- * (Spec 014 §6.5). A fresh generator is created per call, so identical input
- * produces identical synthesized ids; ids are stable, opaque, and never
+ * (Spec 014 §6.5). A fresh generator is created per call, seeded with the
+ * trace id so generated ids are deterministic per trace and do not collide
+ * across different trace projections. Ids are stable, opaque, and never
  * presented as canonical evidence.
  */
-function makeDeterministicIdGenerator(): () => string {
+function makeDeterministicIdGenerator(traceId: string): () => string {
   let counter = 0;
-  return () => `pt-${counter++}`;
+  return () => `pt-${traceId}-${counter++}`;
 }
 
 /**
  * Project a legacy `Trace`/`TraceEvent` view into a legacy `AgentRun` view.
  *
  * Returns `ok: false` when the trace lacks an array `events` collection
- * (absent, non-array, or otherwise invalid); an empty array is valid and
- * produces an empty `AgentRun` view. Never throws on expected invalid input.
+ * (absent, non-array, or otherwise invalid) or when any entry fails the
+ * projection-boundary shape/vocabulary checks; an empty array is valid and
+ * produces an empty `AgentRun` view. `traceToAgentRun` is never invoked
+ * after validation fails. Never throws on expected invalid input.
  */
 export function legacyTraceToAgentRun(trace: Trace): ProjectionResult<AgentRun> {
   if (trace == null || !Array.isArray(trace.events)) {
@@ -75,10 +154,50 @@ export function legacyTraceToAgentRun(trace: Trace): ProjectionResult<AgentRun> 
     };
   }
 
+  // Validate every entry before invoking the wrapped legacy conversion; the
+  // legacy package has no public runtime validator (Spec 014 §9.1).
+  const entryIssues: ProjectionIssue[] = [];
+  for (let index = 0; index < trace.events.length; index += 1) {
+    const issue = validateLegacyEventEntry(trace.events[index], index);
+    if (issue != null) entryIssues.push(issue);
+  }
+  if (entryIssues.length > 0) {
+    return {
+      ok: false,
+      report: {
+        projectionVersion: LEGACY_TRACE_TO_AGENT_RUN_PROJECTION_VERSION,
+        sourceSchemaVersion: LEGACY_TRACE_SCHEMA_VERSION,
+        mappings: [],
+      },
+      issues: entryIssues,
+    };
+  }
+
   const view = traceToAgentRun(trace, {
-    generateId: makeDeterministicIdGenerator(),
+    generateId: makeDeterministicIdGenerator(trace.id),
   });
 
+  const mappings = buildProjectionMappings(trace, view);
+
+  const report: ProjectionReport = {
+    projectionVersion: LEGACY_TRACE_TO_AGENT_RUN_PROJECTION_VERSION,
+    sourceSchemaVersion: LEGACY_TRACE_SCHEMA_VERSION,
+    mappings,
+  };
+
+  return { ok: true, view, report };
+}
+
+/**
+ * Build the ordered loss/identity report for a legacy trace → `AgentRun`
+ * projection (Spec 014 §6.2–§6.5). Preserves the legacy field-exactness
+ * semantics, reports synthesized identifiers as `inferred`, and discloses
+ * the safe-excerpt and trace-metadata filtering boundaries as explicit loss.
+ */
+function buildProjectionMappings(
+  trace: Trace,
+  view: AgentRun,
+): ProjectionMapping[] {
   const mappings: ProjectionMapping[] = [
     {
       path: 'id',
@@ -158,13 +277,25 @@ export function legacyTraceToAgentRun(trace: Trace): ProjectionResult<AgentRun> 
     });
   }
 
-  const report: ProjectionReport = {
-    projectionVersion: LEGACY_TRACE_TO_AGENT_RUN_PROJECTION_VERSION,
-    sourceSchemaVersion: LEGACY_TRACE_SCHEMA_VERSION,
-    mappings,
-  };
+  // Trace metadata passes through the legacy sanitizer, which drops
+  // secret-bearing and raw-payload keys; the filtering boundary is explicit.
+  if (trace.metadata != null && Object.keys(trace.metadata).length > 0) {
+    mappings.push({
+      path: 'metadata.traceMetadata',
+      stage: STAGE,
+      outcome: 'partial',
+      reason: 'legacy trace metadata is filtered to safe keys by the legacy sanitizer; secret-bearing and raw-payload keys are dropped and are never projected',
+    });
+  } else {
+    mappings.push({
+      path: 'metadata.traceMetadata',
+      stage: STAGE,
+      outcome: 'unavailable',
+      reason: 'legacy trace carries no metadata, so no filtered trace metadata is projected',
+    });
+  }
 
-  return { ok: true, view, report };
+  return mappings;
 }
 
 function countContentBearingBlocks(run: AgentRun): number {

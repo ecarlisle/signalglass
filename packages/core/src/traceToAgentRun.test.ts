@@ -693,3 +693,22 @@ describe('traceToAgentRun', () => {
     expect(sanitizedJson).not.toContain('headers');
   });
 });
+
+describe('traceToAgentRun — generated-identifier default', () => {
+  it('retains the random identifier default when no generator is supplied', () => {
+    const trace = makeTrace([
+      createTraceEvent({
+        traceId: 'trace-1', timestamp: '2026-01-01T00:00:00.000Z', type: 'message',
+        contentPhase: 'said', sourceType: 'user_message', actor: { role: 'user' },
+        payloadRef: { id: 'p1', redacted: false, excerpt: 'hello' },
+      }),
+    ]);
+    // Without options, synthesized turn ids are random (non-deterministic):
+    // two calls produce distinct ids, preserving the legacy behavior.
+    const first = traceToAgentRun(trace).turns[0]!.id;
+    const second = traceToAgentRun(trace).turns[0]!.id;
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(first).not.toBe(second);
+  });
+});

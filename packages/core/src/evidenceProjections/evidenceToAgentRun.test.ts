@@ -32,6 +32,7 @@ vi.mock('./legacyTraceToAgentRun.js', async (importOriginal) => {
 });
 
 const SECRET = 'sk-composed-secret-xyz';
+const NATIVE_RESPONSE_BODY = 'provider-native-response-body-sentinel';
 
 function recordWithSecret(): EvidenceRecord {
   return buildRecord([
@@ -49,7 +50,7 @@ function recordWithSecret(): EvidenceRecord {
     obs({
       observationId: 'z2', eventId: 'evt-resp', seq: 2, kind: 'model_response',
       capturedAt: T2, observationRole: 'provider_reported',
-      payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', providerNative: { text: 'hi' } } },
+      payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', providerNative: { text: NATIVE_RESPONSE_BODY } } },
     }),
     obs({ observationId: 'z3', eventId: 'evt-end', seq: 3, kind: 'interaction_end', capturedAt: T3 }),
   ]);
@@ -102,7 +103,7 @@ describe('evidenceToAgentRun — composition', () => {
   });
 
   it('does not invoke the second stage when the first stage fails', () => {
-    const result = evidenceToAgentRun({} as EvidenceRecord);
+    const result = evidenceToAgentRun(null as unknown as EvidenceRecord);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.issues[0]!.code).toBe(PROJECTION_ISSUE_CODES.invalidEvidenceRecord);
@@ -111,18 +112,25 @@ describe('evidenceToAgentRun — composition', () => {
     expect(vi.mocked(legacyModule.legacyTraceToAgentRun)).not.toHaveBeenCalled();
   });
 
-  it('concatenates first-stage mappings with second-stage issues on second-stage failure', () => {
+  it('concatenates first-stage mappings with second-stage mappings and issues on second-stage failure', () => {
     const record = buildRecord(minimalObservations());
     const first = evidenceToLegacyTrace(record);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
 
+    // The second stage records at least one mapping before it fails.
+    const secondStageMapping = {
+      path: 'events[999]',
+      stage: 'legacy_trace_to_agent_run' as const,
+      outcome: 'unavailable' as const,
+      reason: 'second-stage mapping recorded before validation failure',
+    };
     vi.mocked(legacyModule.legacyTraceToAgentRun).mockImplementationOnce(() => ({
       ok: false as const,
       report: {
         projectionVersion: 'test',
         sourceSchemaVersion: 'legacy-trace-v0',
-        mappings: [],
+        mappings: [secondStageMapping],
       },
       issues: [
         {
@@ -137,10 +145,18 @@ describe('evidenceToAgentRun — composition', () => {
     const result = evidenceToAgentRun(record);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.report.mappings).toEqual(first.report.mappings);
+
+    // All first-stage mappings precede the second-stage mapping; the composed
+    // failure report retains both stages' mappings in stage order.
+    expect(result.report.mappings).toEqual([
+      ...first.report.mappings,
+      secondStageMapping,
+    ]);
     expect(result.issues[0]!.stage).toBe('legacy_trace_to_agent_run');
     expect(result.issues[0]!.code).toBe(PROJECTION_ISSUE_CODES.invalidEventCollection);
     expect(result.report.projectionVersion).toBe(EVIDENCE_TO_AGENT_RUN_PROJECTION_VERSION);
+    // Composed sourceSchemaVersion stays the canonical record version.
+    expect(result.report.sourceSchemaVersion).toBe('1.0.0');
   });
 });
 
@@ -181,9 +197,19 @@ describe('evidenceToAgentRun — loss, determinism, safety', () => {
     const result = evidenceToAgentRun(recordWithSecret());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    // The provider-native secret value and the provider-native response body
+    // must never appear in the composed AgentRun view.
     const serialized = JSON.stringify(result.view);
-    // The provider-native secret value must never appear in the view.
     expect(serialized).not.toContain(SECRET);
+    expect(serialized).not.toContain(NATIVE_RESPONSE_BODY);
+    // The intermediate legacy trace also exposes neither sentinel.
+    const legacy = evidenceToLegacyTrace(recordWithSecret());
+    expect(legacy.ok).toBe(true);
+    if (legacy.ok) {
+      const legacySerialized = JSON.stringify(legacy.view);
+      expect(legacySerialized).not.toContain(SECRET);
+      expect(legacySerialized).not.toContain(NATIVE_RESPONSE_BODY);
+    }
   });
 
   it('produces deeply equal views and reports across repeated calls', () => {

@@ -310,6 +310,38 @@ describe('evidenceToLegacyTrace — event-kind mapping', () => {
     ).toBe(true);
   });
 
+  it('emits one legacy provider_response per canonical chunk (no aggregation)', () => {
+    const CHUNK_BODY = 'chunk-native-body-should-not-leak';
+    const record = buildRecord([
+      obs({ observationId: 'c0', eventId: 'evt-start', seq: 0, kind: 'interaction_start', capturedAt: T0 }),
+      obs({ observationId: 'c1', eventId: 'evt-req', seq: 1, kind: 'model_request', capturedAt: T1, observationRole: 'client_sent', payload: { requestEnvelope: { model: 'm', provider: 'p', providerNativeFidelity: 'structurally_faithful' } } }),
+      obs({ observationId: 'c2', eventId: 'evt-chunk-0', seq: 2, kind: 'model_response_chunk', capturedAt: T2, observationRole: 'provider_reported', payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', chunkIndex: 0, providerNative: { text: CHUNK_BODY } } } }),
+      obs({ observationId: 'c3', eventId: 'evt-chunk-1', seq: 3, kind: 'model_response_chunk', capturedAt: T3, observationRole: 'provider_reported', payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', chunkIndex: 1, providerNative: { text: CHUNK_BODY } } } }),
+      obs({ observationId: 'c4', eventId: 'evt-chunk-2', seq: 4, kind: 'model_response_chunk', capturedAt: T3, observationRole: 'provider_reported', payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', chunkIndex: 2, providerNative: { text: CHUNK_BODY } } } }),
+      obs({ observationId: 'c5', eventId: 'evt-end', seq: 5, kind: 'interaction_end', capturedAt: T3 }),
+    ]);
+    const result = evidenceToLegacyTrace(record);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // One legacy event per chunk, each `provider_response`, ordered by seq.
+    const chunkEvents = result.view.events.filter((e) => e.type === 'provider_response');
+    expect(chunkEvents).toHaveLength(3);
+    expect(result.view.events.map((e) => e.id)).toEqual([
+      'evt-req',
+      'evt-chunk-0',
+      'evt-chunk-1',
+      'evt-chunk-2',
+    ]);
+    // No aggregation occurred: total projected events include all three chunks.
+    expect(result.view.events).toHaveLength(4);
+    // Chunk payload/native content never appears in the legacy view.
+    expect(JSON.stringify(result.view)).not.toContain(CHUNK_BODY);
+    for (const event of result.view.events) {
+      expect(event.payloadRef).toBeUndefined();
+      expect(event.metadata).toBeUndefined();
+    }
+  });
+
   it('preserves seq ordering over equal timestamps', () => {
     const record = buildRecord([
       obs({ observationId: 's0', eventId: 'evt-start', seq: 0, kind: 'interaction_start', capturedAt: T0 }),
@@ -321,7 +353,13 @@ describe('evidenceToLegacyTrace — event-kind mapping', () => {
     const result = evidenceToLegacyTrace(record);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    // Projected order follows canonical seq, and every projected event carries
+    // a string timestamp (ordering is never emitted as a null/undefined key).
     expect(result.view.events.map((e) => e.id)).toEqual(['evt-req', 'evt-resp']);
+    for (const event of result.view.events) {
+      expect(typeof event.timestamp).toBe('string');
+      expect(event.timestamp.length).toBeGreaterThan(0);
+    }
   });
 });
 
@@ -343,12 +381,15 @@ describe('evidenceToLegacyTrace — determinism and immutability', () => {
     expect(record.trace.events.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
-  it('never emits a null seq or timestamp as an ordering key', () => {
+  it('reports the canonical seq ordering restriction as partial loss', () => {
     const result = evidenceToLegacyTrace(buildRecord(minimalObservations()));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    // The legacy Trace has no seq field; canonical seq ordering is preserved by
+    // event order and the loss is reported (never a null ordering key).
     const seqValues = result.report.mappings.filter((m) => m.path === 'trace.events[].seq');
     expect(seqValues[0]?.outcome).toBe('partial');
+    expect(seqValues[0]?.reason).toContain('seq');
   });
 });
 
@@ -428,21 +469,90 @@ describe('evidenceToLegacyTrace — redacted/missing/unknown and safety', () => 
   });
 });
 
-describe('evidenceToLegacyTrace — structured failure', () => {
-  it('returns ok:false with a stable code for a record without a usable trace view', () => {
-    const result = evidenceToLegacyTrace({} as EvidenceRecord);
+describe('evidenceToLegacyTrace — structured failure (authoritative validation)', () => {
+  it('returns ok:false for a non-object record with a stable code', () => {
+    const result = evidenceToLegacyTrace(null as unknown as EvidenceRecord);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]!.code).toBe(PROJECTION_ISSUE_CODES.invalidEvidenceRecord);
+    expect(result.issues.length).toBeGreaterThan(0);
     expect(result.issues[0]!.stage).toBe('evidence_to_legacy_trace');
-    expect(result.issues[0]!.path).toBe('record');
     expect(result.issues[0]!.message.length).toBeGreaterThan(0);
   });
 
-  it('handles a record with non-array events without throwing', () => {
-    const bad = { trace: { events: 'nope' } } as unknown as EvidenceRecord;
+  it('rejects an unsupported evidence schema version', () => {
+    const record = buildRecord(minimalObservations());
+    const bad = { ...record, evidenceSchemaVersion: '2.0.0' } as EvidenceRecord;
     const result = evidenceToLegacyTrace(bad);
     expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(
+      result.issues.some((i) => i.code === PROJECTION_ISSUE_CODES.unsupportedSchemaVersion),
+    ).toBe(true);
+  });
+
+  it('rejects an invalid canonical event (unknown kind) via the authoritative validator', () => {
+    const record = buildRecord(minimalObservations());
+    // Deliberately inject an observation shape the validator must reject.
+    const bad = {
+      ...record,
+      rawObservations: [
+        {
+          ...record.rawObservations[0]!,
+          kind: 'not_a_real_kind',
+          payload: null,
+        },
+      ],
+    } as unknown as EvidenceRecord;
+    const result = evidenceToLegacyTrace(bad);
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects a serialized trace that disagrees with its authoritative observations', () => {
+    const record = buildRecord(minimalObservations());
+    // Serialized trace claims a different interactionId than the observations derive.
+    const bad = {
+      ...record,
+      trace: { ...record.trace, interactionId: 'different-trace-id' },
+    } as EvidenceRecord;
+    const result = evidenceToLegacyTrace(bad);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(
+      result.issues.some((i) => i.code === PROJECTION_ISSUE_CODES.traceDerivationConflict),
+    ).toBe(true);
+  });
+
+  it('rejects a lifecycle-invalid record (terminal status lacking required terminal evidence)', () => {
+    const record = buildRecord(minimalObservations());
+    // Serialized trace declares status "completed"/finishedAt but the
+    // observations provide no interaction_end terminal evidence, so the
+    // derived lifecycle does not match (a derivation conflict).
+    const bad = {
+      ...record,
+      trace: {
+        ...record.trace,
+        status: 'completed',
+        finishedAt: record.trace.finishedAt,
+      },
+      rawObservations: record.rawObservations.filter(
+        (o) => o.kind !== 'interaction_end',
+      ),
+    } as EvidenceRecord;
+    const result = evidenceToLegacyTrace(bad);
+    expect(result.ok).toBe(false);
+  });
+
+  it('validates the complete authoritative record: parseEvidenceRecord is the entry gate', () => {
+    const record = buildRecord(minimalObservations());
+    // A valid record stays valid.
+    expect(evidenceToLegacyTrace(record).ok).toBe(true);
+    // A record missing analysis/completeness derivations is rejected.
+    const stripped = {
+      rawObservations: record.rawObservations,
+      trace: record.trace,
+      evidenceSchemaVersion: '1.0.0',
+      captureBoundary: record.captureBoundary,
+    } as EvidenceRecord;
+    expect(evidenceToLegacyTrace(stripped).ok).toBe(false);
   });
 });

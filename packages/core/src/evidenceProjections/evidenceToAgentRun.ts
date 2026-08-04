@@ -63,7 +63,10 @@ export function evidenceToAgentRun(record: EvidenceRecord): ProjectionResult<Age
       report: {
         projectionVersion: EVIDENCE_TO_AGENT_RUN_PROJECTION_VERSION,
         sourceSchemaVersion: record.evidenceSchemaVersion,
-        mappings: legacyTraceResult.report.mappings,
+        mappings: [
+          ...legacyTraceResult.report.mappings,
+          ...agentRunResult.report.mappings,
+        ],
       },
       issues: agentRunResult.issues,
     };

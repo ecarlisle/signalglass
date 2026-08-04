@@ -33,10 +33,15 @@ export type CanonicalEventMapping = {
  *   event; the legacy `provider_request` type is the equivalent control
  *   event. Content (envelopes, messages, provider-native bodies) is never
  *   inlined into the legacy excerpt surface.
- * - `model_response` / `model_response_chunk` → `provider_response`: legacy
- *   has no chunk distinction; streaming chunks collapse to a single
- *   `provider_response` (chunk indexing is lost). Provider-native content is
- *   never projected into legacy content excerpts.
+ * - `model_response` → `provider_response`: canonical non-chunked model
+ *   response; provider-native content is never projected into legacy
+ *   content excerpts.
+ * - `model_response_chunk` → `provider_response`: legacy has no chunk
+ *   type, so every canonical chunk is emitted as a **separate** legacy
+ *   `provider_response` event. No aggregation occurs; the canonical chunk
+ *   kind/index semantics are lost in the legacy vocabulary, and
+ *   provider-native chunk content is never projected. (This slice does not
+ *   aggregate chunks.)
  * - `model_usage` → `inference`: the legacy `inference` event is the closest
  *   equivalent usage carrier; numeric token accounting is NOT populated in
  *   this slice (measurement layer pending, Spec 014 §6.3) and is reported
@@ -62,7 +67,7 @@ export const CANONICAL_EVENT_MAPPINGS: Readonly<Partial<Record<EventKind, Canoni
   },
   model_response_chunk: {
     legacyType: 'provider_response',
-    reason: 'canonical model_response_chunk maps to legacy provider_response; legacy has no chunk type so the chunk boundary is lost',
+    reason: 'canonical model_response_chunk maps to legacy provider_response; legacy has no chunk type, so every chunk becomes its own provider_response event and the chunk boundary/index is lost (no aggregation)',
   },
   model_usage: {
     legacyType: 'inference',

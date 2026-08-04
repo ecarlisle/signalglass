@@ -80,7 +80,7 @@ The existing offline analyzer is preserved. Live ingress is added beside it, not
 The v0.x models behind these modes (`AgentRun`, `Trace`/`TraceEvent`) are
 targeted to be expressed as compatibility projections over the canonical
 evidence model defined by [Spec 013](013-evidence-model.md) (Accepted;
-implementation pending). [Spec 014 — Evidence primitives](014-evidence-primitives.md)
+implementation proceeds incrementally through Spec 014). [Spec 014 — Evidence primitives](014-evidence-primitives.md)
 (Accepted; implementation in progress) defines the first additive TypeScript
 implementation increment of that contract: canonical evidence primitives
 beside the existing runtime model, plus the compatibility projections;

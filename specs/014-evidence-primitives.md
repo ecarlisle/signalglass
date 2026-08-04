@@ -2036,9 +2036,10 @@ first slice; every decision needed to implement it is specified above.
 - [x] Documentation and index references are consistent: the spec index
   lists Spec 014 as Accepted (not fully Implemented); the roadmap,
   glossary, and package README distinguish the implemented evidence
-  foundation slice from the pending compatibility-projection, migration,
-  and parity work, and no documentation claims Spec 014 is fully
-  Implemented.
+  foundation, deterministic-fixture, and compatibility-projection slices
+  from the pending projection-parity verification and migration work, and
+  no documentation claims Spec 014 is fully Implemented or describes the
+  compatibility projections as pending.
 - [x] The retained-byte serialization contract is pinned: RFC 4648 §4
   standard-alphabet Base64 with the canonical padding (zero, one, or two
   `=` characters exactly as the encoded length requires), canonical

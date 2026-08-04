@@ -100,10 +100,18 @@ export const LEGACY_TRACE_SCHEMA_VERSION = 'legacy-trace-v0';
 
 /** Stable machine-readable issue codes for the projection modules. */
 export const PROJECTION_ISSUE_CODES = {
-  /** Canonical input lacks a usable `trace` view (missing/absent events). */
+  /** Canonical input rejected by the authoritative validator (record shape, raw observations, or per-event structural issues). */
   invalidEvidenceRecord: 'invalid_evidence_record',
+  /** Canonical record uses an unsupported `evidenceSchemaVersion`. */
+  unsupportedSchemaVersion: 'unsupported_schema_version',
+  /** Canonical record's serialized derived views disagree with the deterministic derivation. */
+  traceDerivationConflict: 'trace_derivation_conflict',
+  /** Canonical record violates lifecycle/terminal-evidence rules. */
+  lifecycleInvalid: 'invalid_lifecycle',
   /** Legacy trace lacks an array `events` collection. */
   invalidEventCollection: 'invalid_event_collection',
+  /** A legacy `events` entry fails the projection-boundary shape/vocabulary checks. */
+  invalidLegacyEvent: 'invalid_legacy_event',
 } as const;
 
 export type ProjectionIssueCode =

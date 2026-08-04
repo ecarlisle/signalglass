@@ -28,7 +28,7 @@ legacy `AgentRun` view) is implemented; projection parity verification
 - Interaction/span/event model with span parentage (`parentSpanId`) and events attached to spans (`spanId`).
 - Evidence records carry an evidence-schema version; derived measurement records carry an algorithm/derivation version plus references to their inputs.
 - Capture profiles as separate **collection**, **persistence**, and **export** decisions. A metadata-only profile must not collect full payloads in the first place. A redacted profile may discard content at its declared capture boundary. Full-fidelity capture is explicit, appropriately protected, and never the universal default.
-- Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification; to be re-framed as projections.
+- Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification; re-framed as compatibility projections (implemented in `@signalglass/core/src/evidenceProjections/`; projection-parity verification and migration pending).
 
 ### Deterministic fixtures and negative controls
 
