@@ -871,7 +871,7 @@ path to the caller). The retry references the **original request event**
   "captureSurface": "client_side",
   "observationBoundary": "application_constructed",
   "startedAt": "2025-06-01T14:00:00.123Z",
-  "finishedAt": "2025-06-01T14:00:05.600Z",
+  "finishedAt": "2025-06-01T14:00:31.200Z",
   "status": "completed",
   "spans": [
     {
@@ -882,8 +882,8 @@ path to the caller). The retry references the **original request event**
       "startSeq": 1,
       "endSeq": 6,
       "startedAt": "2025-06-01T14:00:00.200Z",
-      "finishedAt": "2025-06-01T14:00:05.500Z",
-      "durationMs": 5300,
+      "finishedAt": "2025-06-01T14:00:31.100Z",
+      "durationMs": 30900,
       "status": "completed"
     }
   ],
@@ -913,7 +913,7 @@ path to the caller). The retry references the **original request event**
       "spanId": "span-8-0001",
       "seq": 3,
       "kind": "error",
-      "capturedAt": "2025-06-01T14:00:04.500Z",
+      "capturedAt": "2025-06-01T14:00:30.200Z",
       "evidenceStatus": "captured",
       "observationRole": "returned",
       "actor": "model",
@@ -930,7 +930,7 @@ path to the caller). The retry references the **original request event**
       "spanId": "span-8-0001",
       "seq": 4,
       "kind": "retry",
-      "capturedAt": "2025-06-01T14:00:05.100Z",
+      "capturedAt": "2025-06-01T14:00:30.700Z",
       "evidenceStatus": "captured",
       "observationRole": "application_constructed",
       "retry": {
@@ -946,7 +946,7 @@ path to the caller). The retry references the **original request event**
       "spanId": "span-8-0001",
       "seq": 5,
       "kind": "cancelled",
-      "capturedAt": "2025-06-01T14:00:05.400Z",
+      "capturedAt": "2025-06-01T14:00:31.000Z",
       "evidenceStatus": "captured",
       "observationRole": "application_constructed",
       "lifecycleTarget": "none",
@@ -955,8 +955,8 @@ path to the caller). The retry references the **original request event**
         "requestedBy": "user"
       }
     },
-    { "eventId": "evt-8-0007", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": "span-8-0001", "seq": 6, "kind": "span_end", "capturedAt": "2025-06-01T14:00:05.500Z", "evidenceStatus": "captured" },
-    { "eventId": "evt-8-0008", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": null, "seq": 7, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:05.600Z", "evidenceStatus": "captured" }
+    { "eventId": "evt-8-0007", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": "span-8-0001", "seq": 6, "kind": "span_end", "capturedAt": "2025-06-01T14:00:31.100Z", "evidenceStatus": "captured" },
+    { "eventId": "evt-8-0008", "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY8", "spanId": null, "seq": 7, "kind": "interaction_end", "capturedAt": "2025-06-01T14:00:31.200Z", "evidenceStatus": "captured" }
   ]
 }
 ```

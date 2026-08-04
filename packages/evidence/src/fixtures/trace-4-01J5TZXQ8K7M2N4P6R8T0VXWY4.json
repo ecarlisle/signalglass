@@ -1,0 +1,97 @@
+{
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": {
+    "name": "dev-basic",
+    "version": "1.2.0"
+  },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:02.000Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-4-0001",
+      "kind": "tool",
+      "name": "tool:bash",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 4,
+      "startedAt": "2025-06-01T14:00:01.400Z",
+      "finishedAt": "2025-06-01T14:00:01.900Z",
+      "durationMs": 500,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    {
+      "eventId": "evt-4-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+      "spanId": null,
+      "seq": 0,
+      "kind": "interaction_start",
+      "capturedAt": "2025-06-01T14:00:00.123Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-4-0002",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+      "spanId": "span-4-0001",
+      "seq": 1,
+      "kind": "span_start",
+      "capturedAt": "2025-06-01T14:00:01.400Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-4-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+      "spanId": "span-4-0001",
+      "seq": 2,
+      "kind": "tool_call",
+      "capturedAt": "2025-06-01T14:00:01.400Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "tool": {
+        "name": "bash",
+        "arguments": {
+          "command": "pnpm typecheck"
+        }
+      }
+    },
+    {
+      "eventId": "evt-4-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+      "spanId": "span-4-0001",
+      "seq": 3,
+      "kind": "tool_result",
+      "capturedAt": "2025-06-01T14:00:01.900Z",
+      "evidenceStatus": "captured",
+      "observationRole": "returned",
+      "toolResult": {
+        "exitCode": 0,
+        "stdout": "No type errors found.",
+        "stderr": ""
+      }
+    },
+    {
+      "eventId": "evt-4-0005",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+      "spanId": "span-4-0001",
+      "seq": 4,
+      "kind": "span_end",
+      "capturedAt": "2025-06-01T14:00:01.900Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-4-0006",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY4",
+      "spanId": null,
+      "seq": 5,
+      "kind": "interaction_end",
+      "capturedAt": "2025-06-01T14:00:02.000Z",
+      "evidenceStatus": "captured"
+    }
+  ]
+}

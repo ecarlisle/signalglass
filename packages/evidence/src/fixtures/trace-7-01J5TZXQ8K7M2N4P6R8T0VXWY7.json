@@ -1,0 +1,98 @@
+{
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": {
+    "name": "dev-basic",
+    "version": "1.2.0"
+  },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:03.600Z",
+  "status": "completed",
+  "spans": [
+    {
+      "spanId": "span-7-0001",
+      "kind": "context_provider",
+      "name": "context_provider:graphify",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 4,
+      "startedAt": "2025-06-01T14:00:03.400Z",
+      "finishedAt": "2025-06-01T14:00:03.500Z",
+      "durationMs": 100,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    {
+      "eventId": "evt-7-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+      "spanId": null,
+      "seq": 0,
+      "kind": "interaction_start",
+      "capturedAt": "2025-06-01T14:00:00.123Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-7-0002",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+      "spanId": "span-7-0001",
+      "seq": 1,
+      "kind": "span_start",
+      "capturedAt": "2025-06-01T14:00:03.400Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-7-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+      "spanId": "span-7-0001",
+      "seq": 2,
+      "kind": "context_provider_request",
+      "capturedAt": "2025-06-01T14:00:03.400Z",
+      "evidenceStatus": "captured",
+      "observationRole": "client_sent",
+      "contextProvider": {
+        "name": "graphify",
+        "kind": "codebase_graph"
+      }
+    },
+    {
+      "eventId": "evt-7-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+      "spanId": "span-7-0001",
+      "seq": 3,
+      "kind": "context_provider_result",
+      "capturedAt": "2025-06-01T14:00:03.500Z",
+      "evidenceStatus": "truncated",
+      "observationRole": "returned",
+      "truncation": {
+        "maxLength": 8000,
+        "originalLength": 12403
+      },
+      "contextProvider": {
+        "name": "graphify",
+        "kind": "codebase_graph"
+      }
+    },
+    {
+      "eventId": "evt-7-0005",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+      "spanId": "span-7-0001",
+      "seq": 4,
+      "kind": "span_end",
+      "capturedAt": "2025-06-01T14:00:03.500Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-7-0006",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY7",
+      "spanId": null,
+      "seq": 5,
+      "kind": "interaction_end",
+      "capturedAt": "2025-06-01T14:00:03.600Z",
+      "evidenceStatus": "captured"
+    }
+  ]
+}

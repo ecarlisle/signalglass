@@ -16,6 +16,12 @@ types, runtime validators, parse/serialize, and deterministic normalization
 pending, so the spec is not yet **Implemented**: criteria 1, 2, 3, 6, 7, 10,
 and 15 remain unchecked.
 
+**Slice 2 (deterministic fixtures and negative controls, §8.2)** — the
+deterministic serialized fixtures for the nine normative examples in
+`docs/evidence-model.md`, fixture-backed positive tests, deterministic
+negative controls, retained-byte Base64 fixture coverage, and version-
+compatibility fixture coverage — is implemented.
+
 ## Purpose
 
 Turn the accepted Spec 013 evidence contract into a precise, testable first

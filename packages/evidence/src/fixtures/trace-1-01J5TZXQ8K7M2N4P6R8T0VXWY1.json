@@ -1,0 +1,73 @@
+{
+  "interactionId": "01J5TZXQ8K7M2N4P6R8T0VXWY1",
+  "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1",
+  "evidenceSchemaVersion": "1.0.0",
+  "captureProfile": {
+    "name": "dev-basic",
+    "version": "1.2.0"
+  },
+  "captureSurface": "client_side",
+  "observationBoundary": "application_constructed",
+  "startedAt": "2025-06-01T14:00:00.123Z",
+  "finishedAt": "2025-06-01T14:00:05.411Z",
+  "status": "completed",
+  "conditions": [
+    {
+      "label": "prompt_variant",
+      "value": "baseline",
+      "version": "1.0.0"
+    }
+  ],
+  "spans": [
+    {
+      "spanId": "span-1-0001",
+      "kind": "model",
+      "name": "model:claude-sonnet-4",
+      "parentSpanId": null,
+      "startSeq": 1,
+      "endSeq": 2,
+      "startedAt": "2025-06-01T14:00:00.200Z",
+      "finishedAt": "2025-06-01T14:00:05.300Z",
+      "durationMs": 5100,
+      "status": "completed"
+    }
+  ],
+  "events": [
+    {
+      "eventId": "evt-1-0001",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1",
+      "spanId": null,
+      "seq": 0,
+      "kind": "interaction_start",
+      "capturedAt": "2025-06-01T14:00:00.123Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-1-0002",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1",
+      "spanId": "span-1-0001",
+      "seq": 1,
+      "kind": "span_start",
+      "capturedAt": "2025-06-01T14:00:00.200Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-1-0003",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1",
+      "spanId": "span-1-0001",
+      "seq": 2,
+      "kind": "span_end",
+      "capturedAt": "2025-06-01T14:00:05.300Z",
+      "evidenceStatus": "captured"
+    },
+    {
+      "eventId": "evt-1-0004",
+      "traceId": "01J5TZXQ8K7M2N4P6R8T0VXWY1",
+      "spanId": null,
+      "seq": 3,
+      "kind": "interaction_end",
+      "capturedAt": "2025-06-01T14:00:05.411Z",
+      "evidenceStatus": "captured"
+    }
+  ]
+}

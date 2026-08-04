@@ -66,7 +66,7 @@ Infrastructure specifications ([001](001-workspace.md), [005](005-provider-adapt
 | [011](011-cli.md) | CLI | Implemented (analyze, ingress, traces) |
 | [012](012-versioning-and-releases.md) | Versioning and releases | Accepted — references legacy v0.x public surfaces |
 | [013](013-evidence-model.md) | Evidence model | **Accepted — canonical evidence contract** |
-| [014](014-evidence-primitives.md) | Evidence primitives | **Accepted — ready to implement**; additive TypeScript primitives and compatibility projections for the accepted evidence contract (Spec 013). Slice 1 foundation (`@signalglass/evidence`, dependency-free) implemented; projections and migration slices pending |
+| [014](014-evidence-primitives.md) | Evidence primitives | **Accepted — not fully Implemented**; additive TypeScript primitives and compatibility projections for the accepted evidence contract (Spec 013). Slice 1 foundation (`@signalglass/evidence`, dependency-free) implemented; Slice 2 deterministic fixtures and negative controls implemented; projections and migration slices pending |
 
 ## Project framing
 
