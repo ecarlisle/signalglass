@@ -5,8 +5,10 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  parseEvidenceRecord,
-  normalizeEvidenceRecord,
+  isEventRecord,
+  isSpanRecord,
+  isRequestEnvelope,
+  isResponseEnvelope,
   isEventKind,
   isEvidenceStatus,
   isObservationRole,
@@ -41,9 +43,8 @@ function loadAllTraceFixtures(): Array<{ name: string; data: unknown }> {
 
 /**
  * Validates the basic structure of a trace fixture.
- * // fallow-ignore-next-line complexity
  */
-function validateTraceStructure(trace: Record<string, unknown>, name: string): void {
+function validateTraceStructure(trace: Record<string, unknown>): void {
   expect(trace.interactionId).toBe(trace.traceId);
   expect(trace.evidenceSchemaVersion).toBe('1.0.0');
   expect(trace.captureProfile).toBeDefined();
@@ -60,10 +61,8 @@ function validateTraceStructure(trace: Record<string, unknown>, name: string): v
 
 /**
  * Validates the event sequence of a trace fixture.
- * // fallow-ignore-next-line complexity
  */
-// fallow-ignore-next-line complexity
-function validateEventSequence(trace: Record<string, unknown>, name: string): void {
+function validateEventSequence(trace: Record<string, unknown>): void {
   const events = trace.events as Array<Record<string, unknown>>;
 
   expect(events[0]?.seq).toBe(0);
@@ -82,26 +81,33 @@ function validateEventSequence(trace: Record<string, unknown>, name: string): vo
     expect(validStatuses).toContain(ev.evidenceStatus);
   }
 
-  if (trace.spans) {
-    const spans = trace.spans as Array<Record<string, unknown>>;
-    for (const span of spans) {
-      const startEv = events.find((e: Record<string, unknown>) => e.kind === 'span_start' && e.spanId === span.spanId);
-      const endEv = events.find((e: Record<string, unknown>) => e.kind === 'span_end' && e.spanId === span.spanId);
-      expect(startEv).toBeDefined();
-      expect(endEv).toBeDefined();
-      if (startEv && endEv) {
-        expect(span.startSeq).toBe(startEv.seq);
-        expect(span.endSeq).toBe(endEv.seq);
-      }
+  validateSpanEvents(events, trace.spans as Array<Record<string, unknown>> | undefined);
+}
+
+/**
+ * Validates span events against the event sequence.
+ */
+function validateSpanEvents(
+  events: Array<Record<string, unknown>>,
+  spans: Array<Record<string, unknown>> | undefined
+): void {
+  if (!spans) return;
+  for (const span of spans) {
+    const startEv = events.find((e: Record<string, unknown>) => e.kind === 'span_start' && e.spanId === span.spanId);
+    const endEv = events.find((e: Record<string, unknown>) => e.kind === 'span_end' && e.spanId === span.spanId);
+    expect(startEv).toBeDefined();
+    expect(endEv).toBeDefined();
+    if (startEv && endEv) {
+      expect(span.startSeq).toBe(startEv.seq);
+      expect(span.endSeq).toBe(endEv.seq);
     }
   }
 }
 
 /**
  * Validates observationRole rules on a trace fixture.
- * // fallow-ignore-next-line complexity
  */
-function validateObservationRoles(trace: Record<string, unknown>, name: string): void {
+function validateObservationRoles(trace: Record<string, unknown>): void {
   const events = trace.events as Array<Record<string, unknown>>;
   const controlKinds = new Set(['interaction_start', 'interaction_end', 'span_start', 'span_end']);
   for (const ev of events) {
@@ -115,9 +121,8 @@ function validateObservationRoles(trace: Record<string, unknown>, name: string):
 
 /**
  * Validates envelope fidelity/status contract on a trace fixture.
- * // fallow-ignore-next-line complexity
  */
-function validateEnvelopeFidelity(trace: Record<string, unknown>, name: string): void {
+function validateEnvelopeFidelity(trace: Record<string, unknown>): void {
   for (const ev of trace.events as Array<Record<string, unknown>>) {
     if (ev.requestEnvelope) {
       const env = ev.requestEnvelope as Record<string, unknown>;
@@ -143,10 +148,9 @@ function validateEnvelopeFidelity(trace: Record<string, unknown>, name: string):
 }
 
 /**
- * Validates a trace fixture as a canonical trace view.
- * // fallow-ignore-next-line complexity
+ * Validates a trace fixture as a canonical trace view using public guards.
  */
-function validateCanonicalTraceView(trace: Record<string, unknown>, name: string): void {
+function validateCanonicalTraceView(trace: Record<string, unknown>): void {
   const events = trace.events as Array<Record<string, unknown>>;
 
   expect(events.length).toBeGreaterThan(0);
@@ -154,65 +158,41 @@ function validateCanonicalTraceView(trace: Record<string, unknown>, name: string
   expect(events[events.length - 1]?.kind).toBe('interaction_end');
 
   for (const ev of events) {
-    expect(ev.eventId).toBeDefined();
-    expect(ev.traceId).toBe(trace.traceId);
-    expect(typeof ev.seq).toBe('number');
-    expect(ev.kind).toBeDefined();
-    expect(ev.capturedAt).toBeDefined();
-    expect(ev.evidenceStatus).toBeDefined();
+    // Validate using the public EventRecord guard
+    expect(isEventRecord(ev)).toBe(true);
+  }
+
+  // Validate spans using public guard
+  const spans = (trace.spans as Array<Record<string, unknown>>) || [];
+  for (const span of spans) {
+    expect(isSpanRecord(span)).toBe(true);
   }
 }
 
 /**
- * Validates vocabulary validators on a trace fixture.
- * // fallow-ignore-next-line complexity
+ * Validates envelope fidelity/status using public guards.
  */
-// fallow-ignore-next-line complexity
-function validateVocabularyValidators(trace: Record<string, unknown>, name: string): void {
-  const events = trace.events as Array<Record<string, unknown>>;
-  const spans = (trace.spans as Array<Record<string, unknown>>) || [];
-
-  for (const ev of events) {
-    expect(isEventKind(ev.kind as string)).toBe(true);
-    expect(isEvidenceStatus(ev.evidenceStatus as string)).toBe(true);
-    if (ev.observationRole !== undefined) {
-      expect(isObservationRole(ev.observationRole as string)).toBe(true);
-    }
-    expect(isIdentifier(ev.eventId as string)).toBe(true);
-    expect(isIdentifier(ev.traceId as string)).toBe(true);
-    expect(isSeq(ev.seq as number)).toBe(true);
-    expect(isTimestamp(ev.capturedAt as string)).toBe(true);
-  }
-
-  for (const span of spans) {
-    expect(isSpanKind(span.kind as string)).toBe(true);
-    expect(isSpanId(span.spanId as string)).toBe(true);
-    if (span.parentSpanId !== null && span.parentSpanId !== undefined) {
-      expect(isOptionalSpanId(span.parentSpanId as string | null)).toBe(true);
-    }
-  }
-
+function validateEnvelopeGuards(trace: Record<string, unknown>): void {
   for (const ev of trace.events as Array<Record<string, unknown>>) {
     if (ev.requestEnvelope) {
+      expect(isRequestEnvelope(ev.requestEnvelope)).toBe(true);
       const env = ev.requestEnvelope as Record<string, unknown>;
-      if (env.nativeContentType) {
-        expect(isContentType(env.nativeContentType as string)).toBe(true);
+      if (env.providerNativeFidelity === 'byte_faithful') {
+        expect(ev.evidenceStatus).toBe('captured');
+        expect(env.nativeEncoding).toBeDefined();
+        expect(env.nativeContentType).toBeDefined();
+        expect(env.nativeContentHash).toBeDefined();
       }
     }
     if (ev.responseEnvelope) {
+      expect(isResponseEnvelope(ev.responseEnvelope)).toBe(true);
       const env = ev.responseEnvelope as Record<string, unknown>;
-      if (env.nativeContentType) {
-        expect(isContentType(env.nativeContentType as string)).toBe(true);
+      if (env.providerNativeFidelity === 'byte_faithful') {
+        expect(ev.evidenceStatus).toBe('captured');
+        expect(env.nativeEncoding).toBeDefined();
+        expect(env.nativeContentType).toBeDefined();
+        expect(env.nativeContentHash).toBeDefined();
       }
-    }
-  }
-
-  for (const ev of trace.events as Array<Record<string, unknown>>) {
-    if (ev.requestEnvelope && (ev.requestEnvelope as Record<string, unknown>).nativeContentHash) {
-      expect(isContentHash((ev.requestEnvelope as Record<string, unknown>).nativeContentHash as string)).toBe(true);
-    }
-    if (ev.responseEnvelope && (ev.responseEnvelope as Record<string, unknown>).nativeContentHash) {
-      expect(isContentHash((ev.responseEnvelope as Record<string, unknown>).nativeContentHash as string)).toBe(true);
     }
   }
 }
@@ -245,78 +225,27 @@ describe('Normative fixtures — positive tests (Spec 014 §8.2)', () => {
   });
 
   it.each(traceFixtures)('trace fixture $name has valid structure', ({ name, data }) => {
-    validateTraceStructure(data as Record<string, unknown>, name);
+    validateTraceStructure(data as Record<string, unknown>);
   });
 
   it.each(traceFixtures)('trace fixture $name has valid event sequence', ({ name, data }) => {
-    validateEventSequence(data as Record<string, unknown>, name);
+    validateEventSequence(data as Record<string, unknown>);
   });
 
   it.each(traceFixtures)('trace fixture $name has valid observationRole rules', ({ name, data }) => {
-    validateObservationRoles(data as Record<string, unknown>, name);
+    validateObservationRoles(data as Record<string, unknown>);
   });
 
   it.each(traceFixtures)('trace fixture $name has valid envelope fidelity/status contract', ({ name, data }) => {
-    validateEnvelopeFidelity(data as Record<string, unknown>, name);
+    validateEnvelopeFidelity(data as Record<string, unknown>);
   });
 
-  it.each(traceFixtures)('trace fixture $name validates as a canonical trace view', ({ name, data }) => {
-    validateCanonicalTraceView(data as Record<string, unknown>, name);
+  it.each(traceFixtures)('trace fixture $name validates as a canonical trace view using public guards', ({ name, data }) => {
+    validateCanonicalTraceView(data as Record<string, unknown>);
   });
 
-  it.each(traceFixtures)('trace fixture $name passes public vocabulary validators',
-    // fallow-ignore-next-line complexity
-    ({ name, data }) => {
-    const trace = data as Record<string, unknown>;
-    const events = trace.events as Array<Record<string, unknown>>;
-    const spans = (trace.spans as Array<Record<string, unknown>>) || [];
-
-    for (const ev of events) {
-      expect(isEventKind(ev.kind as string)).toBe(true);
-      expect(isEvidenceStatus(ev.evidenceStatus as string)).toBe(true);
-      if (ev.observationRole !== undefined) {
-        expect(isObservationRole(ev.observationRole as string)).toBe(true);
-      }
-      expect(isIdentifierString(ev.eventId as string)).toBe(true);
-      expect(isIdentifierString(ev.traceId as string)).toBe(true);
-      // isSeq, isTimestamp not exported from public API; validated via normalizeEvidenceRecord
-      expect(typeof ev.seq).toBe('number');
-      expect((ev.seq as number) >= 0).toBe(true);
-      expect(typeof ev.capturedAt).toBe('string');
-    }
-
-    for (const span of (trace.spans as Array<Record<string, unknown>>) || []) {
-      expect(isSpanKind(span.kind as string)).toBe(true);
-      // isSpanId, isOptionalSpanId not exported from public API
-      expect(typeof span.spanId).toBe('string');
-      if (span.parentSpanId !== null && span.parentSpanId !== undefined) {
-        expect(typeof span.parentSpanId).toBe('string');
-      }
-    }
-
-    for (const ev of trace.events as Array<Record<string, unknown>>) {
-      if (ev.requestEnvelope) {
-        const env = ev.requestEnvelope as Record<string, unknown>;
-        if (env.nativeContentType) {
-          expect(isContentType(env.nativeContentType as string)).toBe(true);
-        }
-      }
-      if (ev.responseEnvelope) {
-        const env = ev.responseEnvelope as Record<string, unknown>;
-        if (env.nativeContentType) {
-          expect(isContentType(env.nativeContentType as string)).toBe(true);
-        }
-      }
-    }
-
-    for (const ev of trace.events as Array<Record<string, unknown>>) {
-      if (ev.requestEnvelope && (ev.requestEnvelope as Record<string, unknown>).nativeContentHash) {
-        expect(isContentHash((ev.requestEnvelope as Record<string, unknown>).nativeContentHash as string)).toBe(true);
-      }
-      if (ev.responseEnvelope && (ev.responseEnvelope as Record<string, unknown>).nativeContentHash) {
-        expect(isContentHash((ev.responseEnvelope as Record<string, unknown>).nativeContentHash as string)).toBe(true);
-      }
-    }
+  it.each(traceFixtures)('trace fixture $name passes public envelope guards', ({ name, data }) => {
+    validateEnvelopeGuards(data as Record<string, unknown>);
   });
 });
 
