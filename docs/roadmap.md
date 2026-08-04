@@ -8,12 +8,12 @@ SignalGlass follows SemVer and is currently pre-1.0. Minor versions represent mi
 
 **Updated:** August 4, 2026
 
-This forecast translates the dependency-ordered roadmap into ten focused implementation slices after the Spec 014 compatibility-projection work in PR #18. It is a planning aid, not an architectural contract, release promise, or change to any specification.
+This forecast translates the dependency-ordered roadmap into ten near-term implementation slices after the Spec 014 compatibility-projection work in PR #18, then extends the sequence through a working 1.0 target. It is a planning aid, not an architectural contract, release promise, or change to any specification.
 
 The forecast assumes:
 
 - PR #18 merges by August 7, 2026.
-- Work proceeds at approximately one focused implementation PR every 3–5 working days.
+- Near-term work proceeds at approximately one focused implementation PR every 3–5 working days; later integration and hardening slices may require 5–8 working days.
 - Review findings may change scope, dates, or ordering.
 - Slice names and dependency order are stable planning references. GitHub PR numbers are anticipated only and may shift if another PR is opened.
 - This documentation-only roadmap PR is expected to occupy #19; therefore the implementation PRs below begin at anticipated #20.
@@ -44,6 +44,55 @@ The forecast assumes:
 “Possible” arrives in stages. The first Pi milestone proves that SignalGlass can observe a real model interaction; the following Pi slice adds agent-level activity. The Graphify adapter captures a separately labeled condition before the React explorer displays it. The final comparison slice connects Graphify provenance to the controlled-comparison experience.
 
 These slices preserve the evidence-first dependency chain: validate compatibility, capture and store evidence, derive measurements, then visualize and compare. Graphify remains an external observed system; SignalGlass does not silently modify its results or place it inside the trusted decision-making path.
+
+
+### Forecast through 1.0
+
+The working 1.0 target is **January 22, 2027**, with approximately three weeks of uncertainty. For planning purposes, 1.0 means a dependable local/self-hosted observability product that can capture real Pi interactions, preserve canonical evidence, display traces in React, observe Graphify and MCP activity, compare controlled runs, export data safely, and recover predictably from failures. It does not require support for every provider or agent framework.
+
+After the ten near-term slices, the anticipated sequence continues as follows:
+
+| Slice | Anticipated PR | Forecast window | Planned result |
+|---|---:|---|---|
+| Secure export and explicit redaction workflow | #30 | Sep 21–29 | Complete the initial trace-explorer feature set with safe, reviewable exports. |
+| Experiment manifests and declared conditions | #31 | Sep 25–Oct 5 | Make baseline, MCP-assisted, and Graphify-assisted runs formally reproducible. |
+| Deterministic comparison engine | #32 | Oct 1–9 | Compare evidence-backed measurements without declaring unsupported winners. |
+| React comparison experience | #33 | Oct 7–15 | Make controlled experiments usable through the UI. |
+| Replay package and reproducibility metadata | #34 | Oct 13–21 | Reconstruct or reissue captured interactions with visible limitations and declared environments. |
+| Second provider adapter | #35 | Oct 19–28 | Demonstrate that the evidence model is provider-neutral. |
+| OpenTelemetry export and import | #36 | Oct 26–Nov 4 | Establish initial ecosystem portability. |
+| Retention, deletion records, and access boundaries | #37 | Nov 2–11 | Make the evidence privacy lifecycle explicit and testable. |
+| Local/self-hosted deployment packaging | #38 | Nov 9–18 | Provide a documented installation and upgrade path. |
+| Reliability, recovery, and incomplete-trace handling | #39 | Nov 16–25 | Harden interrupted streams, partial writes, retries, and corrupted inputs. |
+| Security and privacy review corrections | #40 | Nov 23–Dec 4 | Verify secret handling, redaction, exports, retention, and safe defaults. |
+| Performance and scale qualification | #41 | Dec 1–11 | Establish practical ingestion, trace-size, query, and UI-performance limits. |
+| Documentation, onboarding, and example experiments | #42 | Dec 8–18 | Provide a complete guided workflow from Pi capture to React inspection. |
+| 1.0 release-candidate preparation | #43 | Dec 14–18 | Enter feature freeze; only release-blocking corrections follow. |
+| Release-candidate corrections | #44 | Jan 5–15 | Address defects found during real Pi and Graphify trials. |
+| 1.0 release preparation | #45 | Jan 12–22 | Complete versioning, migrations, compatibility notes, final checks, and the 1.0 release. |
+
+The period from **December 19, 2026 through January 8, 2027** is reserved for real-world release-candidate testing and holiday schedule variability. It is not assigned a separate implementation PR.
+
+### Readiness and release gates
+
+The historical v0.x versions below retain their existing meanings. This forecast therefore uses named readiness gates rather than reusing already-delivered version numbers.
+
+| Gate | Forecast date | Meaning |
+|---|---:|---|
+| Pi capture readiness | August 27, 2026 | First real Pi interaction captured as canonical evidence. |
+| Pi and Graphify exploration readiness | September 22, 2026 | Pi and Graphify traces visible and comparable at a basic level in React. |
+| Controlled-comparison readiness | October 15, 2026 | Declared experiments and deterministic comparisons usable in React. |
+| Local deployment readiness | November 18, 2026 | Documented local/self-hosted packaging is available for evaluation. |
+| 1.0 release candidate | December 18, 2026 | Planned feature freeze and start of release qualification. |
+| **1.0 working target** | **January 22, 2027** | Stable, documented release under the scoped 1.0 definition above. |
+
+The current confidence range is:
+
+- **Aggressive:** December 18, 2026.
+- **Working forecast:** January 22, 2027.
+- **Conservative:** February 12, 2027.
+
+Later dates have more uncertainty than the near-term capability milestones because security review, deployment, performance qualification, and real-world trials can reveal cross-cutting work. PR numbers remain anticipated identifiers; slice names and dependency order are the more stable planning references.
 
 ## Target roadmap (in dependency order)
 
