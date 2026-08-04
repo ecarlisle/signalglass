@@ -110,6 +110,8 @@ export const PROJECTION_ISSUE_CODES = {
   lifecycleInvalid: 'invalid_lifecycle',
   /** Legacy trace lacks an array `events` collection. */
   invalidEventCollection: 'invalid_event_collection',
+  /** Legacy trace lacks a valid non-empty string `id` (needed to namespace deterministic ids). */
+  invalidLegacyTrace: 'invalid_legacy_trace',
   /** A legacy `events` entry fails the projection-boundary shape/vocabulary checks. */
   invalidLegacyEvent: 'invalid_legacy_event',
 } as const;

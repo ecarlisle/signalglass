@@ -218,7 +218,7 @@ describe('legacyTraceToAgentRun — determinism', () => {
 
 describe('legacyTraceToAgentRun — structured failure and metadata', () => {
   it('returns ok:false for an absent events collection', () => {
-    const result = legacyTraceToAgentRun({} as Trace);
+    const result = legacyTraceToAgentRun({ id: 'trace-1' } as Trace);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.issues).toHaveLength(1);
@@ -228,7 +228,7 @@ describe('legacyTraceToAgentRun — structured failure and metadata', () => {
   });
 
   it('returns ok:false for a non-array events collection', () => {
-    const result = legacyTraceToAgentRun({ events: 'not-an-array' } as unknown as Trace);
+    const result = legacyTraceToAgentRun({ id: 'trace-1', events: 'not-an-array' } as unknown as Trace);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.issues[0]!.code).toBe(PROJECTION_ISSUE_CODES.invalidEventCollection);
@@ -237,6 +237,24 @@ describe('legacyTraceToAgentRun — structured failure and metadata', () => {
   it('returns ok:false for a null trace without throwing', () => {
     const result = legacyTraceToAgentRun(null as unknown as Trace);
     expect(result.ok).toBe(false);
+  });
+
+  it('returns ok:false for a trace without a valid string id (no synthesized-id collision namespace)', () => {
+    const noId = legacyTraceToAgentRun(makeTrace([], { id: undefined }));
+    expect(noId.ok).toBe(false);
+    if (noId.ok) return;
+    expect(noId.issues[0]!.code).toBe(PROJECTION_ISSUE_CODES.invalidLegacyTrace);
+    expect(noId.issues[0]!.path).toBe('id');
+
+    const emptyId = legacyTraceToAgentRun(makeTrace([], { id: '' }));
+    expect(emptyId.ok).toBe(false);
+    if (emptyId.ok) return;
+    expect(emptyId.issues[0]!.code).toBe(PROJECTION_ISSUE_CODES.invalidLegacyTrace);
+
+    const numericId = legacyTraceToAgentRun(makeTrace([], { id: 7 as unknown as string }));
+    expect(numericId.ok).toBe(false);
+    if (numericId.ok) return;
+    expect(numericId.issues[0]!.code).toBe(PROJECTION_ISSUE_CODES.invalidLegacyTrace);
   });
 
   it('carries the projection version and legacy source schema version', () => {

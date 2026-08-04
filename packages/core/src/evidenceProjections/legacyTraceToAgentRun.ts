@@ -133,7 +133,27 @@ function makeDeterministicIdGenerator(traceId: string): () => string {
  * after validation fails. Never throws on expected invalid input.
  */
 export function legacyTraceToAgentRun(trace: Trace): ProjectionResult<AgentRun> {
-  if (trace == null || !Array.isArray(trace.events)) {
+  if (trace == null || typeof trace.id !== 'string' || trace.id.length === 0) {
+    const issues: ProjectionIssue[] = [
+      {
+        path: 'id',
+        stage: STAGE,
+        code: PROJECTION_ISSUE_CODES.invalidLegacyTrace,
+        message:
+          'Cannot build an AgentRun view: the legacy trace lacks a valid non-empty string id (needed to namespace deterministic synthesized ids).',
+      },
+    ];
+    return {
+      ok: false,
+      report: {
+        projectionVersion: LEGACY_TRACE_TO_AGENT_RUN_PROJECTION_VERSION,
+        sourceSchemaVersion: LEGACY_TRACE_SCHEMA_VERSION,
+        mappings: [],
+      },
+      issues,
+    };
+  }
+  if (!Array.isArray(trace.events)) {
     const issues: ProjectionIssue[] = [
       {
         path: 'events',
