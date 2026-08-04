@@ -4,6 +4,47 @@ SignalGlass follows SemVer and is currently pre-1.0. Minor versions represent mi
 
 **Direction:** The authoritative target direction is [`docs/architectural-foundation.md`](architectural-foundation.md). This roadmap is directional, not a release ledger, and it is ordered by dependency: **evidence model, capture fidelity, completeness, deterministic measurements, and streaming come before optimization features.** Optimization-oriented functionality (reduction previews, budgets, recommendations as core features) is deferred until the evidence foundation exists.
 
+## Near-term implementation forecast (non-binding)
+
+**Updated:** August 4, 2026
+
+This forecast translates the dependency-ordered roadmap into ten focused implementation slices after the Spec 014 compatibility-projection work in PR #18. It is a planning aid, not an architectural contract, release promise, or change to any specification.
+
+The forecast assumes:
+
+- PR #18 merges by August 7, 2026.
+- Work proceeds at approximately one focused implementation PR every 3–5 working days.
+- Review findings may change scope, dates, or ordering.
+- Slice names and dependency order are stable planning references. GitHub PR numbers are anticipated only and may shift if another PR is opened.
+- This documentation-only roadmap PR is expected to occupy #19; therefore the implementation PRs below begin at anticipated #20.
+
+| Slice | Anticipated PR | Forecast window | Planned result |
+|---|---:|---|---|
+| Analyzer parity | #20 | Aug 7–13 | Complete Spec 014 slice 4 by verifying that canonical-evidence projections preserve the applicable legacy analyzer behavior. |
+| Append-only evidence store | #21 | Aug 12–18 | Persist and retrieve canonical records without overwriting authoritative observations. |
+| Streaming ingress and trace assembly | #22 | Aug 17–21 | Assemble durable records from requests, response chunks, usage, errors, and lifecycle events. |
+| Pi provider-boundary capture | #23 | Aug 20–27 | Enable the first Pi smoke test, initially through stored evidence and JSON/report output. |
+| Pi agent, tool, and MCP instrumentation | #24 | Aug 25–Sep 1 | Make Pi testing representative of agent behavior by observing tool calls, MCP activity, context assembly, and provenance. |
+| Deterministic measurements | #25 | Aug 28–Sep 4 | Add versioned latency, token, usage, completeness, and cost derivations without changing evidence. |
+| Graphify capture adapter | #26 | Sep 2–9 | Observe Graphify-assisted activity as an explicitly labeled experimental condition. |
+| Trace query/read API | #27 | Sep 7–11 | Expose stable trace summaries, events, evidence, and measurements to UI consumers. |
+| React trace explorer MVP | #28 | Sep 10–17 | Make captured data viewable through a trace list, detail view, timeline, events, and basic measurements. |
+| Graphify provenance and comparison UI | #29 | Sep 15–22 | Make Graphify activity visible and comparable with baseline or non-Graphify runs. |
+
+### Forecast capability milestones
+
+| Capability | First useful slice | Forecast availability |
+|---|---|---|
+| Basic Pi testing | Pi provider-boundary capture (anticipated #23) | Around August 27 |
+| Full Pi agent/tool testing | Pi agent, tool, and MCP instrumentation (anticipated #24) | Around September 1 |
+| Initial Graphify integration | Graphify capture adapter (anticipated #26) | Around September 9 |
+| Data viewable in React | React trace explorer MVP (anticipated #28) | Around September 17 |
+| Graphify data visible and comparable in React | Graphify provenance and comparison UI (anticipated #29) | Around September 22 |
+
+“Possible” arrives in stages. The first Pi milestone proves that SignalGlass can observe a real model interaction; the following Pi slice adds agent-level activity. The Graphify adapter captures a separately labeled condition before the React explorer displays it. The final comparison slice connects Graphify provenance to the controlled-comparison experience.
+
+These slices preserve the evidence-first dependency chain: validate compatibility, capture and store evidence, derive measurements, then visualize and compare. Graphify remains an external observed system; SignalGlass does not silently modify its results or place it inside the trusted decision-making path.
+
 ## Target roadmap (in dependency order)
 
 ### Evidence foundation
