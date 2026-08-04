@@ -7,5 +7,7 @@ export * from './smells.js';
 export * from './recommendations.js';
 export * from './traces.js';
 export * from './privacy.js';
+export * from './evidenceProjections/index.js';
 export { traceToAgentRun } from './traceToAgentRun.js';
+export type { TraceToAgentRunOptions } from './traceToAgentRun.js';
 export { analyzeRun } from './analyzer.js';

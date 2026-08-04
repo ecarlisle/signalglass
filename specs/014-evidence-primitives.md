@@ -11,16 +11,30 @@ implementation of the slices defined in this specification.
 The **foundation slice** (Spec 014 §8.1) — the dependency-free
 [`@signalglass/evidence`](../packages/evidence/README.md) package of canonical
 types, runtime validators, parse/serialize, and deterministic normalization
-— is implemented and satisfies the acceptance criteria checked below (20 of
-27). The compatibility-projection, migration, and parity slices remain
-pending, so the spec is not yet **Implemented**: criteria 1, 2, 3, 6, 7, 10,
-and 15 remain unchecked.
+— is implemented and satisfies the acceptance criteria checked below (25 of
+27). The migration and parity slices remain pending, so the spec is not yet
+**Implemented**: criteria 1 and 10 remain unchecked.
 
 **Slice 2 (deterministic fixtures and negative controls, §8.2)** — the
 deterministic serialized fixtures for the nine normative examples in
 `docs/evidence-model.md`, fixture-backed positive tests, deterministic
 negative controls, retained-byte Base64 fixture coverage, and version-
 compatibility fixture coverage — is implemented.
+
+**Slice 3 (compatibility projections beside the legacy types, §8.3)** — the
+three Spec 014 §6 projection directions in `@signalglass/core`
+(`packages/core/src/evidenceProjections/`): canonical `EvidenceRecord` →
+legacy `Trace`/`TraceEvent` view, legacy `Trace`/`TraceEvent` → legacy
+`AgentRun` view, and canonical `EvidenceRecord` → legacy `AgentRun` view as
+an explicit composition of the first two — with `ProjectionReport` /
+`ProjectionIssue` / `ProjectionResult` contracts, explicit loss metadata,
+and `@signalglass/core`'s workspace dependency on `@signalglass/evidence` —
+is implemented. Legacy modules are untouched except for an additive,
+backward-compatible injectable identifier generator on `traceToAgentRun`.
+This slice checks acceptance criteria 2, 3, 6, 7, and 15; criteria 1
+(primitive-to-Spec-013 mapping documentation) and 10 (slice-4 parity
+verification) remain unchecked, and Spec 013's §14 acceptance criteria stay
+unchecked.
 
 ## Purpose
 
@@ -1972,13 +1986,13 @@ first slice; every decision needed to implement it is specified above.
 
 - [ ] Spec 014 maps each initial primitive to its Spec 013 definition
   (§2.2), with no competing names for Spec 013 concepts.
-- [ ] The package/module boundary is explicit: `packages/evidence`
+- [x] The package/module boundary is explicit: `packages/evidence`
   (`@signalglass/evidence`) with projections in `@signalglass/core`
   (`packages/core/src/evidenceProjections/`) (§1.1). Canonical evidence
   types, validators, serialization, and helpers are imported directly from
   `@signalglass/evidence`; `@signalglass/core` does not re-export its
   dependency's API.
-- [ ] Public exports and dependency rules are defined: zero runtime
+- [x] Public exports and dependency rules are defined: zero runtime
   dependencies; no provider/storage/analysis imports; projections depend on
   the evidence package, never the reverse (§1.2–§1.4).
 - [x] The TypeScript type contract and the runtime-validation contract agree,
@@ -1990,12 +2004,12 @@ first slice; every decision needed to implement it is specified above.
   discriminants are refused with structured errors; unknown additive
   fields are preserved on round trips at equivalent JSON values (never
   claimed as lexical byte preservation); no silent coercion (§5.3–§5.5).
-- [ ] Compatibility projections are specified in the required directions:
+- [x] Compatibility projections are specified in the required directions:
   canonical evidence → legacy `Trace`/`TraceEvent` view, legacy
   `Trace`/`TraceEvent` view → legacy `AgentRun` view, and canonical evidence
   → legacy `AgentRun` view (as composition or direct convenience projection
   with equivalent loss metadata) (§6).
-- [ ] Projection loss and unavailable values are explicit through a
+- [x] Projection loss and unavailable values are explicit through a
   projection report (`exact`/`partial`/`inferred`/`unavailable`),
   projections never fabricate evidence, and projection results distinguish
   successful exact, successful lossy/partial, and explicit failure
@@ -2022,16 +2036,17 @@ first slice; every decision needed to implement it is specified above.
 - [x] Documentation and index references are consistent: the spec index
   lists Spec 014 as Accepted (not fully Implemented); the roadmap,
   glossary, and package README distinguish the implemented evidence
-  foundation slice from the pending compatibility-projection, migration,
-  and parity work, and no documentation claims Spec 014 is fully
-  Implemented.
+  foundation, deterministic-fixture, and compatibility-projection slices
+  from the pending projection-parity verification and migration work, and
+  no documentation claims Spec 014 is fully Implemented or describes the
+  compatibility projections as pending.
 - [x] The retained-byte serialization contract is pinned: RFC 4648 §4
   standard-alphabet Base64 with the canonical padding (zero, one, or two
   `=` characters exactly as the encoded length requires), canonical
   emission, noncanonical forms rejected (omitted/superfluous/malformed
   padding, URL-safe characters, whitespace), hashes over decoded bytes
   (§5.7).
-- [ ] Identifier responsibility is explicit: ids are caller-supplied opaque
+- [x] Identifier responsibility is explicit: ids are caller-supplied opaque
   values; generation is outside the evidence core; validators enforce
   syntax, uniqueness, and reference integrity; projections preserve valid
   legacy ids and report synthesized ids as `inferred` (§3.2).

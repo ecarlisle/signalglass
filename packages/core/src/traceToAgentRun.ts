@@ -7,6 +7,20 @@ function generateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/**
+ * Options for `traceToAgentRun`.
+ *
+ * `generateId` injects the identifier generator used for synthesized turn and
+ * context-block ids. When omitted, the legacy random generator is used and
+ * behavior is unchanged. Spec 014 compatibility projections pass a
+ * deterministic generator so identical traces produce identical `AgentRun`
+ * views (Spec 014 §6.5); synthesized ids are reported as `inferred` by the
+ * projection layer and are never presented as canonical evidence.
+ */
+export type TraceToAgentRunOptions = {
+  generateId?: () => string;
+};
+
 function generateRunName(trace: Trace): string {
   return trace.agent ?? trace.task ?? `trace-${trace.id}`;
 }
@@ -125,7 +139,11 @@ function sanitizeTraceMetadata(
   return value;
 }
 
-function eventToContextBlock(event: TraceEvent, turnId: string): ContextBlock | null {
+function eventToContextBlock(
+  event: TraceEvent,
+  turnId: string,
+  generateId: () => string,
+): ContextBlock | null {
   const sourceType = deriveSourceType(event);
   if (sourceType === null) return null;
 
@@ -283,13 +301,14 @@ function deriveTurnUsageMetadata(events: TraceEvent[]): TurnUsageMetadata {
  * are treated as a single turn. Multi-turn traces and streaming responses may
  * require boundary refinement in the future.
  */
-export function traceToAgentRun(trace: Trace): AgentRun {
+export function traceToAgentRun(trace: Trace, options: TraceToAgentRunOptions = {}): AgentRun {
+  const resolveId = options.generateId ?? generateId;
   const turnGroups = groupEventsIntoTurns(trace.events);
 
   const turns: Turn[] = turnGroups.map((events, index) => {
-    const turnId = generateId();
+    const turnId = resolveId();
     const contextBlocks = events
-      .map((event) => eventToContextBlock(event, turnId))
+      .map((event) => eventToContextBlock(event, turnId, resolveId))
       .filter((block): block is ContextBlock => block !== null);
     const usageMetadata = deriveTurnUsageMetadata(events);
 

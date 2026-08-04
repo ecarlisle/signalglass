@@ -2,8 +2,11 @@
 
 > **Foundation slice of [Spec 014 — Evidence primitives](../specs/014-evidence-primitives.md).**
 > Spec 014 is **Accepted, not fully Implemented**: this package delivers the
-> implemented foundation slice (§8.1) and deterministic fixture slice (§8.2),
-> while compatibility projections, migration, and parity work remain pending.
+> implemented foundation slice (§8.1) and the deterministic fixture slice
+> (§8.2); the compatibility projections are implemented beside the legacy
+> types in `@signalglass/core` (`packages/core/src/evidenceProjections/`,
+> §8.3). Projection parity verification (slice 4) and migration work remain
+> pending.
 
 Dependency-free, provider-neutral canonical evidence primitives: the
 authoritative evidence record types, runtime validators, JSON-safe

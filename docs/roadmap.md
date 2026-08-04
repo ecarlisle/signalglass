@@ -106,17 +106,27 @@ is accepted): interactions, spans, events, capture profiles, and versioning.
 compatibility projections before any storage or capture migration;
 acceptance authorizes implementation. Slice 1 (the dependency-free
 [`@signalglass/evidence`](../packages/evidence/README.md) foundation:
-types, validators, parse/serialize, normalization) is implemented;
-the compatibility-projection and migration slices remain pending.
+types, validators, parse/serialize, normalization) and Slice 2
+(deterministic fixtures and negative controls) are implemented; Slice 3
+(the compatibility projections in
+[`@signalglass/core/src/evidenceProjections/`](../packages/core/src/evidenceProjections/)
+— canonical evidence → legacy `Trace`/`TraceEvent` view, legacy
+`Trace`/`TraceEvent` → legacy `AgentRun` view, and canonical evidence →
+legacy `AgentRun` view) is implemented; projection parity verification
+(slice 4) and migration slices remain pending.
 
 - Interaction/span/event model with span parentage (`parentSpanId`) and events attached to spans (`spanId`).
 - Evidence records carry an evidence-schema version; derived measurement records carry an algorithm/derivation version plus references to their inputs.
 - Capture profiles as separate **collection**, **persistence**, and **export** decisions. A metadata-only profile must not collect full payloads in the first place. A redacted profile may discard content at its declared capture boundary. Full-fidelity capture is explicit, appropriately protected, and never the universal default.
-- Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification; to be re-framed as projections.
+- Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification; re-framed as compatibility projections (implemented in `@signalglass/core/src/evidenceProjections/`; projection-parity verification and migration pending).
 
 ### Deterministic fixtures and negative controls
 
 Deterministic serialized fixtures for the nine normative examples in `docs/evidence-model.md`, fixture-backed positive tests, deterministic negative controls covering status/fidelity/availability, media types/hashes, sequence/duplicates/gaps, and versions/discriminants, retained-byte Base64 fixture coverage, and version-compatibility fixture coverage — implemented per Spec 014 §8.2.
+
+### Compatibility projections
+
+Canonical `EvidenceRecord` → legacy `Trace`/`TraceEvent` view, legacy `Trace`/`TraceEvent` → legacy `AgentRun` view, and canonical `EvidenceRecord` → legacy `AgentRun` view (as explicit composition) with `ProjectionReport`/`ProjectionIssue`/`ProjectionResult` contracts and explicit loss metadata — implemented beside the legacy types in `@signalglass/core/src/evidenceProjections/` per Spec 014 §8.3. Projected views are ephemeral and non-authoritative; token fields remain unavailable until the deterministic measurement layer lands; parity verification (Spec 014 slice 4) and production capture/storage migration remain pending.
 
 ### Capture fidelity
 
