@@ -17,6 +17,7 @@
     "@signalglass/core": "workspace:*"
   },
   "devDependencies": {
+    "@signalglass/evidence": "workspace:*",
     "typescript": "^5.5.4",
     "vitest": "^1.6.0"
   }

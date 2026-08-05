@@ -20,7 +20,7 @@ The forecast assumes:
 
 | Slice | Anticipated PR | Forecast window | Planned result |
 |---|---:|---|---|
-| Analyzer parity | #20 | Aug 7–13 | Complete Spec 014 slice 4 by verifying that canonical-evidence projections preserve the applicable legacy analyzer behavior. |
+| Analyzer parity | #20 | Aug 7–13 | Complete Spec 014 slice 4: projection parity and loss verification — paired projection gates, analyzer/report parity over the real pipelines, and the loss-and-mapping matrix. (Implemented; see `packages/reports/src/projectionParity.test.ts` and `docs/evidence-projection-matrix.md`.) |
 | Append-only evidence store | #21 | Aug 12–18 | Persist and retrieve canonical records without overwriting authoritative observations. |
 | Streaming ingress and trace assembly | #22 | Aug 17–21 | Assemble durable records from requests, response chunks, usage, errors, and lifecycle events. |
 | Pi provider-boundary capture | #23 | Aug 20–27 | Enable the first Pi smoke test, initially through stored evidence and JSON/report output. |
@@ -102,23 +102,23 @@ Ratify the architectural foundation (done in the realignment docs PR); write
 and accept the evidence-model specification (done — [Spec 013](../specs/013-evidence-model.md)
 is accepted): interactions, spans, events, capture profiles, and versioning.
 [Spec 014 — Evidence primitives](../specs/014-evidence-primitives.md)
-(Accepted) defines the additive TypeScript evidence primitives and
-compatibility projections before any storage or capture migration;
-acceptance authorizes implementation. Slice 1 (the dependency-free
-[`@signalglass/evidence`](../packages/evidence/README.md) foundation:
-types, validators, parse/serialize, normalization) and Slice 2
-(deterministic fixtures and negative controls) are implemented; Slice 3
-(the compatibility projections in
-[`@signalglass/core/src/evidenceProjections/`](../packages/core/src/evidenceProjections/)
+(**Implemented** — 27/27 acceptance criteria) defines the additive
+TypeScript evidence primitives and compatibility projections before any
+storage or capture migration. All four Spec 014 slices are complete:
+Slice 1 (the dependency-free [`@signalglass/evidence`](../packages/evidence/README.md)
+foundation: types, validators, parse/serialize, normalization), Slice 2
+(deterministic fixtures and negative controls), Slice 3 (the compatibility
+projections in [`@signalglass/core/src/evidenceProjections/`](../packages/core/src/evidenceProjections/)
 — canonical evidence → legacy `Trace`/`TraceEvent` view, legacy
 `Trace`/`TraceEvent` → legacy `AgentRun` view, and canonical evidence →
-legacy `AgentRun` view) is implemented; projection parity verification
-(slice 4) and migration slices remain pending.
+legacy `AgentRun` view), and Slice 4 (projection parity and loss
+verification — see “Projection parity and loss verification” below).
+Production capture/storage migration belongs to later specifications.
 
 - Interaction/span/event model with span parentage (`parentSpanId`) and events attached to spans (`spanId`).
 - Evidence records carry an evidence-schema version; derived measurement records carry an algorithm/derivation version plus references to their inputs.
 - Capture profiles as separate **collection**, **persistence**, and **export** decisions. A metadata-only profile must not collect full payloads in the first place. A redacted profile may discard content at its declared capture boundary. Full-fidelity capture is explicit, appropriately protected, and never the universal default.
-- Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification; re-framed as compatibility projections (implemented in `@signalglass/core/src/evidenceProjections/`; projection-parity verification and migration pending).
+- Legacy v0.x models (`Trace`/`TraceEvent`, `AgentRun`) formally superseded by the accepted evidence-model specification; re-framed as compatibility projections (implemented in `@signalglass/core/src/evidenceProjections/`; projection parity verified in Spec 014 slice 4; production migration pending).
 
 ### Deterministic fixtures and negative controls
 
@@ -126,7 +126,11 @@ Deterministic serialized fixtures for the nine normative examples in `docs/evide
 
 ### Compatibility projections
 
-Canonical `EvidenceRecord` → legacy `Trace`/`TraceEvent` view, legacy `Trace`/`TraceEvent` → legacy `AgentRun` view, and canonical `EvidenceRecord` → legacy `AgentRun` view (as explicit composition) with `ProjectionReport`/`ProjectionIssue`/`ProjectionResult` contracts and explicit loss metadata — implemented beside the legacy types in `@signalglass/core/src/evidenceProjections/` per Spec 014 §8.3. Projected views are ephemeral and non-authoritative; token fields remain unavailable until the deterministic measurement layer lands; parity verification (Spec 014 slice 4) and production capture/storage migration remain pending.
+Canonical `EvidenceRecord` → legacy `Trace`/`TraceEvent` view, legacy `Trace`/`TraceEvent` → legacy `AgentRun` view, and canonical `EvidenceRecord` → legacy `AgentRun` view (as explicit composition) with `ProjectionReport`/`ProjectionIssue`/`ProjectionResult` contracts and explicit loss metadata — implemented beside the legacy types in `@signalglass/core/src/evidenceProjections/` per Spec 014 §8.3. Projected views are ephemeral and non-authoritative; token fields remain unavailable until the deterministic measurement layer lands; production capture/storage migration remains pending in later specifications.
+
+### Projection parity and loss verification
+
+Spec 014 slice 4: paired canonical/legacy fixtures with the exact-equality projection gate (`evidenceToLegacyTrace(record).view === legacyTrace`), analyzer and terminal/JSON/HTML report parity over the real public pipelines with a frozen clock, deterministic IDs asserted, sentinel non-leakage, and the loss-and-mapping matrix in [`docs/evidence-projection-matrix.md`](evidence-projection-matrix.md) (executable claim table `packages/core/src/evidenceProjections/projectionMappingMatrix.ts`) — implemented per Spec 014 §8.4, closing acceptance criteria 1 and 10 (Spec 014 is now **Implemented**, 27/27).
 
 ### Capture fidelity
 
