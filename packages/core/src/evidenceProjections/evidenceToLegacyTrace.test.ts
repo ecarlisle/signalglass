@@ -319,13 +319,62 @@ describe('evidenceToLegacyTrace — event-kind mapping', () => {
     }
   });
 
-  it('reports context contributions as unavailable loss on model_request', () => {
+  it('reports context contributions as unavailable loss on model_request and context_assembled', () => {
+    // The all-kinds fixture carries contributions on both kinds that can
+    // express them: model_request (events[2]) and context_assembled
+    // (events[14]). Both must produce an unavailable mapping at their exact
+    // event path — neither may disappear silently.
     const result = evidenceToLegacyTrace(allKindsRecord());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const contributionPaths = result.report.mappings
+      .filter((m) => m.path.endsWith('.contextContributions'))
+      .map((m) => m.path)
+      .sort();
+    expect(contributionPaths).toEqual([
+      'events[14].contextContributions',
+      'events[2].contextContributions',
+    ]);
+    for (const m of result.report.mappings) {
+      if (!m.path.endsWith('.contextContributions')) continue;
+      expect(m.outcome).toBe('unavailable');
+      expect(m.reason).toContain('context-contribution');
+      // Structural reason only: no artifact ids, locators, positions, or
+      // provenance states are echoed.
+      expect(m.reason).not.toContain('art-1');
+      expect(m.reason).not.toContain('whole');
+    }
+  });
+
+  it('does not report context contributions when no event carries the field', () => {
+    // The minimal fixture has neither model_request nor context_assembled
+    // contributions; an absent field must not produce a mapping.
+    const result = evidenceToLegacyTrace(buildRecord(minimalObservations()));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      result.report.mappings.some((m) => m.path.endsWith('.contextContributions')),
+    ).toBe(false);
+  });
+
+  it('reports an empty contextContributions array as present on context_assembled', () => {
+    // `contextContributions: []` is a present field (an empty contribution
+    // list), so the mapping is emitted — matching model_request semantics.
+    const record = buildRecord([
+      obs({ observationId: 'e0', eventId: 'evt-start', seq: 0, kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0 }),
+      obs({
+        observationId: 'e1', eventId: 'evt-ctx', seq: 1, kind: 'context_assembled',
+        capturedAt: T1, rawCapturedAt: T1, observationRole: 'application_constructed',
+        payload: { contextContributions: [] },
+      }),
+      obs({ observationId: 'e2', eventId: 'evt-end', seq: 2, kind: 'interaction_end', capturedAt: T2, rawCapturedAt: T2 }),
+    ]);
+    const result = evidenceToLegacyTrace(record);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(
       result.report.mappings.some(
-        (m) => m.path.endsWith('.contextContributions') && m.outcome === 'unavailable',
+        (m) => m.path === 'events[1].contextContributions' && m.outcome === 'unavailable',
       ),
     ).toBe(true);
   });

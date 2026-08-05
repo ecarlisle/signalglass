@@ -618,13 +618,22 @@ function pushRawDeclaration(
   });
 }
 
-/** Explicit accounting for context contributions (Spec 014 §6.3). */
+/**
+ * Explicit accounting for context contributions (Spec 014 §6.3): both
+ * `model_request` and `context_assembled` events carry
+ * `contextContributions`. The field is reported `unavailable` on whichever
+ * event actually carries it (as an array — including an empty one) and is
+ * never silently dropped; an event without the field produces no mapping.
+ */
 function pushContextContributionLossMapping(
   mappings: ProjectionMapping[],
   event: EventRecord,
   path: string,
 ): void {
-  if (event.kind !== 'model_request' || !Array.isArray(event.contextContributions)) return;
+  const carriesContributions =
+    (event.kind === 'model_request' || event.kind === 'context_assembled') &&
+    Array.isArray(event.contextContributions);
+  if (!carriesContributions) return;
   mappings.push({
     path: `${path}.contextContributions`,
     stage: STAGE,

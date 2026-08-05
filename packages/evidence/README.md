@@ -5,9 +5,12 @@
 > delivers the implemented foundation slice (§8.1) and the deterministic
 > fixture slice (§8.2); the compatibility projections are implemented beside
 > the legacy types in `@signalglass/core`
-> (`packages/core/src/evidenceProjections/`, §8.3), and projection parity and
-> loss verification (§8.4) is implemented in `packages/reports/`
-> (`projectionParity.test.ts`) with the loss-and-mapping matrix in
+> (`packages/core/src/evidenceProjections/`, §8.3). Spec 014 slice 4 (§8.4) —
+> projection parity and loss verification — is verified across
+> `@signalglass/core` (the executable loss-and-mapping matrix
+> `packages/core/src/evidenceProjections/projectionMappingMatrix.ts` with its
+> conformance test) and `@signalglass/reports` (the paired projection-parity
+> gate `packages/reports/src/projectionParity.test.ts`), documented in
 > [`docs/evidence-projection-matrix.md`](../docs/evidence-projection-matrix.md).
 > Production migration of capture/storage pipelines onto canonical evidence
 > belongs to later specifications, not unfinished Spec 014 work.

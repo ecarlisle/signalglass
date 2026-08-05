@@ -39,9 +39,13 @@ any such observation as a failure, and none is currently known.
 - `runtime` — the conformance test runs the named projection over the named
   fixture and asserts the actual report entry: mapping `path` + `stage` +
   `outcome` (plus a constrained `reasonIncludes` fragment where given), a
-  `reportField` equality, and a `viewAbsence` guarantee (the serialized view
-  contains none of the listed markers). **Every supplied constraint is
-  asserted together** — a passing `viewAbsence`/`reportField` check never
+  `reportField` equality, and a `viewAbsence` guarantee — the listed markers
+  stay out of **both** the projected view and the projection report, in any
+  representation: as strings, as raw `Uint8Array` bytes, or as numeric
+  arrays (a byte-aware walk, never a `JSON.stringify` heuristic — a leaked
+  byte array serializes as an index object and would fool a string check).
+  **Every supplied constraint is asserted
+  together** — a passing `viewAbsence`/`reportField` check never
   substitutes for an absent mapping entry. A claim can no longer cite a check
   it does not perform.
 - `gateVerified` — the exact paired-view equality gate
@@ -206,14 +210,14 @@ for every kind row.
 | E2L-061 | `Trace.startedAt`/`endedAt` + `TraceEvent.timestamp` | exact | canonical timestamps are preserved exactly | paired projection gate (gateVerified) |
 | E2L-062 | (no legacy duration field) | unavailable | legacy has no duration field and no clock-basis contract; durations are never fabricated | conceptual — executed by the E2L-016 runtime check (`trace.spans[0].durationMs`, enriched fixture) |
 | E2L-063 | (no legacy fidelity field) | unavailable | legacy events carry no fidelity discriminant; the request and response `providerNativeFidelity` (`structurally_faithful` \| `byte_faithful`) are not representable and provider-native content is not projected (enforced against the actual request fidelity mapping; sentinels additionally asserted absent) | field-loss suite; sentinel assertions; matrix runtime check (`events[2].requestEnvelope.providerNativeFidelity` unavailable, enriched fixture, with the auth and both body sentinels additionally asserted absent from the view) |
-| E2L-064 | (no legacy hash contract) | unavailable | legacy `Trace` has no content-hash contract; the actual envelope `nativeContentHash` fields present in a byte_faithful record are reported `unavailable` (there is no aggregate `trace.hashes` field — the real fields are `events[i].requestEnvelope`/`responseEnvelope.nativeContentHash`) | "reports byte_faithful nativeContentHash loss against the real envelope field"; matrix runtime check (`events[2].requestEnvelope.nativeContentHash`, enriched fixture) |
+| E2L-064 | (no legacy hash contract) | unavailable | legacy `Trace` has no content-hash contract; the actual envelope `nativeContentHash` fields present in a byte_faithful record are reported `unavailable` (there is no aggregate `trace.hashes` field — the real fields are `events[i].requestEnvelope`/`responseEnvelope.nativeContentHash`) | "reports byte_faithful nativeContentHash loss against the real envelope field"; matrix runtime checks (request envelope `events[2].requestEnvelope.nativeContentHash`, enriched fixture; the response envelope hash is the separate row E2L-083) |
 | E2L-065 | (no legacy field) | unavailable | legacy `TraceEvent` has no `evidenceStatus`; statuses are never collapsed into `null` or omitted fields | "reports completeness, capture surface, observation boundary, and evidenceStatus loss"; conceptual — executed by the E2L-021 runtime check |
-| E2L-066 | (no legacy declarations) | unavailable | missing, redaction, and truncation declarations present in the raw observations are reported `unavailable` against their actual raw-payload paths; declaration values (policy names, reason lists, lengths, notes) are never echoed and the absent content is never fabricated | "never turns redacted/missing/unknown evidence into content" and "does not leak secrets or provider-native bodies into the legacy view"; matrix runtime check (`rawObservations[1].payload.redaction` unavailable, redacted fixture; missing and truncation are the separate rows E2L-079 and E2L-080) |
-| E2L-067 | `AgentRun`/`Turn` token fields | unavailable | legacy usage is a plain number; the canonical usage-record `evidenceStatus` and per-field token values (`UsageValue.value` + `UsageValue.evidenceStatus`) are not representable, and token fields stay `unavailable` until the measurement layer exists (enforced against the actual usage-record mapping) | field-loss suite; `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)"; matrix runtime check (`events[3].usage.evidenceStatus` unavailable, enriched fixture; token fields are the separate rows E2L-075..E2L-077) |
+| E2L-066 | (no legacy declarations) | unavailable | missing, redaction, and truncation declarations present in the raw observations are reported `unavailable` against their actual raw-payload paths; declaration values (policy names, reason lists, lengths, notes) are never echoed and the absent content is never fabricated | "never turns redacted/missing/unknown evidence into content" and "does not leak secrets or provider-native bodies into the legacy view"; conceptual — executed by the E2L-078..E2L-080 runtime checks (`rawObservations[1..3].payload.redaction/missing/truncation`, redacted fixture) |
+| E2L-067 | `AgentRun`/`Turn` token fields | unavailable | legacy usage is a plain number; the canonical usage-record `evidenceStatus` and per-field token values (`UsageValue.value` + `UsageValue.evidenceStatus`) are not representable, and token fields stay `unavailable` until the measurement layer exists (enforced against the actual usage-record mapping) | field-loss suite; `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)"; conceptual — executed by the E2L-074..E2L-077 runtime checks (`events[3].usage.evidenceStatus`, enriched; `events[5].usage.inputTokens/outputTokens/totalTokens`, all-kinds) |
 
 ## Field-level envelope, usage-record, and declaration loss (Spec 014 §2.2.4–§2.2.5, §2.2.12, §5.8)
 
-One executable row per present field; these are the field-specific counterparts of the family rows E2L-045/047/048/063/066/067. Every row is enforced against the actual report entry for the exact field path, over the fixture that carries the field.
+One executable row per present field; these are the field-specific counterparts of the family rows E2L-045/047/048/063/066/067 (the family rows themselves are conceptual references whose executable checks live here, on the request, response, usage-record, and declaration rows). Every row is enforced against the actual report entry for the exact field path, over the fixture that carries the field.
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
@@ -229,6 +233,9 @@ One executable row per present field; these are the field-specific counterparts 
 | E2L-078 | (no legacy declarations) | unavailable | the canonical redaction declaration is not representable in the legacy vocabulary; redacted evidence is never turned into content and declaration values are never echoed | "never turns redacted/missing/unknown evidence into content"; matrix runtime check (`rawObservations[1].payload.redaction` unavailable, redacted fixture) |
 | E2L-079 | (no legacy declarations) | unavailable | the canonical missing-evidence declaration is not representable in the legacy vocabulary; the reported absence is never fabricated into content and declaration values are never echoed | "never turns redacted/missing/unknown evidence into content"; matrix runtime check (`rawObservations[2].payload.missing` unavailable, redacted fixture) |
 | E2L-080 | (no legacy declarations) | unavailable | the canonical truncation declaration is not representable in the legacy vocabulary; the truncated value is never fabricated into content and declaration values are never echoed | "never turns redacted/missing/unknown evidence into content"; matrix runtime check (`rawObservations[3].payload.truncation` unavailable, redacted fixture) |
+| E2L-081 | (no legacy field) | unavailable | legacy `TraceEvent` has no native-encoding field; the canonical response `nativeEncoding` is not projected | field-loss suite; matrix runtime check (`events[4].responseEnvelope.nativeEncoding` unavailable, enriched fixture) |
+| E2L-082 | (no legacy field) | unavailable | legacy `TraceEvent` has no native-content-type field; the canonical response `nativeContentType` is not projected | field-loss suite; matrix runtime check (`events[4].responseEnvelope.nativeContentType` unavailable, enriched fixture) |
+| E2L-083 | (no legacy hash contract) | unavailable | legacy `Trace` has no content-hash contract; the response envelope `nativeContentHash` present in a byte_faithful record is reported `unavailable` | "reports byte_faithful nativeContentHash loss against the real envelope field"; matrix runtime check (`events[4].responseEnvelope.nativeContentHash` unavailable, enriched fixture) |
 
 ## Legacy Trace → AgentRun conversion preservation
 
@@ -276,7 +283,7 @@ agent-run parity blocks.
 ## Runtime verification
 
 - `packages/core/src/evidenceProjections/projectionMappingMatrix.test.ts` —
-  pins the claim-ID registry (80 claims), validates classifications and
+  pins the claim-ID registry (83 claims), validates classifications and
   claim modes (exactly one of `runtime`/`gateVerified`/`conceptual`),
   enforces event-kind exclusivity, **executes every runtime claim against an
   actual projection report over a real fixture** (mapping path + stage +

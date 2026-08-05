@@ -20,7 +20,7 @@ The forecast assumes:
 
 | Slice | Anticipated PR | Forecast window | Planned result |
 |---|---:|---|---|
-| Analyzer parity | #20 | Aug 7–13 | Complete Spec 014 slice 4: projection parity and loss verification — paired projection gates, analyzer/report parity over the real pipelines, and the loss-and-mapping matrix. (Implemented; see `packages/reports/src/projectionParity.test.ts` and `docs/evidence-projection-matrix.md`.) |
+| Analyzer parity | #20 | Aug 7–13 | **Done** — Spec 014 slice 4: projection parity and loss verification — paired projection gates, analyzer/report parity over the real pipelines, and the loss-and-mapping matrix. Implemented in PR #20 (open for review, not yet merged); see `packages/reports/src/projectionParity.test.ts`, `docs/evidence-projection-matrix.md`, and the executable claim table `packages/core/src/evidenceProjections/projectionMappingMatrix.ts`. |
 | Append-only evidence store | #21 | Aug 12–18 | Persist and retrieve canonical records without overwriting authoritative observations. |
 | Streaming ingress and trace assembly | #22 | Aug 17–21 | Assemble durable records from requests, response chunks, usage, errors, and lifecycle events. |
 | Pi provider-boundary capture | #23 | Aug 20–27 | Enable the first Pi smoke test, initially through stored evidence and JSON/report output. |

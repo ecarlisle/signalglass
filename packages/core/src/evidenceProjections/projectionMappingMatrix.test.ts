@@ -14,7 +14,9 @@
  *    real fixture: the expected mapping (path + stage + outcome, plus the
  *    constrained reason fragment) must be present, `reportField` claims are
  *    checked against the report, and `viewAbsence` markers must stay out of
- *    the serialized projected view. ALL supplied constraints are asserted
+ *    both the projected view and the projection report — as strings, as raw
+ *    `Uint8Array` bytes, or as numeric arrays (byte-aware walk, never a
+ *    `JSON.stringify` heuristic). ALL supplied constraints are asserted
  *    together — a passing `viewAbsence`/`reportField` check never substitutes
  *    for an absent mapping entry. A claim can no longer hide behind a check
  *    it does not perform — the check fails when the expected report entry is
@@ -126,25 +128,31 @@ const PINNED_CLAIM_IDS: ReadonlyArray<string> = [
   'E2L-066', 'E2L-067',
   'E2L-069', 'E2L-070', 'E2L-071', 'E2L-072', 'E2L-073', 'E2L-074',
   'E2L-075', 'E2L-076', 'E2L-077', 'E2L-078', 'E2L-079', 'E2L-080',
+  'E2L-081', 'E2L-082', 'E2L-083',
 ];
 
 /**
- * A real byte-faithful native content hash over the retained native bytes
+ * Real byte-faithful native content hashes over the retained native bytes
  * (computed through the public `@signalglass/evidence` surface — never
- * fabricated). The hash is over exactly the bytes stored as `providerNative`,
- * so the fidelity contract is self-consistent.
+ * fabricated). The request hash is over exactly the bytes stored as the
+ * request `providerNative` — a byte-faithful request capture includes the
+ * authorization header — and the response hash over exactly the response
+ * bytes, so both fidelity contracts are self-consistent.
  */
-const ENRICHED_NATIVE_BYTES = utf8Encode(SENTINEL_REQ);
-const ENRICHED_NATIVE_HASH = `sha256:${sha256Hex(ENRICHED_NATIVE_BYTES)}`;
+const REQUEST_BYTES = utf8Encode(`${SENTINEL_AUTH}:${SENTINEL_REQ}`);
+const REQUEST_HASH = `sha256:${sha256Hex(REQUEST_BYTES)}`;
+const RESPONSE_BYTES = utf8Encode(SENTINEL_RESP);
+const RESPONSE_HASH = `sha256:${sha256Hex(RESPONSE_BYTES)}`;
 
 /**
  * Deterministic enriched fixture: conditions, a span with lifecycle fields
  * (status, endSeq, finishedAt) plus durationMs and participants, a
  * byte_faithful request envelope whose retained native bytes carry the
- * request sentinel and whose nativeContentHash is computed over exactly
- * those bytes, an unobservable model_usage event, and a
- * structurally-faithful response whose providerNative carries the
- * authorization and response sentinels.
+ * authorization and request-body sentinels and whose nativeContentHash is
+ * computed over exactly those bytes, an unobservable model_usage event, and
+ * a byte_faithful response envelope carrying the response-body bytes, the
+ * native byte metadata (encoding/content type/content hash), finishReason,
+ * and usage.
  */
 function enrichedRecord(): EvidenceRecord {
   return buildRecord(
@@ -168,8 +176,8 @@ function enrichedRecord(): EvidenceRecord {
             model: 'm', provider: 'p', providerNativeFidelity: 'byte_faithful',
             messages: [{ role: 'user', content: 'hello' }],
             nativeEncoding: 'utf-8', nativeContentType: 'application/json',
-            nativeContentHash: ENRICHED_NATIVE_HASH,
-            providerNative: ENRICHED_NATIVE_BYTES,
+            nativeContentHash: REQUEST_HASH,
+            providerNative: REQUEST_BYTES,
           },
         },
       }),
@@ -184,9 +192,11 @@ function enrichedRecord(): EvidenceRecord {
         kind: 'model_response', capturedAt: T3, rawCapturedAt: T3, observationRole: 'provider_reported',
         payload: {
           responseEnvelope: {
-            providerNativeFidelity: 'structurally_faithful',
+            providerNativeFidelity: 'byte_faithful',
             finishReason: 'end_turn',
-            providerNative: { apiKey: SENTINEL_AUTH, text: SENTINEL_RESP },
+            providerNative: RESPONSE_BYTES,
+            nativeEncoding: 'utf-8', nativeContentType: 'application/json',
+            nativeContentHash: RESPONSE_HASH,
             usage: { evidenceStatus: 'captured' },
           },
         },
@@ -348,15 +358,35 @@ describe('projection mapping matrix — event-kind coverage', () => {
     }
   });
 
-  it('does not claim legacy equivalents for kinds the mapping table omits', () => {
+  it('derives omitted-kind expectations from the mapping table (no drifted second truth)', () => {
+    // The gate derives which kinds are omitted from `CANONICAL_EVENT_MAPPINGS`
+    // (plus the explicit omission list) and requires the claim to name no
+    // legacy type at all: a hypothetical `TraceEvent tool_call` target would
+    // be a contradiction the old string heuristic could not catch.
     for (const kind of EVENT_KINDS) {
+      if (kind in CANONICAL_EVENT_MAPPINGS) continue;
       const claim = claimForKind(kind)!;
-      const legacyTypeMentioned = claim.legacyTarget !== '(omitted)' && !claim.legacyTarget.startsWith('TraceEvent');
       expect(
-        legacyTypeMentioned,
-        `claim ${claim.id} must not imply a legacy type for kind ${kind}`,
-      ).toBe(false);
+        isOmittedKindTargetConsistent(claim),
+        `claim ${claim.id}: kind ${kind} is absent from CANONICAL_EVENT_MAPPINGS, so its legacyTarget must be "(omitted)" (got "${claim.legacyTarget}")`,
+      ).toBe(true);
     }
+  });
+
+  it('gate rejects a contradictory omitted-kind claim (negative self-test)', () => {
+    // A claim that names a legacy type for an omitted kind must fail the
+    // gate even though the old heuristic (`!startsWith('TraceEvent')`) would
+    // have let it through.
+    const contradictory: ProjectionMatrixClaim = {
+      id: 'REG-1',
+      primitive: 'regression',
+      spec013: 'regression',
+      legacyTarget: 'TraceEvent tool_call',
+      classification: 'unavailable',
+      reason: 'regression',
+      verifiedBy: 'regression',
+    };
+    expect(isOmittedKindTargetConsistent(contradictory)).toBe(false);
   });
 });
 
@@ -473,7 +503,71 @@ describe('projection mapping matrix — gate strictness (regressions)', () => {
     });
     expect(() => runRuntimeClaim(absentMapping)).toThrow();
   });
+
+  it('byte-aware absence check rejects a leaked Uint8Array the string check would miss', () => {
+    // A leaked `Uint8Array` serializes (JSON.stringify) as an index object
+    // ({ "0": 101, ... }), so the old `.includes(marker)` check could pass
+    // even though the raw bytes are present. The byte-aware walk must fail.
+    const claim = syntheticClaim({
+      fixture: 'enriched',
+      path: 'events[2].requestEnvelope.providerNative',
+      outcome: 'unavailable',
+      viewAbsence: ['enriched-native-request-body'],
+    });
+    expect(() =>
+      assertViewAbsenceFree(claim, {
+        ok: true,
+        view: { events: [{ payload: { bytes: utf8Encode(SENTINEL_REQ) } }] },
+        report: emptyReport(),
+      }),
+    ).toThrow(/must not contain marker/);
+  });
+
+  it('byte-aware absence check rejects a leaked numeric byte array', () => {
+    // The same sentinel leaked as a plain numeric array (Array.from over the
+    // bytes) must also fail — the numeric-array branch is exercised.
+    const claim = syntheticClaim({
+      fixture: 'enriched',
+      path: 'events[2].requestEnvelope.providerNative',
+      outcome: 'unavailable',
+      viewAbsence: ['sk-enriched-sentinel-auth'],
+    });
+    expect(() =>
+      assertViewAbsenceFree(claim, {
+        ok: true,
+        view: { nested: [{ bytes: Array.from(utf8Encode(SENTINEL_AUTH)) }] },
+        report: emptyReport(),
+      }),
+    ).toThrow(/must not contain marker/);
+  });
+
+  it('byte-aware absence check inspects the projection report too', () => {
+    // A marker embedded in a mapping reason (e.g. an accidentally echoed
+    // secret) must fail even when the view is clean.
+    const claim = syntheticClaim({
+      fixture: 'enriched',
+      path: 'events[2].requestEnvelope.providerNative',
+      outcome: 'unavailable',
+      viewAbsence: ['enriched-native-response-body'],
+    });
+    expect(() =>
+      assertViewAbsenceFree(claim, {
+        ok: true,
+        view: { events: [] },
+        report: {
+          projectionVersion: 'p',
+          sourceSchemaVersion: '1.0.0',
+          mappings: [{ path: 'events[4]', stage: 'evidence_to_legacy_trace', outcome: 'unavailable', reason: SENTINEL_RESP }],
+        },
+      }),
+    ).toThrow(/must not contain marker/);
+  });
 });
+
+/** An empty report for exercising the byte-aware absence walk directly. */
+function emptyReport(): ProjectionReport {
+  return { projectionVersion: 'p', sourceSchemaVersion: '1.0.0', mappings: [] };
+}
 
 /** Both stages are present and ordered: first stage, then second stage. */
 function expectStageOrder(mappings: readonly ProjectionMapping[]): void {
@@ -501,6 +595,15 @@ function expectCoreLossEntries(mappings: readonly ProjectionMapping[]): void {
 function claimForKind(kind: (typeof EVENT_KINDS)[number]): ProjectionMatrixClaim | undefined {
   const id = PROJECTION_MATRIX_EVENT_KIND_CLAIMS[kind];
   return PROJECTION_MAPPING_MATRIX.find((claim) => claim.id === id);
+}
+
+/**
+ * An omitted kind (absent from `CANONICAL_EVENT_MAPPINGS`) must name no
+ * legacy type at all: only the literal `"(omitted)"` target is consistent
+ * with the mapping tables.
+ */
+function isOmittedKindTargetConsistent(claim: ProjectionMatrixClaim): boolean {
+  return claim.legacyTarget === '(omitted)';
 }
 
 /** Mode invariants for one matrix claim (see the module docstring). */
@@ -607,20 +710,80 @@ function assertReportFieldEquals(
   ).toBe(true);
 }
 
-/** Additional assertion: no viewAbsence marker leaks into the serialized view. */
+/**
+ * Additional assertion: no viewAbsence marker leaks into the projected view
+ * OR the projection report, in any representation — as a string, as the raw
+ * UTF-8 bytes of a `Uint8Array`/`Buffer` (byte-subsequence search), as a
+ * numeric array of byte values, or nested anywhere in the structure. A
+ * marker that `JSON.stringify` renders as an index object (a leaked
+ * `Uint8Array`) is still a leak and must fail the check.
+ */
 function assertViewAbsenceFree(
   claim: ProjectionMatrixClaim,
-  result: { ok: true; view: unknown } | { ok: false; report: ProjectionReport },
+  result: { ok: true; view: unknown; report: ProjectionReport } | { ok: false; report: ProjectionReport },
 ): void {
   const runtime = claim.runtime!;
   if (runtime.viewAbsence == null || runtime.viewAbsence.length === 0) return;
-  const serialized = JSON.stringify(result.ok ? result.view : null);
   for (const marker of runtime.viewAbsence) {
     expect(
-      !serialized.includes(marker),
-      `claim ${claim.id}: view must not contain marker "${marker}"`,
+      !containsMarker(result, marker),
+      `claim ${claim.id}: view and report must not contain marker "${marker}" (string, byte, or numeric-array form)`,
     ).toBe(true);
   }
+}
+
+/** True when the marker string or its UTF-8 byte sequence occurs anywhere. */
+function containsMarker(
+  result: { ok: true; view: unknown; report: ProjectionReport } | { ok: false; report: ProjectionReport },
+  marker: string,
+): boolean {
+  const markerBytes = utf8Encode(marker);
+  return [result.ok ? result.view : null, result.report].some((value) =>
+    valueContainsMarker(value, marker, markerBytes),
+  );
+}
+
+/**
+ * Recursive marker search: strings by `.includes`, `Uint8Array`/numeric
+ * arrays by byte-subsequence, everything else by descent. Small, explicit,
+ * and deliberately free of broad serialization tricks (a `JSON.stringify`
+ * round-trip would mask a leaked byte array as an index object).
+ */
+function valueContainsMarker(
+  value: unknown,
+  marker: string,
+  markerBytes: Uint8Array,
+): boolean {
+  if (value instanceof Uint8Array) {
+    return bytesInclude(value, markerBytes);
+  }
+  if (Array.isArray(value)) {
+    if (value.every((v) => typeof v === 'number')) {
+      // Numeric-array form of leaked bytes (e.g. `Array.from` over a byte
+      // array) is still a leak; subsequence search, same as `Uint8Array`.
+      return bytesInclude(Uint8Array.from(value as number[]), markerBytes);
+    }
+    return value.some((v) => valueContainsMarker(v, marker, markerBytes));
+  }
+  if (typeof value === 'string') {
+    return value.includes(marker);
+  }
+  if (value != null && typeof value === 'object') {
+    return Object.values(value).some((v) => valueContainsMarker(v, marker, markerBytes));
+  }
+  return false;
+}
+
+/** Byte-subsequence search (needle may be any slice of the haystack). */
+function bytesInclude(haystack: Uint8Array, needle: Uint8Array): boolean {
+  if (needle.length === 0 || haystack.length < needle.length) return false;
+  outer: for (let i = 0; i <= haystack.length - needle.length; i += 1) {
+    for (let j = 0; j < needle.length; j += 1) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    return true;
+  }
+  return false;
 }
 
 /**

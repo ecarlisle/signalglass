@@ -73,7 +73,13 @@ export type MatrixProjectionStage =
  */
 export type MatrixRuntimeCheck = {
   fixture: MatrixFixtureName;
-  projection?: MatrixProjectionStage;
+  /**
+   * Only the composed projection is ever executed through this field (the
+   * default is `evidence_to_legacy_trace`); the legacy→AgentRun direction is
+   * reached through `stage: 'legacy_trace_to_agent_run'` on the composed
+   * projection's mappings, not as a standalone projection here.
+   */
+  projection?: 'evidence_to_agent_run';
   /** Exact mapping path (or `reasonIncludes` for kind rows with dynamic paths). */
   path?: string;
   outcome?: ProjectionOutcome;
@@ -919,7 +925,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     legacyTarget: '(no legacy hash contract)',
     classification: 'unavailable',
     reason: 'legacy Trace has no content-hash contract; the actual envelope nativeContentHash fields present in a byte_faithful record are reported unavailable (there is no aggregate "trace.hashes" field — the real fields are events[i].requestEnvelope/responseEnvelope.nativeContentHash)',
-    verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports byte_faithful nativeContentHash loss against the real envelope field"',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports byte_faithful nativeContentHash loss against the real envelope field"; matrix runtime checks (request envelope events[2].requestEnvelope.nativeContentHash, enriched fixture; the response envelope hash is the separate row E2L-083)',
     runtime: {
       fixture: 'enriched',
       path: 'events[2].requestEnvelope.nativeContentHash',
@@ -944,12 +950,9 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     legacyTarget: '(no legacy declarations)',
     classification: 'unavailable',
     reason: 'missing, redaction, and truncation declarations present in the raw observations are reported unavailable against their actual raw-payload paths; declaration values (policy names, reason lists, lengths, notes) are never echoed and the absent content is never fabricated',
-    verifiedBy: 'evidenceToLegacyTrace.test.ts — "never turns redacted/missing/unknown evidence into content" and "does not leak secrets or provider-native bodies into the legacy view"; matrix runtime check over the redacted fixture (rawObservations[1].payload.redaction unavailable; missing and truncation are the separate rows E2L-079 and E2L-080)',
-    runtime: {
-      fixture: 'redacted',
-      path: 'rawObservations[1].payload.redaction',
-      outcome: 'unavailable',
-    },
+    verifiedBy: 'evidenceToLegacyTrace.test.ts — "never turns redacted/missing/unknown evidence into content" and "does not leak secrets or provider-native bodies into the legacy view"',
+    conceptual:
+      'the missing/redaction/truncation declaration loss is executed by the E2L-078..E2L-080 runtime checks over the redacted fixture (rawObservations[1..3].payload.redaction/missing/truncation unavailable); this row lists the §2.2.12 declaration family',
   },
   {
     id: 'E2L-067',
@@ -958,12 +961,9 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     legacyTarget: 'AgentRun/Turn token fields',
     classification: 'unavailable',
     reason: 'legacy usage is a plain number; the canonical usage-record evidenceStatus and per-field token values (UsageValue.value + UsageValue.evidenceStatus) are not representable, and token fields stay unavailable until the measurement layer exists (enforced against the actual usage-record mapping)',
-    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; evidenceToAgentRun.test.ts — "leaves token fields unavailable (no invented token counts)"; matrix runtime check over the enriched fixture (events[3].usage.evidenceStatus unavailable; token fields are the separate rows E2L-075..E2L-077)',
-    runtime: {
-      fixture: 'enriched',
-      path: 'events[3].usage.evidenceStatus',
-      outcome: 'unavailable',
-    },
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; evidenceToAgentRun.test.ts — "leaves token fields unavailable (no invented token counts)"',
+    conceptual:
+      'the usage-record evidenceStatus and token-field loss is executed by the E2L-074..E2L-077 runtime checks over the enriched and all-kinds fixtures (events[3].usage.evidenceStatus and events[5].usage.inputTokens/outputTokens/totalTokens unavailable); this row lists the §7.1 usage family',
   },
 
   // ---- Field-level envelope, usage-record, and declaration loss (Spec 014
@@ -1138,6 +1138,48 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     runtime: {
       fixture: 'redacted',
       path: 'rawObservations[3].payload.truncation',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-081',
+    primitive: 'ResponseEnvelope',
+    spec013: '§3.2 native byte metadata (byte_faithful captured payloads)',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent has no native-encoding field; the canonical response nativeEncoding is not projected',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the enriched fixture (events[4].responseEnvelope.nativeEncoding unavailable)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[4].responseEnvelope.nativeEncoding',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-082',
+    primitive: 'ResponseEnvelope',
+    spec013: '§3.2 native byte metadata (byte_faithful captured payloads)',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent has no native-content-type field; the canonical response nativeContentType is not projected',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the enriched fixture (events[4].responseEnvelope.nativeContentType unavailable)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[4].responseEnvelope.nativeContentType',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-083',
+    primitive: 'ResponseEnvelope',
+    spec013: '§3.2 native byte metadata (byte_faithful captured payloads)',
+    legacyTarget: '(no legacy hash contract)',
+    classification: 'unavailable',
+    reason: 'legacy Trace has no content-hash contract; the response envelope nativeContentHash present in a byte_faithful record is reported unavailable',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports byte_faithful nativeContentHash loss against the real envelope field"; matrix runtime check over the enriched fixture (events[4].responseEnvelope.nativeContentHash unavailable)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[4].responseEnvelope.nativeContentHash',
       outcome: 'unavailable',
     },
   },

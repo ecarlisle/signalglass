@@ -5,9 +5,10 @@
 **Implemented.** All 27 acceptance criteria are satisfied (27 of 27) and
 `pnpm test` and `pnpm build` pass. Production migration of collectors,
 adapters, ingress paths, persistence, and capture pipelines to emit
-canonical evidence belongs to **later specifications** (Spec 014 §8 slice 5),
-not to unfinished Spec 014 work; the only canonical-record construction in
-this spec's implementation is test construction.
+canonical evidence belongs to **later specifications** (beyond this spec's
+§8 slices — Spec 014 has no slice 5), not to unfinished Spec 014 work; the
+only canonical-record construction in this spec's implementation is test
+construction.
 
 This specification defines the first additive TypeScript implementation
 increment of the accepted Spec 013 evidence contract. Acceptance authorizes
@@ -1745,11 +1746,12 @@ projection parity and loss verification — nothing more.
 **Scope boundary.** None of the slices converts collectors, adapters, ingress
 paths, provider requests or responses, persistence, or capture pipelines to
 emit canonical evidence; those conversions belong to later specifications
-(slice 5). The only canonical-record construction during Spec 014
-implementation is **test construction** — fixtures and projection-test inputs
-built in memory inside the package's and projection modules' test suites
-(slices 2 and 4) — explicitly not production ingress adoption. No runtime
-production caller constructs canonical evidence records in this increment.
+(§8 defines slices 8.1–8.4 only). The only canonical-record construction
+during Spec 014 implementation is **test construction** — fixtures and
+projection-test inputs built in memory inside the package's and projection
+modules' test suites (slices 2 and 4) — explicitly not production ingress
+adoption. No runtime production caller constructs canonical evidence records
+in this increment.
 
 Later concerns that require separate specifications include, explicitly:
 storage/migration (schema, indices, tombstones), collector/adapter ingress

@@ -419,8 +419,12 @@ describe('analyzer parity', () => {
       // The frozen clock is asserted exactly.
       expect(analysisCanonical.generatedAt).toBe(FIXED_NOW);
       expect(analysisDirect.generatedAt).toBe(FIXED_NOW);
-      // Identical input again produces identical output (determinism).
-      expect(analyzeRun(canonical.view)).toEqual(analysisCanonical);
+      // Identical input again produces identical output (determinism). A
+      // null pipeline result is a failure, never evidence of determinism:
+      // two nulls must not satisfy the equality gate.
+      const rerun = analyzeRun(canonical.view);
+      expect(rerun, `${fixture.name}: analyzer rerun must not be null`).not.toBeNull();
+      expect(rerun).toEqual(analysisCanonical);
     }
   });
 
