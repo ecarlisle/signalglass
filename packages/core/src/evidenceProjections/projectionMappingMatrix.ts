@@ -12,8 +12,11 @@
  * - `runtime` — the conformance test runs the named projection over the
  *   named fixture and asserts the actual report entry (path + stage +
  *   outcome, plus a constrained `reasonIncludes` fragment where given), a
- *   `reportField` equality, or a `viewAbsence` guarantee (serialized view
- *   contains none of the markers).
+ *   `reportField` equality, and/or a `viewAbsence` guarantee (serialized
+ *   view contains none of the markers). EVERY supplied constraint is
+ *   asserted together — `viewAbsence`/`reportField` are additional
+ *   assertions, never a substitute for a mapping check. The check fails
+ *   when the expected entry is absent.
  * - `gateVerified` — the exact paired-view equality gate
  *   (`packages/reports/src/projectionParity.test.ts`) proves value-level
  *   preservation; classification must be `exact`.
@@ -48,7 +51,8 @@ export type MatrixFixtureName =
   | 'minimal'
   | 'chunks'
   | 'all-kinds'
-  | 'enriched';
+  | 'enriched'
+  | 'redacted';
 
 /** Projection stage names used by the runtime checks. */
 export type MatrixProjectionStage =
@@ -58,12 +62,14 @@ export type MatrixProjectionStage =
 
 /**
  * Runtime-verification descriptor. Executed by the matrix conformance test:
- * the projection runs over `fixture` and the resulting report must contain a
- * mapping matching `path` + `outcome` (+ `reasonIncludes` when given) in the
- * `stage` mappings (or in any stage when `stage` is omitted), or the report
- * field `reportField` must equal `expected`, or the serialized view must not
- * contain any `viewAbsence` marker. The check fails when the expected entry
- * is absent.
+ * the projection runs over `fixture` and EVERY supplied constraint is
+ * asserted against the actual result — the report must contain a mapping
+ * matching `path` + `outcome` (+ `reasonIncludes` when given) in the `stage`
+ * mappings (or in any stage when `stage` is omitted), AND the report field
+ * `reportField` must equal `expected` when given, AND the serialized view
+ * must contain none of the `viewAbsence` markers when given. The check
+ * fails when the expected entry is absent; `viewAbsence`/`reportField` are
+ * additional assertions and never a substitute for a mapping check.
  */
 export type MatrixRuntimeCheck = {
   fixture: MatrixFixtureName;
@@ -249,7 +255,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy TraceEventType has no span-lifecycle type; span_start/span_end control events are omitted rather than mis-mapped to a content-bearing legacy kind',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "projects every canonical event kind to its legacy type or omits it with an unavailable mapping"',
-    runtime: { fixture: 'minimal', reasonIncludes: 'kind "span_start"' },
+    runtime: {
+      fixture: 'minimal',
+      reasonIncludes: 'kind "span_start"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-015',
@@ -354,7 +364,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no lifecycle control event type; mapping to a content-bearing legacy kind would be semantically wrong',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "projects every canonical event kind to its legacy type or omits it with an unavailable mapping"',
-    runtime: { fixture: 'lifecycle-only', reasonIncludes: 'kind "interaction_start"' },
+    runtime: {
+      fixture: 'lifecycle-only',
+      reasonIncludes: 'kind "interaction_start"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-025',
@@ -364,7 +378,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no lifecycle control event type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "interaction_end"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "interaction_end"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-026',
@@ -374,7 +392,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no span-lifecycle event type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "span_start"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "span_start"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-027',
@@ -384,7 +406,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no span-lifecycle event type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "span_end"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "span_end"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-028',
@@ -394,7 +420,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'canonical model_request maps to the legacy provider_request control event; the request envelope, messages, and provider-native content are never inlined into legacy excerpts',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "projects a minimal completed record into a valid legacy Trace"; sentinel non-leakage tests',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "model_request"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "model_request"',
+      outcome: 'partial',
+    },
   },
   {
     id: 'E2L-029',
@@ -404,7 +434,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'canonical model_response maps to the legacy provider_response control event; provider-native response content is not projected',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test; sentinel non-leakage tests',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "model_response"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "model_response"',
+      outcome: 'partial',
+    },
   },
   {
     id: 'E2L-030',
@@ -414,7 +448,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'legacy has no chunk type; every canonical chunk becomes its own provider_response event in seq order (no aggregation) and the chunk kind/index semantics are lost',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "emits one legacy provider_response per canonical chunk (no aggregation)"; projectionParity.test.ts — "streaming response chunks"',
-    runtime: { fixture: 'chunks', reasonIncludes: 'chunk' },
+    runtime: {
+      fixture: 'chunks',
+      reasonIncludes: 'chunk',
+      outcome: 'partial',
+    },
   },
   {
     id: 'E2L-031',
@@ -424,7 +462,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'canonical model_usage maps to the legacy inference event type, but numeric token accounting is unavailable until the measurement layer exists (Spec 014 §6.3)',
     verifiedBy: 'evidenceToAgentRun.test.ts — "leaves token fields unavailable (no invented token counts)"',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "model_usage"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "model_usage"',
+      outcome: 'partial',
+    },
   },
   {
     id: 'E2L-032',
@@ -434,7 +476,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'canonical tool_call maps to the legacy tool_call type; tool arguments are not inlined into a legacy excerpt (no safe excerpt is synthesized)',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "tool_call"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "tool_call"',
+      outcome: 'partial',
+    },
   },
   {
     id: 'E2L-033',
@@ -444,7 +490,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'canonical tool_result maps to the legacy tool_result type; tool output is not inlined into a legacy excerpt',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "tool_result"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "tool_result"',
+      outcome: 'partial',
+    },
   },
   {
     id: 'E2L-034',
@@ -454,7 +504,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no MCP concept; mapping to tool_call would conflate the MCP protocol boundary',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "mcp_request"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "mcp_request"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-035',
@@ -464,7 +518,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no MCP concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "mcp_result"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "mcp_result"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-036',
@@ -474,7 +532,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no retrieval concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "retrieval_request"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "retrieval_request"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-037',
@@ -484,7 +546,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no retrieval concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "retrieval_result"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "retrieval_result"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-038',
@@ -494,7 +560,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no context-provider protocol concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "context_provider_request"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "context_provider_request"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-039',
@@ -504,7 +574,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no context-provider protocol concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "context_provider_result"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "context_provider_result"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-040',
@@ -514,7 +588,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'canonical context_assembled maps to the legacy context event; artifact references and assembled content are not inlined',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "context_assembled"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "context_assembled"',
+      outcome: 'partial',
+    },
   },
   {
     id: 'E2L-041',
@@ -524,7 +602,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'canonical error maps to the single legacy provider_error type; the canonical actor, lifecycleTarget, and lifecycleEffect vocabulary is not representable',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "error"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "error"',
+      outcome: 'partial',
+    },
   },
   {
     id: 'E2L-042',
@@ -534,7 +616,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no cancellation type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "cancelled"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "cancelled"',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-043',
@@ -544,7 +630,11 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no retry type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
-    runtime: { fixture: 'all-kinds', reasonIncludes: 'kind "retry"' },
+    runtime: {
+      fixture: 'all-kinds',
+      reasonIncludes: 'kind "retry"',
+      outcome: 'unavailable',
+    },
   },
 
   // ---- RequestEnvelope (Spec 014 §2.2.4; Spec 013 §3.2) ----
@@ -564,11 +654,13 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.2 messages and provider-native payload',
     legacyTarget: '(no legacy excerpt)',
     classification: 'unavailable',
-    reason: 'normalized messages and provider-native request content are never inlined into the legacy excerpt surface; payloadRef is not synthesized',
-    verifiedBy: 'evidenceToAgentRun.test.ts — "does not leak provider-native bodies or authorization material"; projectionParity.test.ts sentinel assertions; projectionMappingMatrix.test.ts view-absence check',
+    reason: 'normalized request messages are not representable in the legacy excerpt surface; payloadRef is not synthesized and messages are never inlined (provider-native bodies are the separate row E2L-069)',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; evidenceToAgentRun.test.ts — "does not leak provider-native bodies or authorization material"; projectionParity.test.ts sentinel assertions; matrix runtime check over the enriched fixture (events[2].requestEnvelope.messages unavailable, with the request-body sentinel additionally asserted absent from the view)',
     runtime: {
       fixture: 'enriched',
-      viewAbsence: ['sk-enriched-sentinel-auth', 'enriched-native-request-body'],
+      path: 'events[2].requestEnvelope.messages',
+      outcome: 'unavailable',
+      viewAbsence: ['enriched-native-request-body'],
     },
   },
   {
@@ -593,10 +685,12 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.2 responses including stream chunks and final usage',
     legacyTarget: '(no legacy excerpt)',
     classification: 'unavailable',
-    reason: 'finishReason and provider-native response content are never projected into legacy excerpts',
-    verifiedBy: 'projectionParity.test.ts sentinel assertions; evidenceToAgentRun.test.ts — "does not leak provider-native bodies or authorization material"; projectionMappingMatrix.test.ts view-absence check',
+    reason: 'the canonical response finishReason is not representable in the legacy vocabulary and is never projected into a legacy excerpt; provider-native response content is the separate row E2L-072',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; projectionParity.test.ts sentinel assertions; evidenceToAgentRun.test.ts — "does not leak provider-native bodies or authorization material"; matrix runtime check over the enriched fixture (events[4].responseEnvelope.finishReason unavailable, with the response-body sentinel additionally asserted absent from the view)',
     runtime: {
       fixture: 'enriched',
+      path: 'events[4].responseEnvelope.finishReason',
+      outcome: 'unavailable',
       viewAbsence: ['enriched-native-response-body'],
     },
   },
@@ -606,9 +700,13 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§7 usage values carry per-field evidence status',
     legacyTarget: 'AgentRun output tokens / Turn outputTokens',
     classification: 'unavailable',
-    reason: 'token values are only present when a measurement exists; until the measurement layer lands, token fields are unavailable and never invented from character counts (Spec 014 §6.3)',
-    verifiedBy: 'evidenceToAgentRun.test.ts — "leaves token fields unavailable (no invented token counts)"',
-    runtime: { fixture: 'enriched', reasonIncludes: 'token accounting' },
+    reason: 'the canonical responseEnvelope.usage record (with per-field evidence status) has no legacy field; it is not projected and token values are never invented from character counts (Spec 014 §6.3) — verified against the actual responseEnvelope.usage field, not the separate model_usage event',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; evidenceToAgentRun.test.ts — "leaves token fields unavailable (no invented token counts)"; matrix runtime check over the enriched fixture (events[4].responseEnvelope.usage unavailable)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[4].responseEnvelope.usage',
+      outcome: 'unavailable',
+    },
   },
 
   // ---- ContextArtifact (Spec 014 §2.2.6; Spec 013 §6.1) ----
@@ -805,11 +903,13 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.2 fidelity discriminants (structurally_faithful | byte_faithful)',
     legacyTarget: '(no legacy fidelity field)',
     classification: 'unavailable',
-    reason: 'legacy events carry no fidelity discriminant; provider-native content is not projected and fidelity is not representable',
-    verifiedBy: 'projectionParity.test.ts sentinel assertions; projectionMappingMatrix.test.ts view-absence check',
+    reason: 'legacy events carry no fidelity discriminant; the request and response providerNativeFidelity (structurally_faithful | byte_faithful) are not representable and provider-native content is not projected (enforced against the actual request fidelity mapping; sentinels additionally asserted absent)',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; projectionParity.test.ts sentinel assertions; matrix runtime check over the enriched fixture (events[2].requestEnvelope.providerNativeFidelity unavailable, with the auth and both body sentinels additionally asserted absent from the view)',
     runtime: {
       fixture: 'enriched',
-      viewAbsence: ['sk-enriched-sentinel-auth', 'enriched-native-request-body'],
+      path: 'events[2].requestEnvelope.providerNativeFidelity',
+      outcome: 'unavailable',
+      viewAbsence: ['sk-enriched-sentinel-auth', 'enriched-native-request-body', 'enriched-native-response-body'],
     },
   },
   {
@@ -843,10 +943,13 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§4 evidence status; docs/privacy.md',
     legacyTarget: '(no legacy declarations)',
     classification: 'unavailable',
-    reason: 'missing, redaction, and truncation declarations are not representable in the legacy vocabulary and are never fabricated into content',
-    verifiedBy: 'evidenceToLegacyTrace.test.ts — "never turns redacted/missing/unknown evidence into content" and "does not leak secrets or provider-native bodies into the legacy view"',
-    conceptual:
-      'these are absence guarantees over redacted fixtures; the dedicated redaction/leak suites named in verifiedBy execute them, and no report entry exists because no mapping is emitted for content that must not appear',
+    reason: 'missing, redaction, and truncation declarations present in the raw observations are reported unavailable against their actual raw-payload paths; declaration values (policy names, reason lists, lengths, notes) are never echoed and the absent content is never fabricated',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts — "never turns redacted/missing/unknown evidence into content" and "does not leak secrets or provider-native bodies into the legacy view"; matrix runtime check over the redacted fixture (rawObservations[1].payload.redaction unavailable; missing and truncation are the separate rows E2L-079 and E2L-080)',
+    runtime: {
+      fixture: 'redacted',
+      path: 'rawObservations[1].payload.redaction',
+      outcome: 'unavailable',
+    },
   },
   {
     id: 'E2L-067',
@@ -854,9 +957,189 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§7.1 usage as provider-reported values with per-field status',
     legacyTarget: 'AgentRun/Turn token fields',
     classification: 'unavailable',
-    reason: 'legacy usage is a plain number; per-field evidence status is not representable, and token fields stay unavailable until the measurement layer exists',
-    verifiedBy: 'evidenceToAgentRun.test.ts — "leaves token fields unavailable (no invented token counts)"',
-    runtime: { fixture: 'enriched', reasonIncludes: 'token accounting' },
+    reason: 'legacy usage is a plain number; the canonical usage-record evidenceStatus and per-field token values (UsageValue.value + UsageValue.evidenceStatus) are not representable, and token fields stay unavailable until the measurement layer exists (enforced against the actual usage-record mapping)',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; evidenceToAgentRun.test.ts — "leaves token fields unavailable (no invented token counts)"; matrix runtime check over the enriched fixture (events[3].usage.evidenceStatus unavailable; token fields are the separate rows E2L-075..E2L-077)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[3].usage.evidenceStatus',
+      outcome: 'unavailable',
+    },
+  },
+
+  // ---- Field-level envelope, usage-record, and declaration loss (Spec 014
+  // ---- §2.2.4–§2.2.5, §2.2.12, §5.8) — one executable row per present
+  // ---- field. Rows E2L-069..E2L-080 are the field-specific counterparts of
+  // ---- the family rows E2L-045/047/048/063/066/067; every row is enforced
+  // ---- against the actual report entry for the exact field path.
+  {
+    id: 'E2L-069',
+    primitive: 'RequestEnvelope',
+    spec013: '§3.2 provider-native payload at declared fidelity',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent has no provider-native payload field; the canonical request providerNative body is not projected (never flattened into an excerpt)',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the enriched fixture (events[2].requestEnvelope.providerNative unavailable, request-body sentinel additionally asserted absent from the view)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[2].requestEnvelope.providerNative',
+      outcome: 'unavailable',
+      viewAbsence: ['enriched-native-request-body'],
+    },
+  },
+  {
+    id: 'E2L-070',
+    primitive: 'RequestEnvelope',
+    spec013: '§3.2 native byte metadata (byte_faithful captured payloads)',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent has no native-encoding field; the canonical request nativeEncoding is not projected',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the enriched fixture (events[2].requestEnvelope.nativeEncoding unavailable)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[2].requestEnvelope.nativeEncoding',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-071',
+    primitive: 'RequestEnvelope',
+    spec013: '§3.2 native byte metadata (byte_faithful captured payloads)',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent has no native-content-type field; the canonical request nativeContentType is not projected',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the enriched fixture (events[2].requestEnvelope.nativeContentType unavailable)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[2].requestEnvelope.nativeContentType',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-072',
+    primitive: 'ResponseEnvelope',
+    spec013: '§3.2 provider-native payload at declared fidelity',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent has no provider-native payload field; the canonical response providerNative body is not projected (never flattened into an excerpt)',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the enriched fixture (events[4].responseEnvelope.providerNative unavailable, auth and response-body sentinels additionally asserted absent from the view)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[4].responseEnvelope.providerNative',
+      outcome: 'unavailable',
+      viewAbsence: ['sk-enriched-sentinel-auth', 'enriched-native-response-body'],
+    },
+  },
+  {
+    id: 'E2L-073',
+    primitive: 'ResponseEnvelope',
+    spec013: '§3.2 streaming chunks',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent has no chunk-index field; streaming chunk index semantics are not representable in the legacy vocabulary',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the chunks fixture (events[2].responseEnvelope.chunkIndex unavailable)',
+    runtime: {
+      fixture: 'chunks',
+      path: 'events[2].responseEnvelope.chunkIndex',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-074',
+    primitive: 'UsageRecord',
+    spec013: '§7.1 per-field evidence status',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy usage is a plain number with no per-field evidence-status surface; the canonical usage-record evidenceStatus is not projected',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the enriched fixture (events[3].usage.evidenceStatus unavailable)',
+    runtime: {
+      fixture: 'enriched',
+      path: 'events[3].usage.evidenceStatus',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-075',
+    primitive: 'UsageValue (inputTokens)',
+    spec013: '§7.1 token values with per-field status',
+    legacyTarget: 'AgentRun/Turn token fields',
+    classification: 'unavailable',
+    reason: 'legacy usage is a plain number; the canonical usage inputTokens value and its per-field evidence status are not projected (token accounting is a later measurement)',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the all-kinds fixture (events[5].usage.inputTokens unavailable)',
+    runtime: {
+      fixture: 'all-kinds',
+      path: 'events[5].usage.inputTokens',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-076',
+    primitive: 'UsageValue (outputTokens)',
+    spec013: '§7.1 token values with per-field status',
+    legacyTarget: 'AgentRun/Turn token fields',
+    classification: 'unavailable',
+    reason: 'legacy usage is a plain number; the canonical usage outputTokens value and its per-field evidence status are not projected (token accounting is a later measurement)',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the all-kinds fixture (events[5].usage.outputTokens unavailable)',
+    runtime: {
+      fixture: 'all-kinds',
+      path: 'events[5].usage.outputTokens',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-077',
+    primitive: 'UsageValue (totalTokens)',
+    spec013: '§7.1 token values with per-field status',
+    legacyTarget: 'AgentRun/Turn token fields',
+    classification: 'unavailable',
+    reason: 'legacy usage is a plain number; the canonical usage totalTokens value and its per-field evidence status are not projected (token accounting is a later measurement)',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the all-kinds fixture (events[5].usage.totalTokens unavailable)',
+    runtime: {
+      fixture: 'all-kinds',
+      path: 'events[5].usage.totalTokens',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-078',
+    primitive: 'RedactionDeclaration',
+    spec013: '§2.2.12; §5.8 redaction declarations on raw observations',
+    legacyTarget: '(no legacy declarations)',
+    classification: 'unavailable',
+    reason: 'the canonical redaction declaration is not representable in the legacy vocabulary; redacted evidence is never turned into content and declaration values are never echoed',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts — "never turns redacted/missing/unknown evidence into content"; matrix runtime check over the redacted fixture (rawObservations[1].payload.redaction unavailable)',
+    runtime: {
+      fixture: 'redacted',
+      path: 'rawObservations[1].payload.redaction',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-079',
+    primitive: 'MissingDeclaration',
+    spec013: '§2.2.12; §5.8 missing declarations on raw observations',
+    legacyTarget: '(no legacy declarations)',
+    classification: 'unavailable',
+    reason: 'the canonical missing-evidence declaration is not representable in the legacy vocabulary; the reported absence is never fabricated into content and declaration values are never echoed',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts — "never turns redacted/missing/unknown evidence into content"; matrix runtime check over the redacted fixture (rawObservations[2].payload.missing unavailable)',
+    runtime: {
+      fixture: 'redacted',
+      path: 'rawObservations[2].payload.missing',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-080',
+    primitive: 'TruncationDeclaration',
+    spec013: '§2.2.12; §5.8 truncation declarations on raw observations',
+    legacyTarget: '(no legacy declarations)',
+    classification: 'unavailable',
+    reason: 'the canonical truncation declaration is not representable in the legacy vocabulary; the truncated value is never fabricated into content and declaration values are never echoed',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts — "never turns redacted/missing/unknown evidence into content"; matrix runtime check over the redacted fixture (rawObservations[3].payload.truncation unavailable)',
+    runtime: {
+      fixture: 'redacted',
+      path: 'rawObservations[3].payload.truncation',
+      outcome: 'unavailable',
+    },
   },
 ];
 

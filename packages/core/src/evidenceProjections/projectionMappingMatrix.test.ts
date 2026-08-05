@@ -13,10 +13,12 @@
  * 3. every runtime claim is enforced against a real projection report over a
  *    real fixture: the expected mapping (path + stage + outcome, plus the
  *    constrained reason fragment) must be present, `reportField` claims are
- *    checked against the report, and `viewAbsence` claims serialize the
- *    projected view and fail when a marker leaks. A claim can no longer hide
- *    behind a check it does not perform — the check fails when the expected
- *    report entry is absent.
+ *    checked against the report, and `viewAbsence` markers must stay out of
+ *    the serialized projected view. ALL supplied constraints are asserted
+ *    together — a passing `viewAbsence`/`reportField` check never substitutes
+ *    for an absent mapping entry. A claim can no longer hide behind a check
+ *    it does not perform — the check fails when the expected report entry is
+ *    absent.
  *
  * The composed-report test runs the public `evidenceToAgentRun` projection
  * and asserts both stages in stage order, that first-stage mappings survive
@@ -105,7 +107,9 @@ const REQUIRED_PRIMITIVES: ReadonlyArray<string> = [
  * The pinned stable claim-ID registry (Spec 014 acceptance criterion 1).
  * Renaming or removing a claim breaks the executable verification and must
  * be a deliberate contract change. E2L-068 was split out of E2L-058 and
- * therefore sits directly after it.
+ * therefore sits directly after it; E2L-069..E2L-080 are the field-level
+ * rows appended after E2L-067 (envelope fields, usage-record fields, and
+ * missing/redaction/truncation declaration rows).
  */
 const PINNED_CLAIM_IDS: ReadonlyArray<string> = [
   'E2L-001', 'E2L-002', 'E2L-003', 'E2L-004', 'E2L-005', 'E2L-006',
@@ -120,6 +124,8 @@ const PINNED_CLAIM_IDS: ReadonlyArray<string> = [
   'E2L-055', 'E2L-056', 'E2L-057', 'E2L-058', 'E2L-068', 'E2L-059',
   'E2L-060', 'E2L-061', 'E2L-062', 'E2L-063', 'E2L-064', 'E2L-065',
   'E2L-066', 'E2L-067',
+  'E2L-069', 'E2L-070', 'E2L-071', 'E2L-072', 'E2L-073', 'E2L-074',
+  'E2L-075', 'E2L-076', 'E2L-077', 'E2L-078', 'E2L-079', 'E2L-080',
 ];
 
 /**
@@ -160,6 +166,7 @@ function enrichedRecord(): EvidenceRecord {
         payload: {
           requestEnvelope: {
             model: 'm', provider: 'p', providerNativeFidelity: 'byte_faithful',
+            messages: [{ role: 'user', content: 'hello' }],
             nativeEncoding: 'utf-8', nativeContentType: 'application/json',
             nativeContentHash: ENRICHED_NATIVE_HASH,
             providerNative: ENRICHED_NATIVE_BYTES,
@@ -180,6 +187,7 @@ function enrichedRecord(): EvidenceRecord {
             providerNativeFidelity: 'structurally_faithful',
             finishReason: 'end_turn',
             providerNative: { apiKey: SENTINEL_AUTH, text: SENTINEL_RESP },
+            usage: { evidenceStatus: 'captured' },
           },
         },
       }),
@@ -240,6 +248,35 @@ function fixtureFor(name: MatrixFixtureName): EvidenceRecord {
       ]);
     case 'all-kinds':
       return buildRecord(allKindsObservations());
+    case 'redacted':
+      // Declarations live on the raw observation payloads (Spec 014 §5.8);
+      // redacted/missing/truncated evidence must project without fabricating
+      // content and without echoing declaration values.
+      return buildRecord([
+        obs({ observationId: 'rd0', eventId: 'evt-start', seq: 0, kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0 }),
+        obs({
+          observationId: 'rd1', eventId: 'evt-redacted', seq: 1, kind: 'model_request',
+          capturedAt: T1, rawCapturedAt: T1, observationRole: 'client_sent', evidenceStatus: 'redacted',
+          payload: {
+            redaction: { policy: 'secrets-v1', reasons: ['authorization-header'] },
+            requestEnvelope: { model: 'm', provider: 'p', providerNativeFidelity: 'structurally_faithful' },
+          },
+        }),
+        obs({
+          observationId: 'rd2', eventId: 'evt-missing', seq: 2, kind: 'model_response',
+          capturedAt: T2, rawCapturedAt: T2, observationRole: 'returned', evidenceStatus: 'missing',
+          payload: {
+            missing: { reason: 'capture_failed', reportedBy: { captureSurface: 'ingress_proxy', observationBoundary: 'returned' } },
+            responseEnvelope: { providerNativeFidelity: 'structurally_faithful' },
+          },
+        }),
+        obs({
+          observationId: 'rd3', eventId: 'evt-truncated', seq: 3, kind: 'tool_result',
+          capturedAt: T2, rawCapturedAt: T2, observationRole: 'returned', evidenceStatus: 'truncated',
+          payload: { truncation: { maxLength: 100, originalLength: 5000 }, toolResult: { stdout: 'x' } },
+        }),
+        obs({ observationId: 'rd4', eventId: 'evt-end', seq: 4, kind: 'interaction_end', capturedAt: T3, rawCapturedAt: T3 }),
+      ]);
     case 'enriched':
       return enrichedRecord();
   }
@@ -327,7 +364,7 @@ describe('projection mapping matrix — runtime report alignment', () => {
   it('enforces every runtime claim against the actual projection report', () => {
     for (const claim of PROJECTION_MAPPING_MATRIX) {
       if (claim.runtime == null) continue;
-      assertRuntimeClaim(claim);
+      runRuntimeClaim(claim);
     }
   });
 
@@ -379,6 +416,62 @@ describe('projection mapping matrix — runtime report alignment', () => {
     );
 
     expectCoreLossEntries(composed.report.mappings);
+  });
+});
+
+describe('projection mapping matrix — gate strictness (regressions)', () => {
+  /** Synthetic claim carrying only the runtime descriptor under test. */
+  function syntheticClaim(
+    runtime: NonNullable<ProjectionMatrixClaim['runtime']>,
+  ): ProjectionMatrixClaim {
+    return {
+      id: 'REG-0',
+      primitive: 'regression',
+      spec013: 'regression',
+      legacyTarget: 'regression',
+      classification: 'unavailable',
+      reason: 'regression',
+      verifiedBy: 'regression',
+      runtime,
+    };
+  }
+
+  it('rejects a claim with the correct path/outcome but a reason fragment that matches nothing', () => {
+    // trace.status IS partial and its reason DOES contain "\"completed\"",
+    // but the fragment below appears in no mapping reason, so the gate must
+    // fail even though path and outcome are correct.
+    const wrongReason = syntheticClaim({
+      fixture: 'minimal',
+      path: 'trace.status',
+      outcome: 'partial',
+      reasonIncludes: 'zzz-reason-fragment-that-matches-nothing-zzz',
+    });
+    expect(() => runRuntimeClaim(wrongReason)).toThrow();
+  });
+
+  it('rejects a claim with the correct reason but the wrong outcome', () => {
+    // The trace.status mapping reason contains "\"completed\"" but the
+    // mapping outcome is partial, never exact: the gate must fail.
+    const wrongOutcome = syntheticClaim({
+      fixture: 'minimal',
+      path: 'trace.status',
+      outcome: 'exact',
+      reasonIncludes: '"completed"',
+    });
+    expect(() => runRuntimeClaim(wrongOutcome)).toThrow();
+  });
+
+  it('rejects a claim whose sentinel-absence check passes but whose mapping entry is absent', () => {
+    // The view really is free of the request-body sentinel, so a viewAbsence-
+    // only gate would pass; the mapping for a fabricated path does not exist,
+    // so the conjunctive gate must fail (no early return after viewAbsence).
+    const absentMapping = syntheticClaim({
+      fixture: 'enriched',
+      path: 'events[2].requestEnvelope.fabricatedField',
+      outcome: 'unavailable',
+      viewAbsence: ['enriched-native-request-body'],
+    });
+    expect(() => runRuntimeClaim(absentMapping)).toThrow();
   });
 });
 
@@ -441,23 +534,43 @@ function assertClaimModeInvariants(claim: ProjectionMatrixClaim): void {
 
 /** A runtime check must actually check something and constrain outcomes. */
 function assertRuntimeCheckShape(claim: ProjectionMatrixClaim): void {
-  const { path, outcome, reasonIncludes, reportField, viewAbsence } = claim.runtime!;
+  const r = claim.runtime!;
+  const hasCheck =
+    r.path != null ||
+    r.reasonIncludes != null ||
+    r.reportField != null ||
+    (r.viewAbsence != null && r.viewAbsence.length > 0);
   expect(
-    path != null || reasonIncludes != null || reportField != null || (viewAbsence != null && viewAbsence.length > 0),
+    hasCheck,
     `runtime claim ${claim.id} must carry a check`,
   ).toBe(true);
-  // A path-only check is not enough: it must constrain the outcome too
-  // (except reportField/viewAbsence modes and kind-row reason checks).
-  if (path != null && reasonIncludes == null && reportField == null) {
+  // Any mapping-search claim (path or reasonIncludes) must also constrain the
+  // outcome so the gate verifies the actual report outcome, never just a
+  // kind name or path appearing in a reason.
+  if (r.path != null || r.reasonIncludes != null) {
     expect(
-      outcome != null,
-      `runtime claim ${claim.id} with path "${path}" must also constrain the outcome`,
+      r.outcome != null,
+      `runtime claim ${claim.id} with a mapping search must also constrain the outcome`,
+    ).toBe(true);
+  }
+  // A report-field claim must name the expected value it compares against.
+  if (r.reportField != null) {
+    expect(
+      r.expected != null,
+      `runtime claim ${claim.id} with reportField must also provide expected`,
     ).toBe(true);
   }
 }
 
-/** Run one runtime claim against the actual projection report over its fixture. */
-function assertRuntimeClaim(claim: ProjectionMatrixClaim): void {
+/**
+ * Run one runtime claim against the actual projection report over its
+ * fixture. EVERY supplied constraint is asserted together — the mapping
+ * search (stage + path + outcome + reasonIncludes), the `reportField`
+ * equality, and every `viewAbsence` marker. There are no early returns: a
+ * claim that passes its sentinel-absence check but has no matching report
+ * entry fails, and vice versa.
+ */
+function runRuntimeClaim(claim: ProjectionMatrixClaim): void {
   const runtime = claim.runtime!;
   const record = fixtureFor(runtime.fixture);
   const projection = runtime.projection ?? 'evidence_to_legacy_trace';
@@ -468,26 +581,11 @@ function assertRuntimeClaim(claim: ProjectionMatrixClaim): void {
   expect(result.ok, `claim ${claim.id}: fixture ${runtime.fixture} must project`).toBe(true);
   if (!result.ok) return;
 
-  if (runtime.reportField != null) {
-    const report = result.report as ProjectionReport & Record<string, unknown>;
-    expect(
-      report[runtime.reportField] === runtime.expected,
-      `claim ${claim.id}: report.${runtime.reportField} must equal "${runtime.expected}"`,
-    ).toBe(true);
-    return;
-  }
+  assertReportFieldEquals(claim, result);
+  assertViewAbsenceFree(claim, result);
 
-  if (runtime.viewAbsence != null && runtime.viewAbsence.length > 0) {
-    const serialized = JSON.stringify(result.view);
-    for (const marker of runtime.viewAbsence) {
-      expect(
-        !serialized.includes(marker),
-        `claim ${claim.id}: view must not contain marker "${marker}"`,
-      ).toBe(true);
-    }
-    return;
-  }
-
+  // Mapping search (conjunctive: stage + path + outcome + reasonIncludes).
+  if (runtime.path == null && runtime.reasonIncludes == null) return;
   const match = findMapping(result.report.mappings, runtime);
   expect(
     match,
@@ -495,24 +593,50 @@ function assertRuntimeClaim(claim: ProjectionMatrixClaim): void {
   ).toBeDefined();
 }
 
+/** Additional assertion: report attribute equals the declared value. */
+function assertReportFieldEquals(
+  claim: ProjectionMatrixClaim,
+  result: { ok: true; report: ProjectionReport } | { ok: false; report: ProjectionReport },
+): void {
+  const runtime = claim.runtime!;
+  if (runtime.reportField == null) return;
+  const report = result.report as ProjectionReport & Record<string, unknown>;
+  expect(
+    report[runtime.reportField] === runtime.expected,
+    `claim ${claim.id}: report.${runtime.reportField} must equal "${runtime.expected}"`,
+  ).toBe(true);
+}
+
+/** Additional assertion: no viewAbsence marker leaks into the serialized view. */
+function assertViewAbsenceFree(
+  claim: ProjectionMatrixClaim,
+  result: { ok: true; view: unknown } | { ok: false; report: ProjectionReport },
+): void {
+  const runtime = claim.runtime!;
+  if (runtime.viewAbsence == null || runtime.viewAbsence.length === 0) return;
+  const serialized = JSON.stringify(result.ok ? result.view : null);
+  for (const marker of runtime.viewAbsence) {
+    expect(
+      !serialized.includes(marker),
+      `claim ${claim.id}: view must not contain marker "${marker}"`,
+    ).toBe(true);
+  }
+}
+
+/**
+ * Conjunctive mapping search: every supplied constraint (stage, path,
+ * outcome, reasonIncludes) must hold on one mapping. Constraints are never
+ * dropped or short-circuited.
+ */
 function findMapping(
   mappings: readonly ProjectionMapping[],
   runtime: NonNullable<ProjectionMatrixClaim['runtime']>,
 ): ProjectionMapping | undefined {
-  const stageFiltered =
-    runtime.stage == null ? mappings : mappings.filter((m) => m.stage === runtime.stage);
-  if (runtime.path != null && runtime.outcome != null) {
-    return stageFiltered.find(
-      (m) => m.path === runtime.path && m.outcome === runtime.outcome,
-    );
-  }
-  if (runtime.reasonIncludes != null) {
-    const reasonIncludes = runtime.reasonIncludes;
-    return stageFiltered.find(
-      (m) =>
-        (runtime.outcome == null || m.outcome === runtime.outcome) &&
-        m.reason.includes(reasonIncludes),
-    );
-  }
-  return undefined;
+  return mappings.find(
+    (m) =>
+      (runtime.stage == null || m.stage === runtime.stage) &&
+      (runtime.path == null || m.path === runtime.path) &&
+      (runtime.outcome == null || m.outcome === runtime.outcome) &&
+      (runtime.reasonIncludes == null || m.reason.includes(runtime.reasonIncludes)),
+  );
 }

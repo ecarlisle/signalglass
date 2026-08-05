@@ -39,9 +39,11 @@ any such observation as a failure, and none is currently known.
 - `runtime` — the conformance test runs the named projection over the named
   fixture and asserts the actual report entry: mapping `path` + `stage` +
   `outcome` (plus a constrained `reasonIncludes` fragment where given), a
-  `reportField` equality, or a `viewAbsence` guarantee (the serialized view
-  contains none of the listed markers). A claim can no longer cite a check it
-  does not perform.
+  `reportField` equality, and a `viewAbsence` guarantee (the serialized view
+  contains none of the listed markers). **Every supplied constraint is
+  asserted together** — a passing `viewAbsence`/`reportField` check never
+  substitutes for an absent mapping entry. A claim can no longer cite a check
+  it does not perform.
 - `gateVerified` — the exact paired-view equality gate
   (`packages/reports/src/projectionParity.test.ts`) proves value-level
   preservation; classification is `exact`. The matrix test also asserts the
@@ -144,15 +146,15 @@ for every kind row.
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
 | E2L-044 | `Trace.provider` + `Trace.model` | inferred | trace-level provider/model are derived from the first canonical `model_request` envelope in `seq` order; reported `inferred`, never presented as canonical evidence | "projects a minimal completed record…" (provider/model); `projectionParity.test.ts` agent-run parity |
-| E2L-045 | (no legacy excerpt) | unavailable | normalized messages and provider-native request content are never inlined into the legacy excerpt surface; `payloadRef` is not synthesized | `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material"; sentinel assertions; matrix view-absence check over the enriched fixture |
+| E2L-045 | (no legacy excerpt) | unavailable | normalized request messages are not representable in the legacy excerpt surface; `payloadRef` is not synthesized and messages are never inlined (provider-native bodies are the separate row E2L-069) | field-loss suite; `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material"; sentinel assertions; matrix runtime check (`events[2].requestEnvelope.messages` unavailable, enriched fixture, with the request-body sentinel additionally asserted absent from the view) |
 | E2L-046 | (no legacy hash/byte contract) | unavailable | legacy has no content-hash or byte-fidelity contract; the real envelope `nativeContentHash` is reported `unavailable` when present | `evidenceToLegacyTrace.test.ts` "reports byte_faithful nativeContentHash loss against the real envelope field"; matrix runtime check (`events[2].requestEnvelope.nativeContentHash`, enriched fixture) |
 
 ## ResponseEnvelope (Spec 014 §2.2.5; Spec 013 §3.2)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-047 | (no legacy excerpt) | unavailable | `finishReason` and provider-native response content are never projected into legacy excerpts | sentinel assertions; `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material"; matrix view-absence check over the enriched fixture |
-| E2L-048 | `AgentRun`/`Turn` token fields | unavailable | token values exist only when a measurement exists; until the measurement layer lands, token fields stay `unavailable` and are never invented from character counts (Spec 014 §6.3) | `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)"; matrix runtime check (`token accounting` in the `model_usage` reason, enriched fixture) |
+| E2L-047 | (no legacy excerpt) | unavailable | the canonical response `finishReason` is not representable in the legacy vocabulary and is never projected into a legacy excerpt; provider-native response content is the separate row E2L-072 | field-loss suite; sentinel assertions; `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material"; matrix runtime check (`events[4].responseEnvelope.finishReason` unavailable, enriched fixture, with the response-body sentinel additionally asserted absent from the view) |
+| E2L-048 | `AgentRun`/`Turn` token fields | unavailable | the canonical `responseEnvelope.usage` record (with per-field evidence status) has no legacy field; it is not projected and token values are never invented from character counts (Spec 014 §6.3) — verified against the actual `responseEnvelope.usage` field, not the separate `model_usage` event | field-loss suite; `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)"; matrix runtime check (`events[4].responseEnvelope.usage` unavailable, enriched fixture) |
 
 ## ContextArtifact (Spec 014 §2.2.6; Spec 013 §6.1)
 
@@ -203,11 +205,30 @@ for every kind row.
 | E2L-060 | `Trace.events[]` order | partial | order is preserved with `seq` tie-breaks over equal timestamps; the `seq` value is not representable and the restriction is reported | "preserves seq ordering over equal timestamps"; `projectionParity.test.ts` streaming-chunks block |
 | E2L-061 | `Trace.startedAt`/`endedAt` + `TraceEvent.timestamp` | exact | canonical timestamps are preserved exactly | paired projection gate (gateVerified) |
 | E2L-062 | (no legacy duration field) | unavailable | legacy has no duration field and no clock-basis contract; durations are never fabricated | conceptual — executed by the E2L-016 runtime check (`trace.spans[0].durationMs`, enriched fixture) |
-| E2L-063 | (no legacy fidelity field) | unavailable | legacy events carry no fidelity discriminant; provider-native content is not projected and fidelity is not representable | sentinel assertions; matrix view-absence check over the enriched fixture |
+| E2L-063 | (no legacy fidelity field) | unavailable | legacy events carry no fidelity discriminant; the request and response `providerNativeFidelity` (`structurally_faithful` \| `byte_faithful`) are not representable and provider-native content is not projected (enforced against the actual request fidelity mapping; sentinels additionally asserted absent) | field-loss suite; sentinel assertions; matrix runtime check (`events[2].requestEnvelope.providerNativeFidelity` unavailable, enriched fixture, with the auth and both body sentinels additionally asserted absent from the view) |
 | E2L-064 | (no legacy hash contract) | unavailable | legacy `Trace` has no content-hash contract; the actual envelope `nativeContentHash` fields present in a byte_faithful record are reported `unavailable` (there is no aggregate `trace.hashes` field — the real fields are `events[i].requestEnvelope`/`responseEnvelope.nativeContentHash`) | "reports byte_faithful nativeContentHash loss against the real envelope field"; matrix runtime check (`events[2].requestEnvelope.nativeContentHash`, enriched fixture) |
 | E2L-065 | (no legacy field) | unavailable | legacy `TraceEvent` has no `evidenceStatus`; statuses are never collapsed into `null` or omitted fields | "reports completeness, capture surface, observation boundary, and evidenceStatus loss"; conceptual — executed by the E2L-021 runtime check |
-| E2L-066 | (no legacy declarations) | unavailable | missing, redaction, and truncation declarations are not representable in the legacy vocabulary and are never fabricated into content | "never turns redacted/missing/unknown evidence into content" and "does not leak secrets or provider-native bodies into the legacy view"; conceptual — these are absence guarantees over redacted fixtures executed by the dedicated suites; no report entry exists because no mapping is emitted for content that must not appear |
-| E2L-067 | `AgentRun`/`Turn` token fields | unavailable | legacy usage is a plain number; per-field evidence status is not representable, and token fields stay `unavailable` until the measurement layer exists | `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)"; matrix runtime check (`token accounting`, enriched fixture) |
+| E2L-066 | (no legacy declarations) | unavailable | missing, redaction, and truncation declarations present in the raw observations are reported `unavailable` against their actual raw-payload paths; declaration values (policy names, reason lists, lengths, notes) are never echoed and the absent content is never fabricated | "never turns redacted/missing/unknown evidence into content" and "does not leak secrets or provider-native bodies into the legacy view"; matrix runtime check (`rawObservations[1].payload.redaction` unavailable, redacted fixture; missing and truncation are the separate rows E2L-079 and E2L-080) |
+| E2L-067 | `AgentRun`/`Turn` token fields | unavailable | legacy usage is a plain number; the canonical usage-record `evidenceStatus` and per-field token values (`UsageValue.value` + `UsageValue.evidenceStatus`) are not representable, and token fields stay `unavailable` until the measurement layer exists (enforced against the actual usage-record mapping) | field-loss suite; `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)"; matrix runtime check (`events[3].usage.evidenceStatus` unavailable, enriched fixture; token fields are the separate rows E2L-075..E2L-077) |
+
+## Field-level envelope, usage-record, and declaration loss (Spec 014 §2.2.4–§2.2.5, §2.2.12, §5.8)
+
+One executable row per present field; these are the field-specific counterparts of the family rows E2L-045/047/048/063/066/067. Every row is enforced against the actual report entry for the exact field path, over the fixture that carries the field.
+
+| Claim | Legacy target | Classification | Reason | Verified by |
+|---|---|---|---|---|
+| E2L-069 | (no legacy field) | unavailable | legacy `TraceEvent` has no provider-native payload field; the canonical request `providerNative` body is not projected (never flattened into an excerpt) | field-loss suite; matrix runtime check (`events[2].requestEnvelope.providerNative` unavailable, enriched fixture, request-body sentinel additionally asserted absent from the view) |
+| E2L-070 | (no legacy field) | unavailable | legacy `TraceEvent` has no native-encoding field; the canonical request `nativeEncoding` is not projected | field-loss suite; matrix runtime check (`events[2].requestEnvelope.nativeEncoding` unavailable, enriched fixture) |
+| E2L-071 | (no legacy field) | unavailable | legacy `TraceEvent` has no native-content-type field; the canonical request `nativeContentType` is not projected | field-loss suite; matrix runtime check (`events[2].requestEnvelope.nativeContentType` unavailable, enriched fixture) |
+| E2L-072 | (no legacy field) | unavailable | legacy `TraceEvent` has no provider-native payload field; the canonical response `providerNative` body is not projected (never flattened into an excerpt) | field-loss suite; matrix runtime check (`events[4].responseEnvelope.providerNative` unavailable, enriched fixture, auth and response-body sentinels additionally asserted absent from the view) |
+| E2L-073 | (no legacy field) | unavailable | legacy `TraceEvent` has no chunk-index field; streaming chunk index semantics are not representable in the legacy vocabulary | field-loss suite; matrix runtime check (`events[2].responseEnvelope.chunkIndex` unavailable, chunks fixture) |
+| E2L-074 | (no legacy field) | unavailable | legacy usage is a plain number with no per-field evidence-status surface; the canonical usage-record `evidenceStatus` is not projected | field-loss suite; matrix runtime check (`events[3].usage.evidenceStatus` unavailable, enriched fixture) |
+| E2L-075 | `AgentRun`/`Turn` token fields | unavailable | legacy usage is a plain number; the canonical usage `inputTokens` value and its per-field evidence status are not projected (token accounting is a later measurement) | field-loss suite; matrix runtime check (`events[5].usage.inputTokens` unavailable, all-kinds fixture) |
+| E2L-076 | `AgentRun`/`Turn` token fields | unavailable | legacy usage is a plain number; the canonical usage `outputTokens` value and its per-field evidence status are not projected (token accounting is a later measurement) | field-loss suite; matrix runtime check (`events[5].usage.outputTokens` unavailable, all-kinds fixture) |
+| E2L-077 | `AgentRun`/`Turn` token fields | unavailable | legacy usage is a plain number; the canonical usage `totalTokens` value and its per-field evidence status are not projected (token accounting is a later measurement) | field-loss suite; matrix runtime check (`events[5].usage.totalTokens` unavailable, all-kinds fixture) |
+| E2L-078 | (no legacy declarations) | unavailable | the canonical redaction declaration is not representable in the legacy vocabulary; redacted evidence is never turned into content and declaration values are never echoed | "never turns redacted/missing/unknown evidence into content"; matrix runtime check (`rawObservations[1].payload.redaction` unavailable, redacted fixture) |
+| E2L-079 | (no legacy declarations) | unavailable | the canonical missing-evidence declaration is not representable in the legacy vocabulary; the reported absence is never fabricated into content and declaration values are never echoed | "never turns redacted/missing/unknown evidence into content"; matrix runtime check (`rawObservations[2].payload.missing` unavailable, redacted fixture) |
+| E2L-080 | (no legacy declarations) | unavailable | the canonical truncation declaration is not representable in the legacy vocabulary; the truncated value is never fabricated into content and declaration values are never echoed | "never turns redacted/missing/unknown evidence into content"; matrix runtime check (`rawObservations[3].payload.truncation` unavailable, redacted fixture) |
 
 ## Legacy Trace → AgentRun conversion preservation
 
@@ -248,13 +269,14 @@ agent-run parity blocks.
 - Sentinel native content in the fixtures is asserted to never appear in
   projected views, analysis, reports, or projection diagnostics
   (`projectionParity.test.ts` "determinism, immutability, and privacy"), and
-  the matrix `viewAbsence` checks (E2L-045, E2L-047, E2L-063) re-assert it
-  over the enriched fixture.
+  the matrix `viewAbsence` assertions carried **additionally** by E2L-045,
+  E2L-047, E2L-063, E2L-069, and E2L-072 re-assert it over the enriched
+  fixture on top of each claim's real report-mapping check.
 
 ## Runtime verification
 
 - `packages/core/src/evidenceProjections/projectionMappingMatrix.test.ts` —
-  pins the claim-ID registry (68 claims), validates classifications and
+  pins the claim-ID registry (80 claims), validates classifications and
   claim modes (exactly one of `runtime`/`gateVerified`/`conceptual`),
   enforces event-kind exclusivity, **executes every runtime claim against an
   actual projection report over a real fixture** (mapping path + stage +

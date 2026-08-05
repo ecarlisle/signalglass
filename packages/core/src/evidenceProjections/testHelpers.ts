@@ -185,7 +185,7 @@ export function allKindsObservations(): EvidenceObservation[] {
     obs({
       observationId: 'k5', eventId: 'evt-usage', seq: 5, spanId: 'sp-1',
       kind: 'model_usage', capturedAt: T3, rawCapturedAt: T3, observationRole: 'provider_reported',
-      payload: { usage: { evidenceStatus: 'captured', inputTokens: { value: 3, evidenceStatus: 'captured' }, outputTokens: { value: 1, evidenceStatus: 'captured' } } },
+      payload: { usage: { evidenceStatus: 'captured', inputTokens: { value: 3, evidenceStatus: 'captured' }, outputTokens: { value: 1, evidenceStatus: 'captured' }, totalTokens: { value: 4, evidenceStatus: 'captured' } } },
     }),
     obs({
       observationId: 'k6', eventId: 'evt-tool-call', seq: 6, kind: 'tool_call',

@@ -24,6 +24,8 @@ import type {
   EvidenceRecord,
   EventRecord,
   ObservationRole,
+  RequestEnvelope,
+  ResponseEnvelope,
   TraceStatus,
   ValidationIssue,
 } from '@signalglass/evidence';
@@ -377,6 +379,9 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
     pushEventSpecificLossMappings(mappings, event, path);
   });
 
+  // ---- Raw missing/redaction/truncation declarations (only when present) ----
+  pushRawDeclarationLossMappings(mappings, record);
+
   const view: Trace = {
     id: trace.traceId,
     startedAt: trace.startedAt,
@@ -401,8 +406,10 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
 /**
  * Event-specific unavailable mappings for losses that only exist when the
  * canonical event actually carries the information: the `unobservable`
- * observation role (no ContentPhase approximation), byte-faithful envelope
- * `nativeContentHash` fields, and context contributions. Kept out of the
+ * observation role (no ContentPhase approximation), envelope fields that
+ * have no legacy equivalent (fidelity, messages, provider-native payloads,
+ * native byte metadata, hashes, finish reason, usage, chunk index), the
+ * usage-record surface, and context contributions. Kept out of the
  * projection loop so the loop stays readable and the loss rules stay
  * colocated and testable.
  */
@@ -412,8 +419,139 @@ function pushEventSpecificLossMappings(
   path: string,
 ): void {
   pushUnobservableRoleMapping(mappings, event, path);
-  pushEnvelopeHashLossMappings(mappings, event, path);
+  pushEnvelopeLossMappings(mappings, event, path);
+  pushUsageRecordLossMappings(mappings, event, path);
   pushContextContributionLossMapping(mappings, event, path);
+}
+
+/**
+ * Envelope field losses, emitted only for the fields the canonical event
+ * actually carries (`providerNativeFidelity` is required on every valid
+ * envelope and is always reported; optional fields are reported when
+ * present). Every reason is structural — field names and vocabulary only,
+ * never payload values, provider bodies, or hash values.
+ */
+function pushEnvelopeLossMappings(
+  mappings: ProjectionMapping[],
+  event: EventRecord,
+  path: string,
+): void {
+  if (event.kind === 'model_request') {
+    pushRequestEnvelopeLossMappings(mappings, event.requestEnvelope, path);
+  }
+  if (event.kind === 'model_response' || event.kind === 'model_response_chunk') {
+    pushResponseEnvelopeLossMappings(mappings, event.responseEnvelope, path);
+  }
+}
+
+/** Request-envelope field losses, one per actual envelope field. */
+function pushRequestEnvelopeLossMappings(
+  mappings: ProjectionMapping[],
+  envelope: RequestEnvelope | undefined,
+  path: string,
+): void {
+  if (envelope == null) return;
+  pushUnavailable(mappings, `${path}.requestEnvelope.providerNativeFidelity`,
+    'legacy TraceEvent carries no fidelity discriminant; the canonical request providerNativeFidelity (structurally_faithful | byte_faithful) is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.requestEnvelope.messages`, envelope.messages,
+    'legacy excerpts never inline normalized request messages; the canonical request messages are not projected');
+  pushUnavailableIfPresent(mappings, `${path}.requestEnvelope.providerNative`, envelope.providerNative,
+    'legacy TraceEvent has no provider-native payload field; the canonical request providerNative body is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.requestEnvelope.nativeEncoding`, envelope.nativeEncoding,
+    'legacy TraceEvent has no native-encoding field; the canonical request nativeEncoding is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.requestEnvelope.nativeContentType`, envelope.nativeContentType,
+    'legacy TraceEvent has no native-content-type field; the canonical request nativeContentType is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.requestEnvelope.nativeContentHash`, envelope.nativeContentHash,
+    'legacy Trace has no content-hash contract; the request envelope nativeContentHash is not projected');
+}
+
+/** Response-envelope field losses, one per actual envelope field. */
+function pushResponseEnvelopeLossMappings(
+  mappings: ProjectionMapping[],
+  envelope: ResponseEnvelope | undefined,
+  path: string,
+): void {
+  if (envelope == null) return;
+  pushUnavailable(mappings, `${path}.responseEnvelope.providerNativeFidelity`,
+    'legacy TraceEvent carries no fidelity discriminant; the canonical response providerNativeFidelity (structurally_faithful | byte_faithful) is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.finishReason`, envelope.finishReason,
+    'legacy TraceEvent has no finish-reason field; the canonical response finishReason is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.providerNative`, envelope.providerNative,
+    'legacy TraceEvent has no provider-native payload field; the canonical response providerNative body is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.usage`, envelope.usage,
+    'legacy TraceEvent has no usage field; the canonical responseEnvelope usage record (with per-field evidence status) is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.chunkIndex`, envelope.chunkIndex,
+    'legacy TraceEvent has no chunk-index field; streaming chunk index semantics are not representable');
+  pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.nativeEncoding`, envelope.nativeEncoding,
+    'legacy TraceEvent has no native-encoding field; the canonical response nativeEncoding is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.nativeContentType`, envelope.nativeContentType,
+    'legacy TraceEvent has no native-content-type field; the canonical response nativeContentType is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.nativeContentHash`, envelope.nativeContentHash,
+    'legacy Trace has no content-hash contract; the response envelope nativeContentHash is not projected');
+}
+
+/** Push one always-present unavailable mapping. */
+function pushUnavailable(
+  mappings: ProjectionMapping[],
+  path: string,
+  reason: string,
+): void {
+  mappings.push({ path, stage: STAGE, outcome: 'unavailable', reason });
+}
+
+/** Push one unavailable mapping only when the optional field is present. */
+function pushUnavailableIfPresent(
+  mappings: ProjectionMapping[],
+  path: string,
+  value: unknown,
+  reason: string,
+): void {
+  if (value == null) return;
+  mappings.push({ path, stage: STAGE, outcome: 'unavailable', reason });
+}
+
+/**
+ * Usage-record loss on `model_usage` events: the legacy vocabulary has no
+ * per-field usage surface (legacy usage is a plain number), so the record's
+ * evidenceStatus and any present token fields are reported unavailable.
+ * Token values and their per-field evidence status are never invented.
+ */
+function pushUsageRecordLossMappings(
+  mappings: ProjectionMapping[],
+  event: EventRecord,
+  path: string,
+): void {
+  if (event.kind !== 'model_usage' || event.usage == null) return;
+  mappings.push({
+    path: `${path}.usage.evidenceStatus`,
+    stage: STAGE,
+    outcome: 'unavailable',
+    reason: 'legacy usage is a plain number with no per-field evidence-status surface; the canonical usage-record evidenceStatus is not projected',
+  });
+  if (event.usage.inputTokens != null) {
+    mappings.push({
+      path: `${path}.usage.inputTokens`,
+      stage: STAGE,
+      outcome: 'unavailable',
+      reason: 'legacy usage is a plain number; the canonical usage inputTokens value and its per-field evidence status are not projected (token accounting is a later measurement)',
+    });
+  }
+  if (event.usage.outputTokens != null) {
+    mappings.push({
+      path: `${path}.usage.outputTokens`,
+      stage: STAGE,
+      outcome: 'unavailable',
+      reason: 'legacy usage is a plain number; the canonical usage outputTokens value and its per-field evidence status are not projected (token accounting is a later measurement)',
+    });
+  }
+  if (event.usage.totalTokens != null) {
+    mappings.push({
+      path: `${path}.usage.totalTokens`,
+      stage: STAGE,
+      outcome: 'unavailable',
+      reason: 'legacy usage is a plain number; the canonical usage totalTokens value and its per-field evidence status are not projected (token accounting is a later measurement)',
+    });
+  }
 }
 
 /**
@@ -434,34 +572,50 @@ function pushUnobservableRoleMapping(
   });
 }
 
+/** True for plain record-shaped payloads (never arrays or primitives). */
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
- * Hash-loss mappings identify actual envelope fields when those fields are
- * present (byte_faithful captured payloads carry nativeContentHash).
+ * Unavailable mappings for raw missing/redaction/truncation declarations
+ * present on the authoritative raw observation payloads (Spec 014 §5.8).
+ * The canonical EventRecord type does not carry them, so the loss paths
+ * point at the raw observation payload exactly as it is stored. Reasons are
+ * structural only: declaration values (policy names, reason lists, lengths,
+ * notes) are never echoed.
  */
-function pushEnvelopeHashLossMappings(
+function pushRawDeclarationLossMappings(
   mappings: ProjectionMapping[],
-  event: EventRecord,
-  path: string,
+  record: EvidenceRecord,
 ): void {
-  if (event.kind === 'model_request' && event.requestEnvelope?.nativeContentHash != null) {
-    mappings.push({
-      path: `${path}.requestEnvelope.nativeContentHash`,
-      stage: STAGE,
-      outcome: 'unavailable',
-      reason: 'legacy Trace has no content-hash contract; the request envelope nativeContentHash is not projected',
-    });
-  }
-  if (
-    (event.kind === 'model_response' || event.kind === 'model_response_chunk') &&
-    event.responseEnvelope?.nativeContentHash != null
-  ) {
-    mappings.push({
-      path: `${path}.responseEnvelope.nativeContentHash`,
-      stage: STAGE,
-      outcome: 'unavailable',
-      reason: 'legacy Trace has no content-hash contract; the response envelope nativeContentHash is not projected',
-    });
-  }
+  record.rawObservations.forEach((observation, rawIndex) => {
+    const payload = observation.payload;
+    if (!isRecordLike(payload)) return;
+    pushRawDeclaration(mappings, rawIndex, payload, 'missing',
+      'the canonical missing-evidence declaration is not representable in the legacy vocabulary; the reported absence is never fabricated into content');
+    pushRawDeclaration(mappings, rawIndex, payload, 'redaction',
+      'the canonical redaction declaration is not representable in the legacy vocabulary; redacted evidence is never turned into content');
+    pushRawDeclaration(mappings, rawIndex, payload, 'truncation',
+      'the canonical truncation declaration is not representable in the legacy vocabulary; the truncated value is never fabricated into content');
+  });
+}
+
+/** Push one unavailable mapping for a present raw payload declaration. */
+function pushRawDeclaration(
+  mappings: ProjectionMapping[],
+  rawIndex: number,
+  payload: Record<string, unknown>,
+  declaration: 'missing' | 'redaction' | 'truncation',
+  reason: string,
+): void {
+  if (payload[declaration] == null) return;
+  mappings.push({
+    path: `rawObservations[${rawIndex}].payload.${declaration}`,
+    stage: STAGE,
+    outcome: 'unavailable',
+    reason,
+  });
 }
 
 /** Explicit accounting for context contributions (Spec 014 §6.3). */

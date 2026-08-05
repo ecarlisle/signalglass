@@ -576,3 +576,189 @@ describe('evidenceToLegacyTrace — structured failure (authoritative validation
     expect(evidenceToLegacyTrace(stripped).ok).toBe(false);
   });
 });
+
+describe('evidenceToLegacyTrace — field-level loss mappings (present fields only)', () => {
+  const NATIVE_HASH = 'sha256:' + 'a'.repeat(64);
+  const DECL_SENTINELS = ['secrets-v1', 'authorization-header', 'capture_failed', 'client_side', '100', '5000'];
+
+  /** Byte-faithful request/response record carrying every optional envelope field. */
+  function fullEnvelopeRecord(): EvidenceRecord {
+    return buildRecord([
+      obs({ observationId: 'f0', eventId: 'evt-start', seq: 0, kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0 }),
+      obs({
+        observationId: 'f1', eventId: 'evt-req', seq: 1, kind: 'model_request',
+        capturedAt: T1, rawCapturedAt: T1, observationRole: 'client_sent', evidenceStatus: 'captured',
+        payload: {
+          requestEnvelope: {
+            model: 'm', provider: 'p', providerNativeFidelity: 'byte_faithful',
+            messages: [{ role: 'user', content: 'hello' }],
+            providerNative: { text: 'request-body' },
+            nativeEncoding: 'utf-8', nativeContentType: 'application/json',
+            nativeContentHash: NATIVE_HASH,
+          },
+        },
+      }),
+      obs({
+        observationId: 'f2', eventId: 'evt-resp', seq: 2, kind: 'model_response',
+        capturedAt: T2, rawCapturedAt: T2, observationRole: 'provider_reported',
+        payload: {
+          responseEnvelope: {
+            providerNativeFidelity: 'structurally_faithful',
+            finishReason: 'end_turn',
+            providerNative: { text: 'response-body' },
+            usage: { evidenceStatus: 'captured', inputTokens: { value: 4, evidenceStatus: 'captured' } },
+            chunkIndex: 0,
+          },
+        },
+      }),
+      obs({ observationId: 'f3', eventId: 'evt-end', seq: 3, kind: 'interaction_end', capturedAt: T3, rawCapturedAt: T3 }),
+    ]);
+  }
+
+  it('reports every present request-envelope field as unavailable with a structural reason', () => {
+    const result = evidenceToLegacyTrace(fullEnvelopeRecord());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const byPath = new Map(result.report.mappings.map((m) => [m.path, m]));
+    const expected = [
+      'events[1].requestEnvelope.providerNativeFidelity',
+      'events[1].requestEnvelope.messages',
+      'events[1].requestEnvelope.providerNative',
+      'events[1].requestEnvelope.nativeEncoding',
+      'events[1].requestEnvelope.nativeContentType',
+      'events[1].requestEnvelope.nativeContentHash',
+    ];
+    for (const path of expected) {
+      const mapping = byPath.get(path);
+      expect(mapping, `mapping for ${path} must exist`).toBeDefined();
+      expect(mapping!.stage).toBe('evidence_to_legacy_trace');
+      expect(mapping!.outcome).toBe('unavailable');
+      expect(mapping!.reason.length).toBeGreaterThan(10);
+      expect(mapping!.reason).not.toContain('hello');
+      expect(mapping!.reason).not.toContain('request-body');
+      expect(mapping!.reason).not.toContain(NATIVE_HASH);
+    }
+  });
+
+  it('reports every present response-envelope field as unavailable with a structural reason', () => {
+    const result = evidenceToLegacyTrace(fullEnvelopeRecord());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const byPath = new Map(result.report.mappings.map((m) => [m.path, m]));
+    const expected = [
+      'events[2].responseEnvelope.providerNativeFidelity',
+      'events[2].responseEnvelope.finishReason',
+      'events[2].responseEnvelope.providerNative',
+      'events[2].responseEnvelope.usage',
+      'events[2].responseEnvelope.chunkIndex',
+    ];
+    for (const path of expected) {
+      const mapping = byPath.get(path);
+      expect(mapping, `mapping for ${path} must exist`).toBeDefined();
+      expect(mapping!.stage).toBe('evidence_to_legacy_trace');
+      expect(mapping!.outcome).toBe('unavailable');
+      expect(mapping!.reason).not.toContain('end_turn');
+      expect(mapping!.reason).not.toContain('response-body');
+    }
+  });
+
+  it('emits no envelope-field mappings for optional fields the record does not carry', () => {
+    // minimalObservations: the request has messages+providerNative but no
+    // native byte fields; the response has finishReason+providerNative but no
+    // usage, chunkIndex, or native byte fields. Absent fields must produce no
+    // presence mapping — the report only declares losses it can substantiate.
+    const result = evidenceToLegacyTrace(buildRecord(minimalObservations()));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const paths = new Set(result.report.mappings.map((m) => m.path));
+    expect(paths.has('events[2].requestEnvelope.nativeEncoding')).toBe(false);
+    expect(paths.has('events[2].requestEnvelope.nativeContentType')).toBe(false);
+    expect(paths.has('events[2].requestEnvelope.nativeContentHash')).toBe(false);
+    expect(paths.has('events[3].responseEnvelope.usage')).toBe(false);
+    expect(paths.has('events[3].responseEnvelope.chunkIndex')).toBe(false);
+    expect(paths.has('events[3].responseEnvelope.nativeContentHash')).toBe(false);
+    // Present fields still get their mappings.
+    expect(paths.has('events[2].requestEnvelope.messages')).toBe(true);
+    expect(paths.has('events[2].requestEnvelope.providerNative')).toBe(true);
+    expect(paths.has('events[3].responseEnvelope.finishReason')).toBe(true);
+    expect(paths.has('events[3].responseEnvelope.providerNative')).toBe(true);
+  });
+
+  it('reports the usage record and only the token fields actually present', () => {
+    const result = evidenceToLegacyTrace(buildRecord(allKindsObservations()));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const byPath = new Map(result.report.mappings.map((m) => [m.path, m]));
+    // all-kinds model_usage (events[5]) carries input/output/total tokens.
+    expect(byPath.get('events[5].usage.evidenceStatus')?.outcome).toBe('unavailable');
+    expect(byPath.get('events[5].usage.inputTokens')?.outcome).toBe('unavailable');
+    expect(byPath.get('events[5].usage.outputTokens')?.outcome).toBe('unavailable');
+    expect(byPath.get('events[5].usage.totalTokens')?.outcome).toBe('unavailable');
+    for (const m of result.report.mappings.filter((x) => x.path.includes('usage'))) {
+      expect(m.reason).not.toContain('3');
+      expect(m.reason).not.toContain('1');
+      expect(m.reason).not.toContain('4');
+    }
+
+    // A usage record carrying only evidenceStatus produces no token mappings.
+    const bare = evidenceToLegacyTrace(buildRecord([
+      obs({ observationId: 'u0', eventId: 'evt-start', seq: 0, kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0 }),
+      obs({
+        observationId: 'u1', eventId: 'evt-usage', seq: 1, kind: 'model_usage',
+        capturedAt: T1, rawCapturedAt: T1, observationRole: 'provider_reported',
+        payload: { usage: { evidenceStatus: 'captured' } },
+      }),
+      obs({ observationId: 'u2', eventId: 'evt-end', seq: 2, kind: 'interaction_end', capturedAt: T2, rawCapturedAt: T2 }),
+    ]));
+    expect(bare.ok).toBe(true);
+    if (!bare.ok) return;
+    const barePaths = new Set(bare.report.mappings.map((m) => m.path));
+    expect(barePaths.has('events[1].usage.evidenceStatus')).toBe(true);
+    expect(barePaths.has('events[1].usage.inputTokens')).toBe(false);
+    expect(barePaths.has('events[1].usage.outputTokens')).toBe(false);
+    expect(barePaths.has('events[1].usage.totalTokens')).toBe(false);
+  });
+
+  it('reports raw missing/redaction/truncation declarations without echoing declaration values', () => {
+    const observations = [
+      obs({ observationId: 'd0', eventId: 'evt-start', seq: 0, kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0 }),
+      obs({
+        observationId: 'd1', eventId: 'evt-redacted', seq: 1, kind: 'model_request',
+        capturedAt: T1, rawCapturedAt: T1, observationRole: 'client_sent', evidenceStatus: 'redacted',
+        payload: {
+          redaction: { policy: 'secrets-v1', reasons: ['authorization-header'] },
+          requestEnvelope: { model: 'm', provider: 'p', providerNativeFidelity: 'structurally_faithful' },
+        },
+      }),
+      obs({
+        observationId: 'd2', eventId: 'evt-missing', seq: 2, kind: 'model_response',
+        capturedAt: T2, rawCapturedAt: T2, observationRole: 'returned', evidenceStatus: 'missing',
+        payload: {
+          missing: { reason: 'capture_failed', reportedBy: { captureSurface: 'client_side', observationBoundary: 'returned' } },
+          responseEnvelope: { providerNativeFidelity: 'structurally_faithful' },
+        },
+      }),
+      obs({
+        observationId: 'd3', eventId: 'evt-truncated', seq: 3, kind: 'tool_result',
+        capturedAt: T2, rawCapturedAt: T2, observationRole: 'returned', evidenceStatus: 'truncated',
+        payload: { truncation: { maxLength: 100, originalLength: 5000 }, toolResult: { stdout: 'x' } },
+      }),
+      obs({ observationId: 'd4', eventId: 'evt-end', seq: 4, kind: 'interaction_end', capturedAt: T3, rawCapturedAt: T3 }),
+    ];
+    const result = evidenceToLegacyTrace(buildRecord(observations));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const byPath = new Map(result.report.mappings.map((m) => [m.path, m]));
+    expect(byPath.get('rawObservations[1].payload.redaction')?.outcome).toBe('unavailable');
+    expect(byPath.get('rawObservations[2].payload.missing')?.outcome).toBe('unavailable');
+    expect(byPath.get('rawObservations[3].payload.truncation')?.outcome).toBe('unavailable');
+    for (const m of result.report.mappings) {
+      for (const sentinel of DECL_SENTINELS) {
+        expect(m.reason, `declaration value "${sentinel}" must never appear in a reason`).not.toContain(sentinel);
+      }
+    }
+    const serialized = JSON.stringify(result.view);
+    expect(serialized).not.toContain('authorization-header');
+    expect(serialized).not.toContain('capture_failed');
+  });
+});
