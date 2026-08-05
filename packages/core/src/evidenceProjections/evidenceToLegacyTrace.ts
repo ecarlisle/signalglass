@@ -183,6 +183,13 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
     reason: 'legacy trace id preserves the canonical traceId',
   });
   mappings.push({
+    path: 'trace.interactionId',
+    stage: STAGE,
+    outcome: 'exact',
+    reason:
+      'canonical interactionId equals traceId (validated invariant); the value is preserved by legacy Trace.id, though the separate interactionId field is not carried',
+  });
+  mappings.push({
     path: 'trace.startedAt',
     stage: STAGE,
     outcome: 'exact',
@@ -276,20 +283,58 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
     path: 'trace.captureSurface',
     stage: STAGE,
     outcome: 'unavailable',
-    reason: 'legacy Trace has no capture-surface or observation-boundary fields',
+    reason: 'legacy Trace has no capture-surface field; the declared capture surface is not projected',
   });
   mappings.push({
-    path: 'trace.hashes',
+    path: 'trace.observationBoundary',
     stage: STAGE,
     outcome: 'unavailable',
-    reason: 'legacy Trace has no content-hash contract; contentHash and nativeContentHash are not projected',
+    reason: 'legacy Trace has no observation-boundary field; the declared observation boundary is not projected',
   });
   mappings.push({
-    path: 'trace.completeness',
+    path: 'completeness',
     stage: STAGE,
     outcome: 'unavailable',
-    reason: 'legacy Trace has no completeness record; the canonical derived completeness is not projected',
+    reason: 'legacy Trace has no completeness record; the canonical derived EvidenceRecord.completeness (eventsByStatus, seqGaps, duplicatesDetected, boundaryStatement) is not projected',
   });
+
+  // ---- Conditions (only when present) ----
+  if (trace.conditions != null && trace.conditions.length > 0) {
+    mappings.push({
+      path: 'trace.conditions',
+      stage: STAGE,
+      outcome: 'unavailable',
+      reason: 'legacy Trace has no conditions field; canonical experimental/environmental conditions are not projected',
+    });
+  }
+
+  // ---- Spans (only when present) ----
+  if (trace.spans.length > 0) {
+    mappings.push({
+      path: 'trace.spans',
+      stage: STAGE,
+      outcome: 'unavailable',
+      reason: 'legacy Trace has no span records; span hierarchy, kind, name, lifecycle status, seq ordering, and timing are not projected',
+    });
+    trace.spans.forEach((span, spanIndex) => {
+      if (span.durationMs != null) {
+        mappings.push({
+          path: `trace.spans[${spanIndex}].durationMs`,
+          stage: STAGE,
+          outcome: 'unavailable',
+          reason: 'legacy Trace has no duration field or clock-basis contract; span durationMs is not projected',
+        });
+      }
+      if (span.participants != null && span.participants.length > 0) {
+        mappings.push({
+          path: `trace.spans[${spanIndex}].participants`,
+          stage: STAGE,
+          outcome: 'unavailable',
+          reason: 'legacy Trace has no span-participant concept; span participants are not projected',
+        });
+      }
+    });
+  }
 
   // ---- Events ----
   const events: TraceEvent[] = [];
@@ -329,15 +374,7 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
       reason: `kind "${event.kind}": ${mapped.reason}${phaseNote}`,
     });
 
-    // Explicit accounting for context contributions (Spec 014 §6.3).
-    if (event.kind === 'model_request' && Array.isArray(event.contextContributions)) {
-      mappings.push({
-        path: `${path}.contextContributions`,
-        stage: STAGE,
-        outcome: 'unavailable',
-        reason: 'legacy Trace has no context-contribution concept; artifact references are not projected',
-      });
-    }
+    pushEventSpecificLossMappings(mappings, event, path);
   });
 
   const view: Trace = {
@@ -359,6 +396,87 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
   };
 
   return { ok: true, view, report };
+}
+
+/**
+ * Event-specific unavailable mappings for losses that only exist when the
+ * canonical event actually carries the information: the `unobservable`
+ * observation role (no ContentPhase approximation), byte-faithful envelope
+ * `nativeContentHash` fields, and context contributions. Kept out of the
+ * projection loop so the loop stays readable and the loss rules stay
+ * colocated and testable.
+ */
+function pushEventSpecificLossMappings(
+  mappings: ProjectionMapping[],
+  event: EventRecord,
+  path: string,
+): void {
+  pushUnobservableRoleMapping(mappings, event, path);
+  pushEnvelopeHashLossMappings(mappings, event, path);
+  pushContextContributionLossMapping(mappings, event, path);
+}
+
+/**
+ * The `unobservable` observation role has no ContentPhase approximation; the
+ * loss must be explicit rather than folded silently into the kind mapping.
+ */
+function pushUnobservableRoleMapping(
+  mappings: ProjectionMapping[],
+  event: EventRecord,
+  path: string,
+): void {
+  if (event.observationRole !== 'unobservable') return;
+  mappings.push({
+    path: `${path}.observationRole`,
+    stage: STAGE,
+    outcome: 'unavailable',
+    reason: 'observationRole "unobservable" has no ContentPhase approximation; the role is not representable in the legacy vocabulary',
+  });
+}
+
+/**
+ * Hash-loss mappings identify actual envelope fields when those fields are
+ * present (byte_faithful captured payloads carry nativeContentHash).
+ */
+function pushEnvelopeHashLossMappings(
+  mappings: ProjectionMapping[],
+  event: EventRecord,
+  path: string,
+): void {
+  if (event.kind === 'model_request' && event.requestEnvelope?.nativeContentHash != null) {
+    mappings.push({
+      path: `${path}.requestEnvelope.nativeContentHash`,
+      stage: STAGE,
+      outcome: 'unavailable',
+      reason: 'legacy Trace has no content-hash contract; the request envelope nativeContentHash is not projected',
+    });
+  }
+  if (
+    (event.kind === 'model_response' || event.kind === 'model_response_chunk') &&
+    event.responseEnvelope?.nativeContentHash != null
+  ) {
+    mappings.push({
+      path: `${path}.responseEnvelope.nativeContentHash`,
+      stage: STAGE,
+      outcome: 'unavailable',
+      reason: 'legacy Trace has no content-hash contract; the response envelope nativeContentHash is not projected',
+    });
+  }
+}
+
+/** Explicit accounting for context contributions (Spec 014 §6.3). */
+function pushContextContributionLossMapping(
+  mappings: ProjectionMapping[],
+  event: EventRecord,
+  path: string,
+): void {
+  if (event.kind !== 'model_request' || !Array.isArray(event.contextContributions)) return;
+  mappings.push({
+    path: `${path}.contextContributions`,
+    stage: STAGE,
+    outcome: 'unavailable',
+    reason: 'legacy Trace has no context-contribution concept; artifact references are not projected',
+  });
 }
 
 /** Legacy `TraceEventType` vocabulary, exported for mapping documentation. */

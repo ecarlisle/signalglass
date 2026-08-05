@@ -14,6 +14,7 @@ import {
 } from './eventMapping.js';
 import { EVIDENCE_TO_LEGACY_TRACE_PROJECTION_VERSION, PROJECTION_ISSUE_CODES } from './types.js';
 import {
+  allKindsObservations,
   buildRecord,
   minimalObservations,
   obs,
@@ -65,110 +66,7 @@ describe('evidenceToLegacyTrace — mapping table', () => {
 
 /** A completed trace containing every canonical event kind. */
 function allKindsRecord(): EvidenceRecord {
-  const observations = [
-    obs({ observationId: 'k0', eventId: 'evt-interaction-start', seq: 0, kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0 }),
-    obs({
-      observationId: 'k1', eventId: 'evt-span-start', seq: 1, spanId: 'sp-1',
-      kind: 'span_start', capturedAt: T1, rawCapturedAt: T1,
-      payload: { span: { kind: 'model', name: 'model:claude-sonnet-4', parentSpanId: null } },
-    }),
-    obs({
-      observationId: 'k2', eventId: 'evt-model-request', seq: 2, spanId: 'sp-1',
-      kind: 'model_request', capturedAt: T2, rawCapturedAt: T2, observationRole: 'client_sent',
-      payload: {
-        requestEnvelope: {
-          model: 'claude-sonnet-4', provider: 'anthropic',
-          providerNativeFidelity: 'structurally_faithful',
-          messages: [{ role: 'user', content: 'hello' }],
-          providerNative: { temperature: 0.2 },
-        },
-        contextContributions: [
-          { artifactId: 'art-1', locator: { type: 'whole' }, position: 0, provenanceState: 'recorded' },
-        ],
-      },
-    }),
-    obs({
-      observationId: 'k3', eventId: 'evt-model-response', seq: 3, spanId: 'sp-1',
-      kind: 'model_response', capturedAt: T3, rawCapturedAt: T3, observationRole: 'provider_reported',
-      payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', finishReason: 'end_turn' } },
-    }),
-    obs({
-      observationId: 'k4', eventId: 'evt-chunk', seq: 4, spanId: 'sp-1',
-      kind: 'model_response_chunk', capturedAt: T3, rawCapturedAt: T3, observationRole: 'provider_reported',
-      payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', chunkIndex: 0 } },
-    }),
-    obs({
-      observationId: 'k5', eventId: 'evt-usage', seq: 5, spanId: 'sp-1',
-      kind: 'model_usage', capturedAt: T3, rawCapturedAt: T3, observationRole: 'provider_reported',
-      payload: { usage: { evidenceStatus: 'captured', inputTokens: { value: 3, evidenceStatus: 'captured' }, outputTokens: { value: 1, evidenceStatus: 'captured' } } },
-    }),
-    obs({
-      observationId: 'k6', eventId: 'evt-tool-call', seq: 6, kind: 'tool_call',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'application_constructed',
-      payload: { tool: { name: 'read_file', arguments: { path: 'x' } } },
-    }),
-    obs({
-      observationId: 'k7', eventId: 'evt-tool-result', seq: 7, kind: 'tool_result',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'returned',
-      payload: { toolResult: { stdout: 'file contents' } },
-    }),
-    obs({
-      observationId: 'k8', eventId: 'evt-mcp-request', seq: 8, kind: 'mcp_request',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'application_constructed',
-      payload: { mcp: { server: 'fs', tool: 'read', arguments: { path: 'x' } } },
-    }),
-    obs({
-      observationId: 'k9', eventId: 'evt-mcp-result', seq: 9, kind: 'mcp_result',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'returned',
-      payload: { mcpResult: { content: 'ok' } },
-    }),
-    obs({
-      observationId: 'k10', eventId: 'evt-retrieval-request', seq: 10, kind: 'retrieval_request',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'application_constructed',
-      payload: { retrieval: { query: 'q', topK: 3 } },
-    }),
-    obs({
-      observationId: 'k11', eventId: 'evt-retrieval-result', seq: 11, kind: 'retrieval_result',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'returned',
-      payload: { retrievalResult: { resultCount: 3 } },
-    }),
-    obs({
-      observationId: 'k12', eventId: 'evt-cp-request', seq: 12, kind: 'context_provider_request',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'application_constructed',
-      payload: { contextProvider: { name: 'graphify', kind: 'retrieval' } },
-    }),
-    obs({
-      observationId: 'k13', eventId: 'evt-cp-result', seq: 13, kind: 'context_provider_result',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'returned',
-      payload: { contextProvider: { name: 'graphify', kind: 'retrieval' } },
-    }),
-    obs({
-      observationId: 'k14', eventId: 'evt-context-assembled', seq: 14, kind: 'context_assembled',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'application_constructed',
-      payload: { contextContributions: [{ artifactId: 'art-1', locator: { type: 'whole' }, position: 0, provenanceState: 'recorded' }] },
-    }),
-    obs({
-      observationId: 'k15', eventId: 'evt-error', seq: 15, kind: 'error',
-      capturedAt: T3, rawCapturedAt: T3, observationRole: 'returned',
-      payload: { actor: 'model', lifecycleTarget: 'none', lifecycleEffect: 'none', error: { type: 'timeout' } },
-    }),
-    obs({
-      observationId: 'k16', eventId: 'evt-cancelled', seq: 16, kind: 'cancelled',
-      capturedAt: T4, rawCapturedAt: T4, observationRole: 'application_constructed',
-      payload: { lifecycleTarget: 'none', lifecycleEffect: 'cancel', cancellation: { requestedBy: 'user' } },
-    }),
-    obs({
-      observationId: 'k17', eventId: 'evt-retry', seq: 17, kind: 'retry',
-      capturedAt: T4, rawCapturedAt: T4, observationRole: 'application_constructed',
-      payload: { retry: { originalRequestEventId: 'evt-model-request', errorEventId: 'evt-error', attempt: 2, observedDelayMs: 500 } },
-    }),
-    obs({
-      observationId: 'k18', eventId: 'evt-span-end', seq: 18, spanId: 'sp-1',
-      kind: 'span_end', capturedAt: T4, rawCapturedAt: T4, payload: { durationMs: 3000 },
-    }),
-    obs({ observationId: 'k19', eventId: 'evt-interaction-end', seq: 19, kind: 'interaction_end', capturedAt: T5, rawCapturedAt: T5 }),
-  ];
-  return buildRecord(observations);
+  return buildRecord(allKindsObservations());
 }
 
 describe('evidenceToLegacyTrace — trace-level mapping', () => {
@@ -224,17 +122,139 @@ describe('evidenceToLegacyTrace — trace-level mapping', () => {
     expect(task?.outcome).toBe('unavailable');
   });
 
-  it('reports hashes, completeness, capture surface, and evidenceStatus loss', () => {
+  it('reports completeness, capture surface, observation boundary, and evidenceStatus loss', () => {
     const result = evidenceToLegacyTrace(buildRecord(minimalObservations()));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const paths = new Set(result.report.mappings.map((m) => m.path));
-    expect(paths.has('trace.hashes')).toBe(true);
-    expect(paths.has('trace.completeness')).toBe(true);
+    expect(paths.has('completeness')).toBe(true);
     expect(paths.has('trace.captureSurface')).toBe(true);
+    expect(paths.has('trace.observationBoundary')).toBe(true);
     expect(paths.has('trace.events[].evidenceStatus')).toBe(true);
     expect(paths.has('trace.events[].seq')).toBe(true);
     expect(paths.has('trace.events[].observationRole')).toBe(true);
+    expect(paths.has('trace.hashes')).toBe(false); // not a real aggregate field
+  });
+
+  it('reports interactionId as exact (value preserved by legacy Trace.id)', () => {
+    const result = evidenceToLegacyTrace(buildRecord(minimalObservations()));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.view.id).toBe('trace-1');
+    const interactionId = result.report.mappings.find((m) => m.path === 'trace.interactionId');
+    expect(interactionId?.outcome).toBe('exact');
+    expect(interactionId?.reason).toContain('Trace.id');
+  });
+
+  it('reports conditions and span loss only when those fields are present', () => {
+    const plain = evidenceToLegacyTrace(buildRecord(minimalObservations()));
+    expect(plain.ok).toBe(true);
+    if (!plain.ok) return;
+    expect(plain.report.mappings.some((m) => m.path === 'trace.conditions')).toBe(false);
+    // minimalObservations carries one span: the aggregate span mapping is present.
+    expect(plain.report.mappings.some((m) => m.path === 'trace.spans')).toBe(true);
+
+    // A start/end-only record has no spans: no span mappings are emitted.
+    const spanless = evidenceToLegacyTrace(buildRecord([
+      obs({ observationId: 'n0', eventId: 'evt-start', seq: 0, kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0 }),
+      obs({ observationId: 'n1', eventId: 'evt-end', seq: 1, kind: 'interaction_end', capturedAt: T5, rawCapturedAt: T5 }),
+    ]));
+    expect(spanless.ok).toBe(true);
+    if (!spanless.ok) return;
+    expect(spanless.report.mappings.some((m) => m.path === 'trace.spans')).toBe(false);
+
+    const record = buildRecord(
+      minimalObservations(),
+      undefined,
+      '1.0.0',
+      { conditions: [{ label: 'env', value: 'test', version: '1' }] },
+    );
+    const result = evidenceToLegacyTrace(record);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const conditions = result.report.mappings.find((m) => m.path === 'trace.conditions');
+    expect(conditions?.outcome).toBe('unavailable');
+    expect(conditions?.reason).not.toContain('test'); // structural reason only, never captured values
+
+    const spans = result.report.mappings.find((m) => m.path === 'trace.spans');
+    expect(spans?.outcome).toBe('unavailable');
+    const duration = result.report.mappings.find((m) => m.path === 'trace.spans[0].durationMs');
+    expect(duration?.outcome).toBe('unavailable');
+  });
+
+  it('reports byte_faithful nativeContentHash loss against the real envelope field', () => {
+    const record = buildRecord([
+      obs({ observationId: 'h0', eventId: 'evt-interaction-start', seq: 0, kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0 }),
+      obs({
+        observationId: 'h1', eventId: 'evt-span-start', seq: 1, spanId: 'sp-1',
+        kind: 'span_start', capturedAt: T1, rawCapturedAt: T1,
+        payload: { span: { kind: 'model', name: 'model:m', parentSpanId: null } },
+      }),
+      obs({
+        observationId: 'h2', eventId: 'evt-req', seq: 2, spanId: 'sp-1',
+        kind: 'model_request', capturedAt: T2, rawCapturedAt: T2, observationRole: 'client_sent',
+        payload: {
+          requestEnvelope: {
+            model: 'm', provider: 'p', providerNativeFidelity: 'byte_faithful',
+            nativeEncoding: 'utf-8', nativeContentType: 'application/json',
+            nativeContentHash: 'sha256:' + 'a'.repeat(64),
+          },
+        },
+      }),
+      obs({
+        observationId: 'h3', eventId: 'evt-resp', seq: 3, spanId: 'sp-1',
+        kind: 'model_response', capturedAt: T3, rawCapturedAt: T3, observationRole: 'provider_reported',
+        payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', finishReason: 'end_turn' } },
+      }),
+      obs({
+        observationId: 'h4', eventId: 'evt-span-end', seq: 4, spanId: 'sp-1',
+        kind: 'span_end', capturedAt: T4, rawCapturedAt: T4, payload: { durationMs: 3000 },
+      }),
+      obs({ observationId: 'h5', eventId: 'evt-interaction-end', seq: 5, kind: 'interaction_end', capturedAt: T5, rawCapturedAt: T5 }),
+    ]);
+    const result = evidenceToLegacyTrace(record);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const hash = result.report.mappings.find((m) => m.path === 'events[2].requestEnvelope.nativeContentHash');
+    expect(hash?.outcome).toBe('unavailable');
+    expect(hash?.reason).not.toContain('sha256'); // structural reason, never the hash value
+  });
+
+  it('reports observationRole "unobservable" as an event-specific unavailable mapping', () => {
+    const result = evidenceToLegacyTrace(buildRecord([
+      obs({ observationId: 'u0', eventId: 'evt-interaction-start', seq: 0, kind: 'interaction_start', capturedAt: T0, rawCapturedAt: T0 }),
+      obs({
+        observationId: 'u1', eventId: 'evt-span-start', seq: 1, spanId: 'sp-1',
+        kind: 'span_start', capturedAt: T1, rawCapturedAt: T1,
+        payload: { span: { kind: 'model', name: 'model:m', parentSpanId: null } },
+      }),
+      obs({
+        observationId: 'u2', eventId: 'evt-req', seq: 2, spanId: 'sp-1',
+        kind: 'model_request', capturedAt: T2, rawCapturedAt: T2, observationRole: 'client_sent',
+        payload: { requestEnvelope: { model: 'm', provider: 'p', providerNativeFidelity: 'structurally_faithful' } },
+      }),
+      obs({
+        observationId: 'u3', eventId: 'evt-usage', seq: 3, spanId: 'sp-1',
+        kind: 'model_usage', capturedAt: T2, rawCapturedAt: T2,
+        observationRole: 'unobservable', evidenceStatus: 'unknown',
+        payload: { usage: { evidenceStatus: 'unknown' } },
+      }),
+      obs({
+        observationId: 'u4', eventId: 'evt-resp', seq: 4, spanId: 'sp-1',
+        kind: 'model_response', capturedAt: T3, rawCapturedAt: T3, observationRole: 'provider_reported',
+        payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', finishReason: 'end_turn' } },
+      }),
+      obs({
+        observationId: 'u5', eventId: 'evt-span-end', seq: 5, spanId: 'sp-1',
+        kind: 'span_end', capturedAt: T4, rawCapturedAt: T4, payload: { durationMs: 3000 },
+      }),
+      obs({ observationId: 'u6', eventId: 'evt-interaction-end', seq: 6, kind: 'interaction_end', capturedAt: T5, rawCapturedAt: T5 }),
+    ]));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const role = result.report.mappings.find((m) => m.path === 'events[3].observationRole');
+    expect(role?.outcome).toBe('unavailable');
+    expect(role?.reason).toContain('unobservable');
   });
 });
 

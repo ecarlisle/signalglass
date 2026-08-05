@@ -10,9 +10,13 @@ views are **ephemeral and non-authoritative** (Spec 014 §6.5).
 **Slice:** Spec 014 slice 4 (projection parity and loss verification).
 This document is the human-facing form of the executable claim table in
 `packages/core/src/evidenceProjections/projectionMappingMatrix.ts`; the
-conformance test `packages/core/src/evidenceProjections/projectionMappingMatrix.test.ts`
-pins the claim IDs and verifies that the matrix's paths, outcomes, and
-reasons exist in actual projection reports. The two must stay aligned.
+conformance test
+`packages/core/src/evidenceProjections/projectionMappingMatrix.test.ts`
+pins the claim IDs and **enforces every runtime claim against an actual
+projection report over a real fixture** (the check fails when the expected
+report entry is absent). The two must stay exactly aligned: the table below
+mirrors the executable table claim for claim, classification for
+classification, reason for reason.
 
 **Classification vocabulary** (Spec 014 §6.2) — every mapping is exactly one of:
 
@@ -29,6 +33,23 @@ reasons exist in actual projection reports. The two must stay aligned.
 A `defect` would be an expressible value that differs, loss that is
 unreported, or an inaccurate classification/reason — the parity tests treat
 any such observation as a failure, and none is currently known.
+
+**Claim verification modes** — every claim carries exactly one:
+
+- `runtime` — the conformance test runs the named projection over the named
+  fixture and asserts the actual report entry: mapping `path` + `stage` +
+  `outcome` (plus a constrained `reasonIncludes` fragment where given), a
+  `reportField` equality, or a `viewAbsence` guarantee (the serialized view
+  contains none of the listed markers). A claim can no longer cite a check it
+  does not perform.
+- `gateVerified` — the exact paired-view equality gate
+  (`packages/reports/src/projectionParity.test.ts`) proves value-level
+  preservation; classification is `exact`. The matrix test also asserts the
+  preserved ids/timestamps directly against the canonical record.
+- `conceptual` — a documentation-only claim with an explicit explanation of
+  why no runtime report entry exists (for example a §2.2 primitive family row
+  whose executable check lives on another claim, or an absence guarantee
+  enforced by the dedicated sentinel suites named in `Verified by`).
 
 ## Parity subject and verification
 
@@ -54,137 +75,139 @@ The matrix below uses claim IDs `E2L-###` (evidence-to-legacy).
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
 | E2L-001 | `Trace.id` | exact | legacy `Trace.id` preserves the canonical `traceId`; ids are opaque, caller-supplied, and never content-derived | paired projection gate; `evidenceToLegacyTrace.test.ts` "projects a minimal completed record into a valid legacy Trace" |
-| E2L-002 | (no legacy field) | unavailable | legacy `Trace` has no `interactionId`; only `traceId` is preserved, so the `interactionId === traceId` invariant is not representable | paired projection gate (fixture carries no `interactionId`) |
-| E2L-003 | `ProjectionReport.sourceSchemaVersion` | unavailable | legacy `Trace` carries no schema version; the projection report records the canonical `sourceSchemaVersion` instead | `evidenceToLegacyTrace.test.ts` "reports exact, partial, inferred, and unavailable mappings" |
+| E2L-002 | `Trace.id` (value-preserving) | exact | the canonical `interactionId` equals the `traceId` (validated invariant); the value is preserved by legacy `Trace.id`, though the separate `interactionId` field is not carried | `evidenceToLegacyTrace.test.ts` "reports interactionId as exact (value preserved by legacy Trace.id)" |
+| E2L-003 | `ProjectionReport.sourceSchemaVersion` | exact | the projection report records the canonical `evidenceSchemaVersion`; legacy `Trace` itself carries no schema version | `evidenceToLegacyTrace.test.ts` "reports exact, partial, inferred, and unavailable mappings"; matrix report-field check (`sourceSchemaVersion` = `"1.0.0"`) |
 | E2L-004 | `Trace.mode` + `Trace.capturePolicy` | partial | legacy `StorageMode` is not carried by canonical evidence; the view defaults to `standard` with its default capture policy; the canonical `captureProfile` name/version is not representable | `evidenceToLegacyTrace.test.ts` "reports exact, partial, inferred, and unavailable mappings" |
-| E2L-005 | (no legacy field) | unavailable | legacy `Trace` has no capture-surface or observation-boundary fields | `evidenceToLegacyTrace.test.ts` "reports hashes, completeness, capture surface, and evidenceStatus loss" |
-| E2L-006 | (no legacy field) | unavailable | legacy has no observation-boundary field (bundled with E2L-005) | same test as E2L-005 |
+| E2L-005 | (no legacy field) | unavailable | legacy `Trace` has no capture-surface field; the declared capture surface is not projected | `evidenceToLegacyTrace.test.ts` "reports completeness, capture surface, observation boundary, and evidenceStatus loss" |
+| E2L-006 | (no legacy field) | unavailable | legacy `Trace` has no observation-boundary field; the declared observation boundary is not projected (reported separately from the capture surface) | same test as E2L-005 |
 | E2L-007 | `Trace.startedAt` | exact | legacy `startedAt` preserves the canonical `startedAt` | paired projection gate |
 | E2L-008 | `Trace.endedAt` | exact | legacy `endedAt` preserves the canonical `finishedAt` when a terminal state was observed | paired projection gate (completed fixture) |
-| E2L-009 | `Trace.endedAt` (omitted) | unavailable | canonical trace has no observed terminal time (status `unknown`); `endedAt` is omitted, never fabricated | paired projection gate (lifecycle-only fixture); matrix runtime check |
-| E2L-010 | `Trace.status` | partial | canonical status vocabulary is smaller: `completed`→`success`, `failed`→`error`, `cancelled`→`error` (no legacy cancellation status), `unknown`→`started` | `evidenceToLegacyTrace.test.ts` "reports legacy status vocabulary loss as partial" |
-| E2L-011 | (no legacy field) | unavailable | legacy `Trace` has no `conditions`; canonical experimental/environmental conditions are not projected | matrix claim checks |
-| E2L-012 | (no legacy span concept) | unavailable | legacy `Trace` has no span records or hierarchy; span lifecycle control events have no legacy equivalent | `evidenceToLegacyTrace.test.ts` "projects every canonical event kind…" |
-| E2L-013 | `Trace.events[]` | partial | the canonical event set is larger than the legacy `TraceEventType` vocabulary; mapped kinds project in `seq` order, kinds without an equivalent are omitted with `unavailable` mappings | `evidenceToLegacyTrace.test.ts` "projects every canonical event kind…" |
+| E2L-009 | `Trace.endedAt` (omitted) | unavailable | canonical trace has no observed terminal time (status `unknown`); `endedAt` is omitted, never fabricated | paired projection gate (lifecycle-only fixture); matrix runtime check (`trace.finishedAt` unavailable) |
+| E2L-010 | `Trace.status` | partial | the canonical **four-state** status vocabulary (`completed`/`failed`/`cancelled`/`unknown`) is approximated by the **three-value** legacy set (`success`/`error`/`started`): `completed`→`success`, `failed`→`error`, `cancelled`→`error` (no legacy cancellation status), `unknown`→`started` (termination unobserved) | `evidenceToLegacyTrace.test.ts` "reports legacy status vocabulary loss as partial" |
+| E2L-011 | (no legacy field) | unavailable | legacy `Trace` has no `conditions`; canonical experimental/environmental conditions are not projected (mapping emitted only when conditions are present) | `evidenceToLegacyTrace.test.ts` "reports conditions and span loss only when those fields are present"; matrix runtime check (`trace.conditions`, enriched fixture) |
+| E2L-012 | (no legacy span concept) | unavailable | legacy `Trace` has no span records; span hierarchy, kind, name, lifecycle status, `seq` ordering, and timing are not projected | `evidenceToLegacyTrace.test.ts` "reports conditions and span loss only when those fields are present"; matrix runtime check (`trace.spans`, minimal fixture) |
+| E2L-013 | `Trace.events[]` | partial | the canonical event set is larger than the legacy `TraceEventType` vocabulary; mapped kinds project in `seq` order, kinds without an equivalent are omitted with `unavailable` mappings | `evidenceToLegacyTrace.test.ts` "projects every canonical event kind…"; conceptual — the executable per-kind checks are rows E2L-024..E2L-043 |
 
 ## SpanRecord (Spec 014 §2.2.2; Spec 013 §1.3)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-014 | (omitted) | unavailable | legacy `TraceEventType` has no span-lifecycle type; `span_start`/`span_end` control events are omitted rather than mis-mapped to a content-bearing legacy kind | `evidenceToLegacyTrace.test.ts` "projects every canonical event kind…" |
-| E2L-015 | (no legacy span status) | unavailable | legacy has no span records, so span status, `endSeq`, and `finishedAt` semantics have no target | matrix claim checks |
-| E2L-016 | (no legacy duration field) | unavailable | legacy `TraceEvent` has no `durationMs` and no clock-basis contract; span `durationMs` is not projected | matrix claim checks |
+| E2L-014 | (omitted) | unavailable | legacy `TraceEventType` has no span-lifecycle type; `span_start`/`span_end` control events are omitted rather than mis-mapped to a content-bearing legacy kind | `evidenceToLegacyTrace.test.ts` "projects every canonical event kind…"; matrix runtime check (`kind "span_start"`, minimal fixture) |
+| E2L-015 | (no legacy span status) | unavailable | legacy has no span records, so span lifecycle status, `endSeq`, and `finishedAt` semantics have no target to express | matrix runtime check (`trace.spans` with `status` in the reason, enriched fixture) |
+| E2L-016 | (no legacy duration field) | unavailable | legacy `TraceEvent` has no `durationMs` and no clock-basis contract; span `durationMs` is not projected | `evidenceToLegacyTrace.test.ts` "reports conditions and span loss only when those fields are present"; matrix runtime check (`trace.spans[0].durationMs`, enriched fixture) |
 
 ## EventRecord common fields (Spec 014 §2.2.3; Spec 013 §3.1)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-017 | `TraceEvent.id` | exact | `TraceEvent.id` preserves the canonical `eventId`; ids are opaque, capture-time, never ordering-significant | paired projection gate |
-| E2L-018 | `TraceEvent.traceId` | exact | `TraceEvent.traceId` preserves the canonical event `traceId` | paired projection gate |
+| E2L-017 | `TraceEvent.id` | exact | `TraceEvent.id` preserves the canonical `eventId`; ids are opaque, capture-time, never ordering-significant | paired projection gate (gateVerified) |
+| E2L-018 | `TraceEvent.traceId` | exact | `TraceEvent.traceId` preserves the canonical event `traceId` | paired projection gate (gateVerified) |
 | E2L-019 | `Trace.events[]` order | partial | legacy `Trace` has no `seq` field; canonical `seq` ordering is preserved by event order (ties resolve by `seq` over equal timestamps), but the `seq` value is not representable | `evidenceToLegacyTrace.test.ts` "preserves seq ordering over equal timestamps" and "reports the canonical seq ordering restriction as partial loss" |
-| E2L-020 | `TraceEvent.timestamp` | exact | `TraceEvent.timestamp` preserves the canonical `capturedAt` | paired projection gate |
-| E2L-021 | (no legacy field) | unavailable | legacy `TraceEvent` has no `evidenceStatus`; redacted/truncated/missing/unknown evidence is never turned into content | `evidenceToLegacyTrace.test.ts` "reports hashes, completeness, capture surface, and evidenceStatus loss" |
-| E2L-022 | `TraceEvent.contentPhase` | partial | `ContentPhase` is the documented approximation of observation roles (Spec 013 §11.2); every conversion is partial, and `unobservable` has no phase approximation | `evidenceToLegacyTrace.test.ts` "approximates observation roles with ContentPhase and reports partial" |
-| E2L-023 | `TraceEvent.type` | partial | kind maps to the documented `TraceEventType` equivalent with vocabulary loss (see per-kind rows E2L-024..E2L-043) | `evidenceToLegacyTrace.test.ts` "maps kinds to their documented legacy types" |
+| E2L-020 | `TraceEvent.timestamp` | exact | `TraceEvent.timestamp` preserves the canonical `capturedAt` | paired projection gate (gateVerified) |
+| E2L-021 | (no legacy field) | unavailable | legacy `TraceEvent` has no `evidenceStatus`; redacted/truncated/missing/unknown evidence is never turned into content | `evidenceToLegacyTrace.test.ts` "reports completeness, capture surface, observation boundary, and evidenceStatus loss" |
+| E2L-022 | `TraceEvent.contentPhase` | partial | `ContentPhase` is the documented approximation of observation roles (Spec 013 §11.2); every conversion is partial, and `unobservable` has no phase approximation (reported `unavailable`, E2L-055) | `evidenceToLegacyTrace.test.ts` "approximates observation roles with ContentPhase and reports partial" |
+| E2L-023 | `TraceEvent.type` | partial | kind maps to the documented `TraceEventType` equivalent with vocabulary loss (see per-kind rows E2L-024..E2L-043) | `evidenceToLegacyTrace.test.ts` "maps kinds to their documented legacy types"; conceptual — the executable per-kind checks are rows E2L-024..E2L-043 |
 
 ## Closed canonical event kinds (Spec 013 §3.1) — one claim per kind
 
 Every kind is accounted for by exactly one of `CANONICAL_EVENT_MAPPINGS`
 (mapped, `partial`) or `CANONICAL_EVENT_KINDS_WITHOUT_LEGACY_EQUIVALENT`
-(omitted, `unavailable`); the matrix conformance test enforces exclusivity
-and classification agreement.
+(omitted, `unavailable`); the matrix conformance test enforces exclusivity,
+classification agreement, and a runtime check over the `all-kinds` fixture
+for every kind row.
 
 | Claim | Kind | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|---|
-| E2L-024 | `interaction_start` | (omitted) | unavailable | legacy has no lifecycle control event type; mapping to a content-bearing kind would be semantically wrong | `evidenceToLegacyTrace.test.ts` all-kinds test |
-| E2L-025 | `interaction_end` | (omitted) | unavailable | legacy has no lifecycle control event type | all-kinds test |
-| E2L-026 | `span_start` | (omitted) | unavailable | legacy has no span-lifecycle event type | all-kinds test |
-| E2L-027 | `span_end` | (omitted) | unavailable | legacy has no span-lifecycle event type | all-kinds test |
-| E2L-028 | `model_request` | `provider_request` | partial | maps to the legacy provider-request control event; envelope, messages, and provider-native content are never inlined into legacy excerpts | "projects a minimal completed record…"; sentinel tests |
-| E2L-029 | `model_response` | `provider_response` | partial | maps to the legacy provider-response control event; provider-native response content is not projected | all-kinds test; sentinel tests |
-| E2L-030 | `model_response_chunk` | `provider_response` (one per chunk) | partial | legacy has no chunk type; every canonical chunk becomes its own `provider_response` in `seq` order (**no aggregation**) and chunk kind/index semantics are lost | "emits one legacy provider_response per canonical chunk (no aggregation)"; `projectionParity.test.ts` streaming-chunks block |
+| E2L-024 | `interaction_start` | (omitted) | unavailable | legacy has no lifecycle control event type; mapping to a content-bearing kind would be semantically wrong | `evidenceToLegacyTrace.test.ts` all-kinds test; matrix runtime check (lifecycle-only fixture) |
+| E2L-025 | `interaction_end` | (omitted) | unavailable | legacy has no lifecycle control event type | all-kinds test; matrix runtime check |
+| E2L-026 | `span_start` | (omitted) | unavailable | legacy has no span-lifecycle event type | all-kinds test; matrix runtime check |
+| E2L-027 | `span_end` | (omitted) | unavailable | legacy has no span-lifecycle event type | all-kinds test; matrix runtime check |
+| E2L-028 | `model_request` | `provider_request` | partial | maps to the legacy provider-request control event; envelope, messages, and provider-native content are never inlined into legacy excerpts | "projects a minimal completed record…"; sentinel tests; matrix runtime check |
+| E2L-029 | `model_response` | `provider_response` | partial | maps to the legacy provider-response control event; provider-native response content is not projected | all-kinds test; sentinel tests; matrix runtime check |
+| E2L-030 | `model_response_chunk` | `provider_response` (one per chunk) | partial | legacy has no chunk type; every canonical chunk becomes its own `provider_response` in `seq` order (**no aggregation**) and chunk kind/index semantics are lost | "emits one legacy provider_response per canonical chunk (no aggregation)"; `projectionParity.test.ts` streaming-chunks block; matrix runtime check (chunks fixture) |
 | E2L-031 | `model_usage` | `inference` | partial | maps to the legacy inference event type, but numeric token accounting is `unavailable` until the measurement layer exists (Spec 014 §6.3) | `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)" |
-| E2L-032 | `tool_call` | `tool_call` | partial | maps to the legacy type; tool arguments are not inlined (no safe excerpt synthesized) | all-kinds test |
-| E2L-033 | `tool_result` | `tool_result` | partial | maps to the legacy type; tool output is not inlined | all-kinds test |
-| E2L-034 | `mcp_request` | (omitted) | unavailable | legacy has no MCP concept; mapping to `tool_call` would conflate the MCP protocol boundary | all-kinds test |
-| E2L-035 | `mcp_result` | (omitted) | unavailable | legacy has no MCP concept | all-kinds test |
-| E2L-036 | `retrieval_request` | (omitted) | unavailable | legacy has no retrieval concept | all-kinds test |
-| E2L-037 | `retrieval_result` | (omitted) | unavailable | legacy has no retrieval concept | all-kinds test |
-| E2L-038 | `context_provider_request` | (omitted) | unavailable | legacy has no context-provider protocol concept | all-kinds test |
-| E2L-039 | `context_provider_result` | (omitted) | unavailable | legacy has no context-provider protocol concept | all-kinds test |
-| E2L-040 | `context_assembled` | `context` | partial | maps to the legacy context event; artifact references and assembled content are not inlined | all-kinds test |
-| E2L-041 | `error` | `provider_error` | partial | maps to the single legacy error type; canonical `actor`, `lifecycleTarget`, and `lifecycleEffect` are not representable | all-kinds test |
-| E2L-042 | `cancelled` | (omitted) | unavailable | legacy has no cancellation type | all-kinds test |
-| E2L-043 | `retry` | (omitted) | unavailable | legacy has no retry type | all-kinds test |
+| E2L-032 | `tool_call` | `tool_call` | partial | maps to the legacy type; tool arguments are not inlined (no safe excerpt synthesized) | all-kinds test; matrix runtime check |
+| E2L-033 | `tool_result` | `tool_result` | partial | maps to the legacy type; tool output is not inlined | all-kinds test; matrix runtime check |
+| E2L-034 | `mcp_request` | (omitted) | unavailable | legacy has no MCP concept; mapping to `tool_call` would conflate the MCP protocol boundary | all-kinds test; matrix runtime check |
+| E2L-035 | `mcp_result` | (omitted) | unavailable | legacy has no MCP concept | all-kinds test; matrix runtime check |
+| E2L-036 | `retrieval_request` | (omitted) | unavailable | legacy has no retrieval concept | all-kinds test; matrix runtime check |
+| E2L-037 | `retrieval_result` | (omitted) | unavailable | legacy has no retrieval concept | all-kinds test; matrix runtime check |
+| E2L-038 | `context_provider_request` | (omitted) | unavailable | legacy has no context-provider protocol concept | all-kinds test; matrix runtime check |
+| E2L-039 | `context_provider_result` | (omitted) | unavailable | legacy has no context-provider protocol concept | all-kinds test; matrix runtime check |
+| E2L-040 | `context_assembled` | `context` | partial | maps to the legacy context event; artifact references and assembled content are not inlined | all-kinds test; matrix runtime check |
+| E2L-041 | `error` | `provider_error` | partial | maps to the single legacy error type; canonical `actor`, `lifecycleTarget`, and `lifecycleEffect` are not representable | all-kinds test; matrix runtime check |
+| E2L-042 | `cancelled` | (omitted) | unavailable | legacy has no cancellation type | all-kinds test; matrix runtime check |
+| E2L-043 | `retry` | (omitted) | unavailable | legacy has no retry type | all-kinds test; matrix runtime check |
 
 ## RequestEnvelope (Spec 014 §2.2.4; Spec 013 §3.2)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
 | E2L-044 | `Trace.provider` + `Trace.model` | inferred | trace-level provider/model are derived from the first canonical `model_request` envelope in `seq` order; reported `inferred`, never presented as canonical evidence | "projects a minimal completed record…" (provider/model); `projectionParity.test.ts` agent-run parity |
-| E2L-045 | (no legacy excerpt) | unavailable | normalized messages and provider-native request content are never inlined into the legacy excerpt surface; `payloadRef` is not synthesized | `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material"; sentinel assertions |
-| E2L-046 | (no legacy hash/byte contract) | unavailable | legacy has no content-hash or byte-fidelity contract; native byte fields are not projected | `evidenceToLegacyTrace.test.ts` "reports hashes, completeness, capture surface, and evidenceStatus loss" |
+| E2L-045 | (no legacy excerpt) | unavailable | normalized messages and provider-native request content are never inlined into the legacy excerpt surface; `payloadRef` is not synthesized | `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material"; sentinel assertions; matrix view-absence check over the enriched fixture |
+| E2L-046 | (no legacy hash/byte contract) | unavailable | legacy has no content-hash or byte-fidelity contract; the real envelope `nativeContentHash` is reported `unavailable` when present | `evidenceToLegacyTrace.test.ts` "reports byte_faithful nativeContentHash loss against the real envelope field"; matrix runtime check (`events[2].requestEnvelope.nativeContentHash`, enriched fixture) |
 
 ## ResponseEnvelope (Spec 014 §2.2.5; Spec 013 §3.2)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-047 | (no legacy excerpt) | unavailable | `finishReason` and provider-native response content are never projected into legacy excerpts | sentinel assertions; `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material" |
-| E2L-048 | `AgentRun`/`Turn` token fields | unavailable | token values exist only when a measurement exists; until the measurement layer lands, token fields stay `unavailable` and are never invented from character counts (Spec 014 §6.3) | `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)" |
+| E2L-047 | (no legacy excerpt) | unavailable | `finishReason` and provider-native response content are never projected into legacy excerpts | sentinel assertions; `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material"; matrix view-absence check over the enriched fixture |
+| E2L-048 | `AgentRun`/`Turn` token fields | unavailable | token values exist only when a measurement exists; until the measurement layer lands, token fields stay `unavailable` and are never invented from character counts (Spec 014 §6.3) | `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)"; matrix runtime check (`token accounting` in the `model_usage` reason, enriched fixture) |
 
 ## ContextArtifact (Spec 014 §2.2.6; Spec 013 §6.1)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-049 | (no legacy artifact concept) | unavailable | legacy has no artifact records; `artifactId`, `payloadRef`, `contentHash`, and provenance are not projected | "reports context contributions as unavailable loss on model_request"; matrix claim checks |
+| E2L-049 | (no legacy artifact concept) | unavailable | legacy has no artifact records; `artifactId`, `payloadRef`, `contentHash`, and provenance are not projected | "reports context contributions as unavailable loss on model_request"; conceptual — an `EvidenceRecord` can reference artifacts only through `ContextContribution` references (`artifactId` + `locator`); no projection input in this slice carries standalone `ContextArtifact` payload/hash/provenance data, so no runtime report entry can exist for artifact-level loss (the reference-level loss is the executable row E2L-050) |
 
 ## ContextContribution (Spec 014 §2.2.7; Spec 013 §6.2)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-050 | (no legacy contribution concept) | unavailable | legacy `Trace` has no context-contribution concept; artifact references on `model_request` are not projected and the loss is reported | "reports context contributions as unavailable loss on model_request" |
+| E2L-050 | (no legacy contribution concept) | unavailable | legacy `Trace` has no context-contribution concept; artifact references on `model_request` are not projected and the loss is reported | "reports context contributions as unavailable loss on model_request"; matrix runtime check (`events[1].contextContributions`, chunks fixture) |
 
 ## Condition (Spec 014 §2.2.8; Spec 013 §1.1)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-051 | (no legacy field) | unavailable | legacy `Trace` has no `conditions`; experimental/environmental conditions are not projected | matrix claim checks |
+| E2L-051 | (no legacy field) | unavailable | legacy `Trace` has no `conditions`; experimental/environmental conditions are not projected | `evidenceToLegacyTrace.test.ts` "reports conditions and span loss only when those fields are present"; conceptual — the `Condition` primitive loss is executed by the E2L-011 runtime check (enriched fixture) |
 
 ## Completeness (Spec 014 §2.2.9; Spec 013 §4.3)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-052 | (no legacy completeness record) | unavailable | legacy `Trace` has no completeness record; the canonical derived completeness (`eventsByStatus`, `seqGaps`, `duplicatesDetected`, `boundaryStatement`) is not projected. **Note on the §2.2.9 heading wording:** Spec 014 §2.2.9's heading uses the earlier "Completeness record (`CompletenessRecord`)" phrasing; the finalized derived type is `TraceCompleteness` (serialized once at `EvidenceRecord.completeness`). There is exactly one completeness type — `TraceCompleteness` — and the heading wording does not create a competing type. | "reports hashes, completeness, capture surface, and evidenceStatus loss" |
+| E2L-052 | (no legacy completeness record) | unavailable | legacy `Trace` has no completeness record; the canonical derived completeness (`eventsByStatus`, `seqGaps`, `duplicatesDetected`, `boundaryStatement`) is not projected. The mapping path is the canonical record path `completeness` (Spec 014 §2.2.9 uses the finalized derived type `TraceCompleteness`) | `evidenceToLegacyTrace.test.ts` "reports completeness, capture surface, observation boundary, and evidenceStatus loss"; matrix runtime check (`completeness` unavailable, minimal fixture) |
 
 ## Observation boundary and capture surface (Spec 014 §2.2.10; Spec 013 §5)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
 | E2L-053 | `TraceEvent.contentPhase` | partial | observation roles are approximated by legacy `ContentPhase` with the same boundary discipline (phase labels describe where content was observed, never provider-internal state) | "approximates observation roles with ContentPhase and reports partial" |
-| E2L-054 | (no legacy field) | unavailable | legacy `Trace` has no capture-surface or observation-boundary fields | "reports hashes, completeness, capture surface, and evidenceStatus loss" |
-| E2L-055 | (no `ContentPhase` approximation) | unavailable | role `unobservable` has no phase approximation and is reported `unavailable`; redacted/missing/unknown evidence is never turned into content | "never turns redacted/missing/unknown evidence into content" |
+| E2L-054 | (no legacy field) | unavailable | legacy `Trace` has no capture-surface or observation-boundary fields | "reports completeness, capture surface, observation boundary, and evidenceStatus loss"; conceptual — executed by the E2L-005 runtime check (`trace.captureSurface`, minimal fixture) |
+| E2L-055 | (no `ContentPhase` approximation) | unavailable | role `unobservable` has no `ContentPhase` approximation; the per-event mapping reports `events[i].observationRole` `unavailable`, and the unobservable evidence is never turned into content | `evidenceToLegacyTrace.test.ts` "reports observationRole "unobservable" as an event-specific unavailable mapping" and "never turns redacted/missing/unknown evidence into content"; matrix runtime check (`events[3].observationRole`, enriched fixture) |
 
 ## Capture profile reference and collection policy (Spec 014 §2.2.11; Spec 013 §9)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-056 | `Trace.mode` + `Trace.capturePolicy` | partial | legacy `StorageMode` maps to collection-policy capture settings, not a fixed evidence field; the view defaults to `standard` mode and the canonical `captureProfile` name/version is not representable | "reports exact, partial, inferred, and unavailable mappings" |
-| E2L-057 | `Trace.capturePolicy` (defaults) | partial | the projected view carries the default standard-mode capture policy; the canonical record does not carry per-field collection decisions onto the legacy shape | matrix claim checks |
+| E2L-056 | `Trace.mode` + `Trace.capturePolicy` | partial | legacy `StorageMode` maps to collection-policy capture settings, not a fixed evidence field; the view defaults to `standard` mode and the canonical `captureProfile` name/version is not representable | "reports exact, partial, inferred, and unavailable mappings"; conceptual — executed by the E2L-004 runtime check (`trace.captureProfile` partial, minimal fixture) |
+| E2L-057 | `Trace.capturePolicy` (defaults) | partial | the projected view carries the default standard-mode capture policy; the canonical record does not carry per-field collection decisions onto the legacy shape | "projects a minimal completed record…" (mode `standard`, default capture policy); conceptual — collection-policy defaults are an attribute of view construction, no separate report entry exists beyond E2L-004 |
 
 ## Identity, lifecycle, ordering, timing, fidelity, hash, status, and usage values (Spec 014 §2.2.12)
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-058 | `Trace.id` / `TraceEvent.id` / synthesized ids | inferred | preserved legacy ids stay exact; deterministically synthesized turn/context-block ids (`pt-<traceId>-<n>`) are reported `inferred` and never presented as canonical evidence | `legacyTraceToAgentRun.test.ts` "reports synthesized identifiers as inferred" and "scopes deterministic generated ids to the trace"; `projectionParity.test.ts` id assertions |
-| E2L-059 | `Trace.status` | partial | the canonical four-value status vocabulary is approximated by the three-value legacy set (`cancelled`→`error`, `unknown`→`started`) | "reports legacy status vocabulary loss as partial" |
+| E2L-058 | `Trace.id` / `TraceEvent.id` | exact | preserved legacy ids carry the canonical ids exactly: `traceId` → `Trace.id` and each `eventId` → `TraceEvent.id`, with no synthesis or truncation | paired projection gate (gateVerified); `projectionParity.test.ts` deterministic-id assertions |
+| E2L-068 | `AgentRun` turn/context-block ids (synthesized) | inferred | turn and context-block identifiers are deterministically synthesized by the second stage (`pt-<traceId>-<n>`), scoped to the trace; reported `inferred` and never presented as canonical evidence | `legacyTraceToAgentRun.test.ts` "reports synthesized identifiers as inferred" and "scopes deterministic generated ids to the trace"; `projectionParity.test.ts` id assertions; matrix runtime check (`turns[0].id` inferred, second stage, composed projection) |
+| E2L-059 | `Trace.status` | partial | the canonical **four-state** status vocabulary (`completed`/`failed`/`cancelled`/`unknown`) is approximated by the **three-value** legacy set (`success`/`error`/`started`); `cancelled` and `unknown` have no legacy equivalent | "reports legacy status vocabulary loss as partial" |
 | E2L-060 | `Trace.events[]` order | partial | order is preserved with `seq` tie-breaks over equal timestamps; the `seq` value is not representable and the restriction is reported | "preserves seq ordering over equal timestamps"; `projectionParity.test.ts` streaming-chunks block |
-| E2L-061 | `Trace.startedAt`/`endedAt` + `TraceEvent.timestamp` | exact | canonical timestamps are preserved exactly | paired projection gate |
-| E2L-062 | (no legacy duration field) | unavailable | legacy has no duration field and no clock-basis contract; durations are never fabricated | matrix claim checks |
-| E2L-063 | (no legacy fidelity field) | unavailable | legacy events carry no fidelity discriminant; provider-native content is not projected and fidelity is not representable | sentinel assertions |
-| E2L-064 | (no legacy hash contract) | unavailable | legacy `Trace` has no content-hash contract; `contentHash` and `nativeContentHash` are not projected | "reports hashes, completeness, capture surface, and evidenceStatus loss" |
-| E2L-065 | (no legacy field) | unavailable | legacy `TraceEvent` has no `evidenceStatus`; statuses are never collapsed into `null` or omitted fields | "reports hashes, completeness, capture surface, and evidenceStatus loss" |
-| E2L-066 | (no legacy declarations) | unavailable | missing, redaction, and truncation declarations are not representable in the legacy vocabulary and are never fabricated into content | "never turns redacted/missing/unknown evidence into content" |
-| E2L-067 | `AgentRun`/`Turn` token fields | unavailable | legacy usage is a plain number; per-field evidence status is not representable, and token fields stay `unavailable` until the measurement layer exists | `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)" |
+| E2L-061 | `Trace.startedAt`/`endedAt` + `TraceEvent.timestamp` | exact | canonical timestamps are preserved exactly | paired projection gate (gateVerified) |
+| E2L-062 | (no legacy duration field) | unavailable | legacy has no duration field and no clock-basis contract; durations are never fabricated | conceptual — executed by the E2L-016 runtime check (`trace.spans[0].durationMs`, enriched fixture) |
+| E2L-063 | (no legacy fidelity field) | unavailable | legacy events carry no fidelity discriminant; provider-native content is not projected and fidelity is not representable | sentinel assertions; matrix view-absence check over the enriched fixture |
+| E2L-064 | (no legacy hash contract) | unavailable | legacy `Trace` has no content-hash contract; the actual envelope `nativeContentHash` fields present in a byte_faithful record are reported `unavailable` (there is no aggregate `trace.hashes` field — the real fields are `events[i].requestEnvelope`/`responseEnvelope.nativeContentHash`) | "reports byte_faithful nativeContentHash loss against the real envelope field"; matrix runtime check (`events[2].requestEnvelope.nativeContentHash`, enriched fixture) |
+| E2L-065 | (no legacy field) | unavailable | legacy `TraceEvent` has no `evidenceStatus`; statuses are never collapsed into `null` or omitted fields | "reports completeness, capture surface, observation boundary, and evidenceStatus loss"; conceptual — executed by the E2L-021 runtime check |
+| E2L-066 | (no legacy declarations) | unavailable | missing, redaction, and truncation declarations are not representable in the legacy vocabulary and are never fabricated into content | "never turns redacted/missing/unknown evidence into content" and "does not leak secrets or provider-native bodies into the legacy view"; conceptual — these are absence guarantees over redacted fixtures executed by the dedicated suites; no report entry exists because no mapping is emitted for content that must not appear |
+| E2L-067 | `AgentRun`/`Turn` token fields | unavailable | legacy usage is a plain number; per-field evidence status is not representable, and token fields stay `unavailable` until the measurement layer exists | `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)"; matrix runtime check (`token accounting`, enriched fixture) |
 
 ## Legacy Trace → AgentRun conversion preservation
 
@@ -207,11 +230,13 @@ agent-run parity blocks.
 - **Multiple analyzer turns cannot be paired**: the legacy converter splits
   turns on `egress_response`, which has no canonical event equivalent, so no
   multi-turn canonical fixture can express the legacy turn-boundary
-  convention. The one-turn grouping is verified (E2L-058, parity tests).
+  convention. The one-turn grouping is verified (E2L-068, parity tests).
 - **Canonical native bodies, context contributions/artifacts, tool payloads,
   and assembled context are never converted into `payloadRef.excerpt`**, so
   no content-bearing analyzer parity is manufactured (E2L-045, E2L-047,
-  E2L-049, E2L-050, E2L-063).
+  E2L-049, E2L-050, E2L-063). `ContextArtifact` (E2L-049) is
+  documentation-only because no projection input in this slice carries
+  standalone artifact payload/hash/provenance data.
 - **Tool/MCP/retrieval/context-provider events, errors/cancellation/retry,
   usage/token values, trace metadata, and conditions** either have no legacy
   equivalent (E2L-024..E2L-043, E2L-051) or no additional analyzer/report
@@ -222,14 +247,22 @@ agent-run parity blocks.
   (E2L-008, E2L-009, E2L-010, E2L-059).
 - Sentinel native content in the fixtures is asserted to never appear in
   projected views, analysis, reports, or projection diagnostics
-  (`projectionParity.test.ts` "determinism, immutability, and privacy").
+  (`projectionParity.test.ts` "determinism, immutability, and privacy"), and
+  the matrix `viewAbsence` checks (E2L-045, E2L-047, E2L-063) re-assert it
+  over the enriched fixture.
 
 ## Runtime verification
 
 - `packages/core/src/evidenceProjections/projectionMappingMatrix.test.ts` —
-  pins the claim-ID registry, validates classifications, enforces
-  event-kind exclusivity, and asserts the matrix's paths/outcomes/reasons
-  exist in actual projection reports over the fixed fixtures.
+  pins the claim-ID registry (68 claims), validates classifications and
+  claim modes (exactly one of `runtime`/`gateVerified`/`conceptual`),
+  enforces event-kind exclusivity, **executes every runtime claim against an
+  actual projection report over a real fixture** (mapping path + stage +
+  outcome + constrained reason; `reportField` equality; `viewAbsence`
+  guarantees), enforces gate-verified identity claims at the value level,
+  and verifies the composed `evidenceToAgentRun` report (both stages in
+  stage order, first-stage mappings survive unchanged, `sourceSchemaVersion`
+  stays canonical).
 - `packages/reports/src/projectionParity.test.ts` — paired-fixture gates,
   AgentRun parity, analyzer parity (frozen clock), exact terminal/JSON/HTML
   parity, declared-loss verification, determinism, immutability, and sentinel
