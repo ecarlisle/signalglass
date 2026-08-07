@@ -171,6 +171,9 @@ importers:
       '@signalglass/core':
         specifier: workspace:*
         version: link:../core
+      '@signalglass/evidence':
+        specifier: workspace:*
+        version: link:../evidence
       better-sqlite3:
         specifier: ^11.0.0
         version: 11.10.0
