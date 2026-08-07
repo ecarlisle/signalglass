@@ -2,18 +2,15 @@
 
 ## Status
 
-**Draft (revision 4).** Proposed for architectural review; not Accepted and
-not to be implemented until accepted. Revision 4 realigns the reference
-policy and the mandatory safety gate with the actual
-`@signalglass/evidence` contracts (closed vocabularies, raw-observation
-versus projected-event representations, envelope fidelity rules), replaces
-whole-event status rejection with field-level content classification,
-defines the safety gate and policy-decision contract deterministically with
-runtime validation, splits retained-bytes parity tests honestly, and
-reorders the save pipeline so an existing immutable row is classified
-without consulting the clock. Writing corrections does not mark the spec
-Accepted. This specification is documentation-only; the PR that introduces
-it MUST NOT contain production code changes.
+**Draft (revision 5).** Proposed for architectural review; not Accepted and
+not to be implemented until accepted. Revision 5 corrects the field/category
+conformance table against the exact TypeScript shapes, removes the false
+Base64 safety claim with a retained-bytes safety rule, hardens policy
+identity against spoofing and leakage, completes runtime decision validation,
+makes gate and unknown-field results deterministic, and resolves the
+custom-policy open-question contradiction. Writing corrections does not mark
+the spec Accepted. This specification is documentation-only; the PR that
+introduces it MUST NOT contain production code changes.
 
 ## Purpose
 
@@ -133,7 +130,7 @@ Spec 015 explicitly does not cover, and its implementation must not include:
 |---|---|
 | **Canonical record** | An `EvidenceRecord` (Spec 013 §1.1) — the authoritative serialized evidence record of one interaction. |
 | **Authoritative identity** | The storage key of a canonical record: the record's trace identity (`record.trace.traceId`, which MUST equal `record.trace.interactionId` per Spec 013 §1.2 and is enforced by `parseEvidenceRecord`). The database enforces uniqueness of this key within the canonical store; the store never substitutes a database row id or a content-derived identifier. |
-| **Raw observation** | An `EvidenceObservation`: the authoritative captured unit with container metadata (`observationId`, `eventId`, `traceId`, `spanId`, `seq`, `kind`, `capturedAt`, `evidenceStatus`, `observationRole`, `payload`, `rawCapturedAt`). `payload` is REQUIRED (an object) on payload-bearing kinds; control kinds have no payload contract. |
+| **Raw observation** | An `EvidenceObservation`: the authoritative captured unit with container metadata (`observationId`, `eventId`, `traceId`, `spanId`, `seq`, `kind`, `capturedAt`, `evidenceStatus`, `observationRole`, `payload`, `rawCapturedAt`). `payload` is REQUIRED by the TypeScript interface; for control kinds the canonical typed value is `null`. The parser may tolerate omission, but omission is parser tolerance, not the typed contract. |
 | **Projected event** | The `EventRecord` produced by `projectCanonicalEvent(observation)`: container metadata minus observation provenance, with kind-specific payload fields merged onto the event top level. `EventRecord` has NO generic `payload` property. Control-event payloads are dropped by the projection. `EventCommon` includes `eventId`, `traceId`, `spanId`, `seq`, `kind`, `capturedAt`, `evidenceStatus`, and (payload-bearing kinds only) `observationRole`. |
 | **Evidence status** | One of the six closed statuses `captured` \| `redacted` \| `truncated` \| `missing` \| `unknown` \| `not_applicable` (Spec 013 §4.1). `inferred` is not an evidence status. |
 | **Serializer snapshot** | The authoritative comparison baseline for stored evidence: `parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(validatedRecord))).record` — the record as reconstructed from its own serialized form, before persistence. Persisted and retrieved records are compared against this snapshot, never against the caller-owned input. |
@@ -141,10 +138,10 @@ Spec 015 explicitly does not cover, and its implementation must not include:
 | **Stored document** | The exact text produced by the public `serializeEvidenceRecord` serializer at write time; the single authoritative representation of the record inside the database. |
 | **Storage manifest** | Administrative metadata recorded beside the stored document: storage-format version, evidence-schema version, persistence-policy name/version, storage timestamp, and the storage digest. Never part of the canonical record. |
 | **Storage digest** | A deterministic SHA-256 hex digest computed over the exact UTF-8 bytes of the stored-document text (`sha256Hex(utf8Encode(storedDocument))`). Administrative integrity metadata; it supports detection and MAY serve as a lookup optimization, but exact document comparison — never digest equality alone — decides idempotency and conflicts. Never presented as canonical evidence and never conflated with `contentHash` or `nativeContentHash`. |
-| **Storage safety gate** | The mandatory, non-bypassable admission gate that runs on every save and rejects records containing storage-prohibited material (repository security rules). Not overridable by any persistence policy. Its S1–S5 detection contract is closed and deterministic (see "Storage safety admission gate"). |
-| **Persistence policy** | A named, versioned decision function that accepts or rejects a complete, detached, validated canonical record snapshot for persistence (Spec 013 §9.1). A custom policy may be stricter than the safety gate, never weaker. Decisions are runtime-validated against a closed shape/code contract; rejection never carries custom free-form text. |
+| **Storage safety gate** | The mandatory, non-bypassable admission gate that runs on every save. It has two phases: (1) a retained-bytes scan on the validated pre-serialization record (S6), and (2) a text/structural scan on the detached snapshot (S1–S5). Both phases produce closed `StorageSafetyCode`s and reject storage-prohibited material. Not overridable by any persistence policy. |
+| **Persistence policy** | A named, versioned decision function that accepts or rejects a complete, detached, validated canonical record snapshot for persistence (Spec 013 §9.1). Custom policies are supported in this slice. A custom policy may be stricter than the safety gate, never weaker. Decisions are runtime-validated against a closed shape/code contract; rejection never carries custom free-form text. |
 | **Detached snapshot** | A deep-frozen, caller-independent parse of the serialized document, passed to policy code; the caller's mutable record object is never passed to policy. |
-| **Storage-owned reason code** | A closed, storage-defined vocabulary (S1–S5 gate codes; policy codes `rejected`, `captured-content`, `unknown-additive-field`, `unbounded-label`; corrupt-read codes) that is the only text surfaced from admission and integrity results. Never derived from payload content. |
+| **Storage-owned reason code** | A closed, storage-defined vocabulary (S1–S6 gate codes; policy codes `rejected`, `captured-content`, `unknown-additive-field`, `unbounded-label`; corrupt-read codes) that is the only text surfaced from admission and integrity results. Never derived from payload content. |
 | **Declared content** | Content-bearing fields present on an observation whose `evidenceStatus` declares a retained representation: `redacted` (masked/removed per a recorded policy) or `truncated` (declared prefix/excerpt). Under `captured`, `missing`, `unknown`, or `not_applicable`, content-bearing fields are undeclared. |
 | **Storage-format version** | The version of the canonical-storage layout (tables, columns, manifest shape), recorded in the namespaced ledger `evidence_storage_meta` key `evidence_storage_format_version`. It versions ONLY canonical evidence storage, never the legacy `traces` / `trace_events` schema. Distinct from the evidence-schema version carried by the record. |
 | **Tombstone** | A future administrative deletion record (Spec 013 §9.2). Explicitly out of scope here. |
@@ -241,17 +238,18 @@ snapshot = parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(validatedRecor
   remove non-JSON distinctions such as explicitly `undefined` optional
   properties.
 - **Representation changes are declared at the serialization boundary:** (a)
-  retained `byte_faithful` payload bytes become canonical RFC 4648 §4 Base64
+  retained `Uint8Array` payload bytes become canonical RFC 4648 §4 Base64
   strings (§5.7 of Spec 014); (b) JSON serialization omits explicitly
   `undefined` optional properties (absent, not `undefined`); (c) JSON values
   are otherwise normalized per the serializer contract. Storage adds no
   further changes.
 - **Retained bytes are not persisted in this slice.** The mandatory safety
-  gate rejects captured `byte_faithful` payloads (S5), so a record containing
-  retained bytes can demonstrate the serialization-boundary representation
-  change but cannot be persisted and retrieved here. The serializer-boundary
-  test and the persisted-parity tests are therefore separate (see "Testing
-  and conformance requirements" and "Acceptance criteria").
+  gate rejects every `Uint8Array` in the validated pre-serialization record
+  (S6), so a record containing retained bytes can demonstrate the
+  serialization-boundary representation change but cannot be persisted and
+  retrieved here. The serializer-boundary test and the persisted-parity
+  tests are therefore separate (see "Testing and conformance requirements"
+  and "Acceptance criteria").
 - **Persisted-versus-in-memory projection parity compares retrieval against
   the pre-persistence serializer snapshot**, never against the caller-owned
   input, using only gate-safe, policy-admitted records. Retrieval of a stored
@@ -345,8 +343,8 @@ The following behaviors MUST hold:
    identifiers, keys, or values) and writes nothing; malformed runtime input
    never throws.
 9. **Storage-safety rejection.** A save of a record that contains
-   storage-prohibited material returns `safety-rejected` with structural
-   reason codes and writes nothing, regardless of the active policy.
+   storage-prohibited material returns `safety-rejected` with closed
+   `StorageSafetyCode`s and writes nothing, regardless of the active policy.
 10. **Storage-policy rejection.** A save that the active persistence policy
     rejects returns `policy-rejected` with the validated policy identity and
     a storage-owned code (never custom free-form text) and writes nothing.
@@ -381,23 +379,51 @@ Three distinct concerns MUST stay distinct:
 | Concern | Owner | Behavior |
 |---|---|---|
 | **Collection-time evidence status** | Canonical evidence (capture boundary) | Redaction, truncation, missing, unknown, and not-applicable statuses are authoritative evidence (`evidenceStatus`), recorded at capture per Spec 013 §4.1/§9.2. Storage MUST NOT change them. |
-| **Mandatory storage safety** | `EvidenceStorage` (storage invariant) | A non-bypassable admission gate (S1–S5, closed deterministic contract) that rejects storage-prohibited material on every save, before any policy. Not configurable, not overridable, never weaker under any policy. |
-| **Configurable persistence admission** | Operator policy (named + versioned) | The selected persistence policy accepts or rejects the complete detached record. MAY be stricter than the mandatory gate; MUST NOT be weaker. |
+| **Mandatory storage safety** | `EvidenceStorage` (storage invariant) | A non-bypassable admission gate (S1–S6, closed deterministic contract) that rejects storage-prohibited material on every save, before any policy. Not configurable, not overridable, never weaker under any policy. |
+| **Configurable persistence admission** | Operator policy (named + versioned) | The selected persistence policy accepts or rejects the complete detached record. Custom policies are supported. MAY be stricter than the mandatory gate; MUST NOT be weaker. |
 
 ### Storage safety admission gate
 
 The safety gate MUST run for every save, before the persistence policy, and
-MUST NOT be overridable by any custom policy or configuration. It inspects
-the validated detached snapshot and rejects the complete record — without
-modification — when it detects storage-prohibited material. Because
-canonical storage cannot silently strip or redact evidence, rejection is the
-correct behavior.
+MUST NOT be overridable by any custom policy or configuration. It rejects
+the complete record — without modification — when it detects storage-
+prohibited material. Because canonical storage cannot silently strip or
+redact evidence, rejection is the correct behavior.
 
 The gate contract is **closed and deterministic**: the rules below are
-exact; they contain no "at minimum", "keyed like", or "credential-like"
-openness. Two implementations of the gate MUST produce identical
-accept/reject results for identical input. The gate returns structural
-reason codes (S1–S5) and NEVER echoes the detected value.
+exact; implementations MUST produce identical complete outcomes for
+identical input. The gate returns closed `StorageSafetyCode`s
+(`'S1' | 'S2' | 'S3' | 'S4' | 'S5' | 'S6'`) and NEVER echoes the detected
+value. The same input MUST produce the same complete result, including code
+set, order, and deduplication.
+
+**Code semantics and deterministic output.**
+
+```ts
+export type StorageSafetyCode = 'S1' | 'S2' | 'S3' | 'S4' | 'S5' | 'S6';
+```
+
+- Each matched path produces exactly one code, determined by the highest-
+  priority rule that matches at that path: S1 (API keys/tokens), S2
+  (sensitive headers), S3 (secrets/credentials), S4 (credential-bearing
+  storage references), S5 (full raw/provider-native captures), S6 (retained
+  bytes). A single value can match only one of these categories at a path.
+- The returned array is **deduplicated** (each code appears at most once) and
+  sorted in canonical order **S1, S2, S3, S4, S5, S6**.
+- A rejection always produces at least one code; the array is never empty.
+
+The gate has two phases:
+
+1. **Phase A — retained-bytes scan (S6) on the validated pre-serialization
+   record.** Runs before serialization because `serializeEvidenceRecord`
+   converts every `Uint8Array` to a Base64 string (`toJsonView`), and a
+   Base64-encoded credential cannot be detected by the string scanner.
+2. **Phase B — text/structural scan (S1–S5) on the detached snapshot.** Runs
+   after serialization because the snapshot is the deep-frozen object tree
+   that policy will evaluate; all values are JSON-safe (no `Uint8Array`).
+
+Both phases are mandatory and non-bypassable; together they constitute the
+storage safety gate.
 
 **Case normalization (all key matching).** Keys are normalized with
 `key.toLowerCase()` (JavaScript's default locale-independent case
@@ -461,21 +487,17 @@ storage invariant, not a policy configuration, and it uses only the default
 introduces storage-scoped collection secret patterns, it MUST version them
 (see "Gate and policy extension versioning").
 
-**Traversal (normative).** The gate walks the entire detached snapshot
-recursively: every object (known schema shapes and unknown additive objects
-alike) and every array; for each key: normalize and test the key against S1
-(key patterns), S2 (header set), S3 (secret patterns), S4 (storage-reference
-rule); then test the value — strings via the credential detector (S1/S3/S4),
-objects/arrays by recursion, and `null`, booleans, and finite numbers without
-further scanning (they carry no text). **Serialized Base64 values** (which
-occur only for `byte_faithful` captured payloads in the in-memory record)
-are scanned as ordinary strings: the detector does not decode Base64, so
-Base64-encoded credential material is not itself detected — this is an
-explicit limit of the value scan, and it is safe in this slice because S5
-rejects every captured `byte_faithful` payload before it can be persisted,
-and non-captured payloads cannot declare byte fidelity (the evidence
-validators forbid `byte_faithful` without `captured`). Digests and
-identifiers are scanned like any other string.
+**Phase B traversal (S1–S5).** The gate walks the entire detached snapshot
+recursively: every plain object and every array; for each key: normalize and
+test the key against S1 (key patterns), S2 (header set), S3 (secret
+patterns), S4 (storage-reference rule); then test the value — strings via
+the credential detector (S1/S3/S4), plain objects/arrays by recursion, and
+`null`, booleans, and finite numbers without further scanning (they carry no
+text). **Base64 strings in the snapshot** are scanned as ordinary strings:
+the detector does not decode Base64, so Base64-encoded credential material
+is not itself detected — this is an explicit limit of Phase B, and it is
+safe because Phase A (S6) already rejected every pre-serialization
+`Uint8Array` before it could become a Base64 string.
 
 **S5 — Full raw/provider-native payload captures.** Normative predicate over
 the ACTUAL evidence shapes (there is no generic `payload` property on
@@ -494,13 +516,22 @@ gate rejects an observation when:
 
 These are the only schema paths that represent full raw/provider-native
 payload content. Captured canonical-common content (`messages`, tool
-arguments/results, MCP/retrieval content, error text) is NOT rejected by the
-mandatory gate — the gate is content-agnostic beyond the security rules — but
-IS rejected by the `metadata-safe` reference policy (M1). Payloads whose
-owning `evidenceStatus` is `redacted` or `truncated` are declared retained
-representations and are not full captures; S1–S4 still scan their values.
+arguments/results, MCP/retrieval content, error text) is NOT rejected by S5
+— the gate is content-agnostic beyond the security rules — but IS rejected
+by the `metadata-safe` reference policy (M1). Payloads whose owning
+`evidenceStatus` is `redacted` or `truncated` are declared retained
+representations and are not full captures; S1–S5 still scan their values.
 
-**Gate and policy extension versioning.** No extensions to S1–S5 exist in
+**S6 — Retained bytes anywhere.** Recursively detect every `Uint8Array` in
+the validated pre-serialization record, regardless of path: in normalized
+messages, tool/MCP/retrieval/error content, declared redacted/truncated
+content, unknown additive fields, and envelope byte fields. Reject with S6
+if any is present. This is necessary because `serializeEvidenceRecord`
+converts `Uint8Array` values to Base64 strings, and a Base64-encoded
+credential would evade the Phase B string detector. S6 does NOT depend on
+`providerNativeFidelity`; it rejects all retained bytes before serialization.
+
+**Gate and policy extension versioning.** No extensions to S1–S6 exist in
 this slice. Any future conservative extension (for example, additional
 detector patterns) MUST be versioned in a way that does not change the
 meaning of existing stored records (a gate/storage-format version bump with
@@ -508,16 +539,18 @@ documented compatibility consequences, per "Versioning and migration rules"),
 MUST be documented in the storage contract, and MUST NOT retroactively
 reinterpret stored documents.
 
-A record containing any S1–S5 material is rejected as `safety-rejected`
-with the list of structural reason codes; nothing is written and no policy
-can admit it.
+A record containing any S1–S6 material is rejected as `safety-rejected`
+with the deduplicated, canonically ordered list of `StorageSafetyCode`s;
+nothing is written and no policy can admit it.
 
 ### Persistence policy
 
 - `EvidenceStorage` MUST be constructed with an explicit persistence policy
   (a missing policy is a configuration error and the constructor throws).
   There is no implicit default policy and **no default or reference policy
-  that accepts arbitrary valid records**.
+  that accepts arbitrary valid records**. Custom policies are supported in
+  this slice; the public API and runtime validation contract apply to any
+  policy, including operator-authored ones.
 - The policy evaluates a **detached, deep-frozen snapshot** of the validated
   record — never the caller's mutable object (see "Mutation safety").
 - The policy accepts or rejects the complete record. It MUST NOT silently
@@ -542,7 +575,7 @@ record by schema category (metadata vs. content) and admits the record only
 when content-bearing fields are absent or under an owning declaration and
 all remaining fields belong to the admitted metadata set. It is strictly
 stricter than the mandatory gate (which is repository-wide and
-content-agnostic beyond S1–S5).
+content-agnostic beyond S1–S6).
 
 **Honest scope statement.** `metadata-safe` is a schema-category policy,
 not proof that arbitrary metadata strings contain no sensitive content:
@@ -560,7 +593,7 @@ following hold; otherwise it is rejected with the matching storage-owned
 code. The decision is evaluated on the deep-frozen detached snapshot; the
 mandatory safety gate has already run and remains non-bypassable.
 
-- **M0 — Safety gate passed.** The record contains no S1–S5 material
+- **M0 — Safety gate passed.** The record contains no S1–S6 material
   (evaluated first, always).
 - **M1 — Field-level content classification.** Every observation is
   classified field-by-field using the conformance table ("Field and category
@@ -579,7 +612,7 @@ mandatory safety gate has already run and remains non-bypassable.
   administrative paths (the observation container itself, control-event
   payloads, the trace, spans, analysis, completeness, captureBoundary,
   conditions, and inside every metadata-classified payload object), unknown
-  fields MUST be absent, `null`, or empty — otherwise rejected with
+  fields MUST be absent or exactly `null` — otherwise rejected with
   `unknown-additive-field`. Under a content-classified payload of a declared
   observation (`redacted` / `truncated`), unknown fields are part of the
   declared content and are admitted — the declaration covers them, and the
@@ -593,18 +626,19 @@ mandatory safety gate has already run and remains non-bypassable.
   most 128 code points: span `name`, each `participants[]` entry,
   `captureProfile.name`, each `conditions[].label`, envelope `model` /
   `provider`, `finishReason`, tool `name`, MCP `server` / `tool`,
-  `contextProvider.name`, `error.type`, `cancellation.requestedBy`. Longer,
-  empty, or free-text values are rejected with `unbounded-label`.
+  `contextProvider.name`, `contextProvider.kind`, `error.type`,
+  `cancellation.requestedBy`. Longer, empty, or free-text values are
+  rejected with `unbounded-label`.
 - **M4 — Schema-owned free-text metadata.** The following schema-owned
   free-text fields are admitted as metadata (they are required or optional
   parts of the canonical schema and cannot be removed): `missingRecord.reason`
-  and `missingRecord.note`, redaction `policy` and `reasons[]`, truncation
-  `maxLength` / `originalLength` (numbers), `completeness.boundaryStatement`,
-  `analysis.validationIssues[].message` (constrained by Spec 014 §10), and
-  usage `reason` fields. They are still scanned recursively by the mandatory
-  credential detector; `metadata-safe` adds no length bound beyond the schema
-  contract and makes no claim about their sensitivity (see "Honest scope
-  statement").
+  and `missingRecord.note`, redaction `policy` and `reasons[]`,
+  `completeness.boundaryStatement`, `analysis.validationIssues[].message`
+  (constrained by Spec 014 §10), usage `reason` fields, and
+  `truncation.maxLength` / `originalLength` (numbers). They are still scanned
+  recursively by the mandatory credential detector; `metadata-safe` adds no
+  length bound beyond the schema contract and makes no claim about their
+  sensitivity (see "Honest scope statement").
 - **M5 — Recursive, case-normalized traversal.** All classification
   traverses objects and arrays recursively with the same case normalization
   as the gate; detection never echoes values.
@@ -615,6 +649,8 @@ mandatory safety gate has already run and remains non-bypassable.
   (`model_request`);
 - `responseEnvelope.providerNative` (`model_response`,
   `model_response_chunk`);
+- `responseEnvelope.usage` unless it matches the policy-owned numeric
+  allowlist described below;
 - `tool.arguments` (`tool_call`);
 - `toolResult.stdout`, `toolResult.stderr`, and every other `toolResult` key
   beyond `exitCode` (`tool_result`);
@@ -624,9 +660,20 @@ mandatory safety gate has already run and remains non-bypassable.
   (`retrieval_request`); `retrievalResult.query` and every other
   `retrievalResult` key beyond `resultCount` (`retrieval_result`);
 - `error.message` and every other `error` key beyond `type` (`error`);
-- `conditions[].value` (free-form unknown; admitted only when `null` or
-  absent — condition `label`/`version` are metadata per M3/M4);
+- `conditions[].value` (the TypeScript type requires it; for `metadata-safe`
+  it is admitted only when exactly `null`);
 - any unknown additive field at an undeclared path (M2).
+
+**Response-envelope usage numeric allowlist.** `ResponseEnvelope.usage` is
+`unknown` in the evidence types, not `UsageRecord`. Under `metadata-safe`
+v1.0.0 it is admitted ONLY when it is an object whose every own enumerable
+key is one of `inputTokens`, `outputTokens`, or `totalTokens`, and every
+value is a finite non-negative number. Any other key, any non-numeric/
+non-finite/negative value, or any non-object value makes the field
+content-bearing. (This is a policy-owned allowlist; it does not change the
+underlying `unknown` type.) The separately typed `model_usage.usage`
+(`UsageRecord`) is admitted under its typed structure (see conformance
+ table).
 
 **Permitted metadata set (normative enumeration):**
 
@@ -640,7 +687,7 @@ mandatory safety gate has already run and remains non-bypassable.
   `captureProfile.name` (M3), `captureProfile.version` (semantic version),
   `captureSurface`, `observationBoundary`, `startedAt`, `status`,
   `finishedAt`, `conditions[].label` (M3), `conditions[].version` (semantic
-  version).
+  version), `conditions[].value` (only when exactly `null`).
 - **Spans:** `spanId`, `kind`, `parentSpanId`, `startSeq`, `startedAt`,
   `status`, `endSeq`, `finishedAt`, `durationMs`; `name` (M3) and
   `participants` (M3).
@@ -650,13 +697,22 @@ mandatory safety gate has already run and remains non-bypassable.
   `durationMs` (non-negative number). Nothing else in a control payload.
 - **Envelope administrative fields:** `providerNativeFidelity` (closed
   fidelity vocabulary), `nativeEncoding` / `nativeContentType` /
-  `nativeContentHash` (administrative; reachable only under
-  `captured`+`byte_faithful`, which S5 rejects — present on declared
-  payloads only when the evidence validators permit, and scanned by the
-  gate).
-- **Usage (numeric usage evidence):** `usage.evidenceStatus` (closed),
-  `usage.inputTokens` / `outputTokens` / `totalTokens` with `value` (number)
-  and `evidenceStatus` (closed); `reason` free-text fields are M4.
+  `nativeContentHash` (administrative; reachable only after Phase A S6
+  passes — byte_faithful captured payloads are rejected before
+  serialization, so these fields appear only on declared payloads or on
+  captured structurally_faithful envelopes without retained bytes, and they
+  are scanned by the gate).
+- **Request envelope metadata:** `requestEnvelope.model` (M3),
+  `requestEnvelope.provider` (M3), `providerNativeFidelity` (closed),
+  `contextContributions` (metadata: `artifactId` id, `locator.type` closed,
+  `position` number, `provenanceState` closed).
+- **Response envelope metadata:** `responseEnvelope.providerNativeFidelity`
+  (closed), `responseEnvelope.finishReason` (M3), `responseEnvelope.usage`
+  only under the numeric allowlist, `responseEnvelope.chunkIndex` (number).
+- **Usage (typed `model_usage.usage`):** `usage.evidenceStatus` (closed),
+  `usage.inputTokens` / `outputTokens` / `totalTokens` each either a finite
+  non-negative number or a `UsageValue` with `value` (finite non-negative
+  number) and `evidenceStatus` (closed); `reason` free-text fields are M4.
 - **Lifecycle targeting / retry references:** `actor`, `lifecycleTarget`,
   `lifecycleEffect` (closed vocabularies); `retry.originalRequestEventId`,
   `retry.errorEventId` (identifiers), `retry.attempt`, `retry.observedDelayMs`
@@ -683,34 +739,35 @@ payload paths (`payload.<path>`) and the projected `EventRecord` fields
 (kind-specific fields merged at the top level by `projectCanonicalEvent`;
 `projected —` means the projection drops the payload). Classification
 values: **meta** (metadata), **label** (bounded structural label, M3),
-**content** (content-bearing, declared-only, M1), **unknown** (unknown
-additive field, fail-closed, M2), **n/a** (no such field). Container
+**content** (content-bearing, declared-only, M1), **usage** (content unless
+it matches the `responseEnvelope.usage` numeric allowlist), **unknown**
+(unknown additive field, fail-closed, M2), **n/a** (no such field). Container
 metadata on both representations (`eventId`, `traceId`, `spanId`, `seq`,
 `kind`, `capturedAt`, `evidenceStatus`, `observationRole`; raw-only
 `observationId`, `rawCapturedAt`) is always **meta**.
 
 | Kind | Raw observation payload paths | Projected `EventRecord` fields | Classification |
 |---|---|---|---|
-| `interaction_start` | none (payload absent / `null`) | — | meta |
-| `interaction_end` | none (payload absent / `null`) | — | meta |
-| `span_start` | `span.kind` (closed), `span.name` (label), `span.parentSpanId` (id \| `null`); anything else | — (payload dropped) | meta / label / **unknown** |
-| `span_end` | `durationMs` (non-negative number); anything else | — (payload dropped) | meta / **unknown** |
-| `model_request` | `requestEnvelope.model` (label), `requestEnvelope.provider` (label), `requestEnvelope.providerNativeFidelity` (closed), `requestEnvelope.nativeEncoding` / `nativeContentType` / `nativeContentHash` (admin), `requestEnvelope.messages` (content), `requestEnvelope.providerNative` (content), other envelope keys (unknown) | `requestEnvelope.*` (same paths), `contextContributions[]` (`artifactId` id, `locator.type` closed, `position` number, `provenanceState` closed) | meta / label / content / **unknown** |
-| `model_response` | `responseEnvelope.providerNativeFidelity` (closed), `responseEnvelope.finishReason` (label), `responseEnvelope.usage` (meta: numeric usage evidence; `reason` M4), `responseEnvelope.providerNative` (content), other envelope keys (unknown) | `responseEnvelope.*` (same paths) | meta / label / content / **unknown** |
-| `model_response_chunk` | as `model_response` plus `chunkIndex` (number) | `responseEnvelope.*`, `chunkIndex` | meta / label / content / **unknown** |
-| `model_usage` | `usage.evidenceStatus` (closed), `usage.inputTokens` / `outputTokens` / `totalTokens` with `value` (number) + `evidenceStatus` (closed), `reason` (M4) | `usage.*` | meta |
-| `tool_call` | `tool.name` (label), `tool.arguments` (content), other tool keys (unknown) | `tool.*` | label / content / **unknown** |
-| `tool_result` | `toolResult.exitCode` (number); `toolResult.stdout` (content), `toolResult.stderr` (content), every other `toolResult` key (content) | `toolResult.*` | meta / content |
-| `mcp_request` | `mcp.server` (label), `mcp.tool` (label), `mcp.arguments` (content), other mcp keys (unknown) | `mcp.*` | label / content / **unknown** |
-| `mcp_result` | `mcpResult.content` (content), every other `mcpResult` key (content) | `mcpResult.*` | content |
-| `retrieval_request` | `retrieval.query` (content), `retrieval.topK` (number), other retrieval keys (unknown) | `retrieval.*` | content / meta / **unknown** |
-| `retrieval_result` | `retrievalResult.query` (content), `retrievalResult.resultCount` (number), every other `retrievalResult` key (content) | `retrievalResult.*` | content / meta |
-| `context_provider_request` | `contextProvider.name` (label), `contextProvider.kind` (closed), other keys (unknown) | `contextProvider.*` | label / meta / **unknown** |
-| `context_provider_result` | as above | `contextProvider.*` | label / meta / **unknown** |
-| `context_assembled` | `contextContributions[]` (`artifactId` id, `locator.type` closed, `position` number, `provenanceState` closed); other contribution keys (unknown) | `contextContributions` | meta / **unknown** |
-| `error` | `actor` (closed), `lifecycleTarget` (closed), `lifecycleEffect` (closed), `error.type` (label), `error.message` (content), other `error` keys (content) | `actor`, `lifecycleTarget`, `lifecycleEffect`, `error.*` | meta / label / content |
-| `cancelled` | `lifecycleTarget` (closed), `lifecycleEffect: 'cancel'` (closed), `cancellation.requestedBy` (label), other cancellation keys (unknown) | `lifecycleTarget`, `lifecycleEffect`, `cancellation.*` | meta / label / **unknown** |
-| `retry` | `retry.originalRequestEventId` (id), `retry.errorEventId` (id), `retry.attempt` (number), `retry.observedDelayMs` (number), other retry keys (unknown) | `retry.*` | meta / **unknown** |
+| `interaction_start` | `payload: null` (typed contract); anything else | — | meta / **unknown** |
+| `interaction_end` | `payload: null` (typed contract); anything else | — | meta / **unknown** |
+| `span_start` | `payload: null` or `payload.span.kind` (closed), `payload.span.name` (label), `payload.span.parentSpanId` (id \| `null`); anything else | — (payload dropped) | meta / label / **unknown** |
+| `span_end` | `payload: null` or `payload.durationMs` (non-negative number); anything else | — (payload dropped) | meta / **unknown** |
+| `model_request` | `payload.requestEnvelope.model` (label), `payload.requestEnvelope.provider` (label), `payload.requestEnvelope.providerNativeFidelity` (closed), `payload.requestEnvelope.nativeEncoding` / `nativeContentType` / `nativeContentHash` (admin), `payload.requestEnvelope.messages` (content), `payload.requestEnvelope.providerNative` (content), `payload.contextContributions` (meta), other envelope/payload keys (unknown) | `requestEnvelope.*` (same paths), `contextContributions` | meta / label / content / **unknown** |
+| `model_response` | `payload.responseEnvelope.providerNativeFidelity` (closed), `payload.responseEnvelope.finishReason` (label), `payload.responseEnvelope.usage` (usage: numeric allowlist only), `payload.responseEnvelope.chunkIndex` (number), `payload.responseEnvelope.providerNative` (content), `payload.responseEnvelope.nativeEncoding` / `nativeContentType` / `nativeContentHash` (admin), other envelope/payload keys (unknown) | `responseEnvelope.*` (same paths) | meta / label / usage / content / **unknown** |
+| `model_response_chunk` | `payload.responseEnvelope.*` as `model_response` | `responseEnvelope.*` as `model_response` | meta / label / usage / content / **unknown** |
+| `model_usage` | `payload.usage.evidenceStatus` (closed), `payload.usage.inputTokens` / `outputTokens` / `totalTokens` (finite non-negative number or `UsageValue` with numeric `value` + closed `evidenceStatus`), `payload.usage.reason` (M4) | `usage.*` | meta |
+| `tool_call` | `payload.tool.name` (label), `payload.tool.arguments` (content), other tool keys (unknown) | `tool.*` | label / content / **unknown** |
+| `tool_result` | `payload.toolResult.exitCode` (number); `payload.toolResult.stdout` (content), `payload.toolResult.stderr` (content), every other `toolResult` key (content) | `toolResult.*` | meta / content |
+| `mcp_request` | `payload.mcp.server` (label), `payload.mcp.tool` (label), `payload.mcp.arguments` (content), other mcp keys (unknown) | `mcp.*` | label / content / **unknown** |
+| `mcp_result` | `payload.mcpResult.content` (content), every other `mcpResult` key (content) | `mcpResult.*` | content |
+| `retrieval_request` | `payload.retrieval.query` (content), `payload.retrieval.topK` (number), other retrieval keys (unknown) | `retrieval.*` | content / meta / **unknown** |
+| `retrieval_result` | `payload.retrievalResult.query` (content), `payload.retrievalResult.resultCount` (number), every other `retrievalResult` key (content) | `retrievalResult.*` | content / meta |
+| `context_provider_request` | `payload.contextProvider.name` (label), `payload.contextProvider.kind` (label), other keys (unknown) | `contextProvider.*` | label / **unknown** |
+| `context_provider_result` | as above | `contextProvider.*` | label / **unknown** |
+| `context_assembled` | `payload.contextContributions[]` (`artifactId` id, `locator.type` closed, `position` number, `provenanceState` closed); other contribution keys (unknown) | `contextContributions` | meta / **unknown** |
+| `error` | `payload.actor` (closed), `payload.lifecycleTarget` (closed), `payload.lifecycleEffect` (closed), `payload.error.type` (label), `payload.error.message` (content), other `error` keys (content) | `actor`, `lifecycleTarget`, `lifecycleEffect`, `error.*` | meta / label / content |
+| `cancelled` | `payload.lifecycleTarget` (closed), `payload.lifecycleEffect: 'cancel'` (closed), `payload.cancellation.requestedBy` (label), other cancellation keys (unknown) | `lifecycleTarget`, `lifecycleEffect`, `cancellation.*` | meta / label / **unknown** |
+| `retry` | `payload.retry.originalRequestEventId` (id), `payload.retry.errorEventId` (id), `payload.retry.attempt` (number), `payload.retry.observedDelayMs` (number), other retry keys (unknown) | `retry.*` | meta / **unknown** |
 
 **Content ownership rule.** A `content`-classified field is admitted ONLY
 when its observation's `evidenceStatus` is `redacted` or `truncated`
@@ -735,14 +792,14 @@ package; timestamps and identifiers fixed):
 3. `model_request` — `evidenceStatus: 'redacted'`,
    `observationRole: 'client_sent'`,
    `payload: { requestEnvelope: { model: 'claude-sonnet-4',
-   provider: 'anthropic', providerNativeFidelity: 'structurally_faithful' } }`
-   (declared; no `messages`, no `providerNative`).
+   provider: 'anthropic', providerNativeFidelity: 'structurally_faithful' },
+   contextContributions: [] }` (declared; no `messages`, no `providerNative`).
 4. `model_response` — `evidenceStatus: 'truncated'`,
    `observationRole: 'provider_reported'`,
    `payload: { responseEnvelope: { providerNativeFidelity:
    'structurally_faithful', finishReason: 'end_turn',
-   usage: { inputTokens: 3, outputTokens: 1 } } }` (declared; numeric usage
-   evidence only).
+   usage: { inputTokens: 3, outputTokens: 1 } } }` (declared; usage admitted
+   ONLY via the numeric allowlist).
 5. `span_end` — `evidenceStatus: 'captured'`, `payload: { durationMs: 3000 }`.
 6. `interaction_end` — `evidenceStatus: 'captured'`, `payload: null`.
 
@@ -751,7 +808,8 @@ standard boundary declaration, this record normalizes, serializes, and
 re-parses successfully and MUST be admitted by `metadata-safe` v1.0.0
 (lifecycle/control events are `captured` and carry no content; the
 `span_start` payload is the required structural span metadata; the
-`model_request` / `model_response` content is declared).
+`model_request` / `model_response` content is declared; `responseEnvelope.
+usage` satisfies the numeric allowlist).
 
 **Negative control.** The same record with the `model_request` observation
 changed to `evidenceStatus: 'captured'` and the envelope extended with
@@ -819,41 +877,97 @@ Consequences, all normative:
 TypeScript's `PolicyRejectionCode` union does not constrain arbitrary
 JavaScript policy implementations at runtime. After
 `persistencePolicy.decide(snapshot)` returns, storage MUST validate the
-result BEFORE reading or surfacing any property:
+result BEFORE reading or surfacing any property. **Every reflection step
+must be guarded:** accessing `.then`, enumerating keys, reading `accept`,
+reading `code`, or inspecting a prototype/accessor can throw; any throw maps
+to the fixed `policy-failed` outcome without surfacing exception text or
+partially read values.
 
-1. **Shape.** The result MUST be a plain object: non-`null`, `typeof ===
-   'object'`, not an array, and not a promise/thenable (`result.then` must
-   not be a function). Otherwise `policy-failed` (`malformed-decision`).
-2. **Exactness.** The result MUST be exactly `{ accept: true }` or
-   `{ accept: false; code }` — no additional properties, no missing
-   properties. `accept` MUST be strictly a boolean.
-3. **Closed code.** When `accept` is `false`, `code` MUST be a string in the
-   closed storage-owned vocabulary:
+Precise validation contract:
+
+1. **Prototype / plain-object requirement.** The result MUST be a plain
+   object: `typeof result === 'object'`, `result !== null`,
+   `!Array.isArray(result)`, and `Object.getPrototypeOf(result)` is either
+   `Object.prototype` or `null`. Objects inheriting from other prototypes
+   (for example, `Error`, `Map`, custom classes) are NOT plain objects and
+   are malformed.
+2. **Guarded thenable check.** Test `typeof result.then === 'function'`
+   inside a guarded boundary. If accessing `.then` throws, or if the value
+   is callable as a thenable, the result is malformed. This check MUST be
+   performed before any other property access so that a throwing getter on
+   another property cannot escape.
+3. **Guarded key enumeration.** Enumerate own enumerable string keys with
+   `Object.keys(result)` inside a guarded boundary. Symbol keys are ignored
+   for shape validation. The key array, sorted, MUST equal exactly `['accept']`
+   (when `accept` is `true`) or `['accept', 'code']` (when `accept` is
+   `false`). Any extra key, missing key, or non-string key makes the result
+   malformed.
+4. **Guarded `accept` read.** Read `result.accept` inside a guarded
+   boundary. The value MUST be strictly boolean `true` or `false` — not a
+   truthy value, not a `Boolean` object, not a string. If `accept` is not a
+   boolean, the result is malformed.
+5. **Guarded `code` read (when `accept === false`).** Read `result.code`
+   inside a guarded boundary. The value MUST be a string and MUST be one of
+   the closed `PolicyRejectionCode` values:
    `'rejected' | 'captured-content' | 'unknown-additive-field' |
-   'unbounded-label'`. Any other code — including a data-derived string such
-   as a secret value — is malformed.
-4. **Custom-policy code restriction.** `'rejected'` is the ONLY code
-   available to a custom (operator-authored) policy. The codes
-   `captured-content`, `unknown-additive-field`, and `unbounded-label` are
-   reference-policy-specific: they are produced ONLY by the storage-shipped
-   reference policy, which storage recognizes by its exact constants
-   (`signalglass.persistence.metadata-safe` at `1.0.0`). A policy that is
-   NOT the storage-shipped reference policy and returns a
-   reference-policy-specific code is a malformed decision →
-   `policy-failed` (`malformed-decision`). This prevents a custom policy
-   from forging a reference-policy classification it did not compute.
-5. **Outcome mapping.** Every malformed result — `null`, primitives,
-   promises/thenables, missing or non-boolean `accept`, unexpected
-   properties, an unknown or data-derived code, or a custom policy returning
-   a reference-policy-specific code — maps to the single fixed storage-owned
+   'unbounded-label'`. Any other string — including a secret value used as
+   a code — is malformed.
+6. **No custom-policy code restriction.** Every policy, custom or
+   reference, may return any code in the closed vocabulary. The
+   `captured-content` / `unknown-additive-field` / `unbounded-label` codes
+   are no longer claimed to prove the storage-shipped implementation; they
+   are simply closed codes available to any policy. This removes the
+   spoofing risk entirely.
+7. **Outcome mapping.** Every malformed result — null, primitives,
+   arrays, functions, promises/thenables, non-plain objects, guarded access
+   throws, extra/missing keys, non-boolean `accept`, unknown/data-derived
+   `code`, or any other violation — maps to the single fixed storage-owned
    outcome `policy-failed` (`reason: 'malformed-decision'`). The malformed
-   value, the custom code, and any policy text are never surfaced, logged, or
-   stored.
+   value, the custom code, and any policy text are never surfaced, logged,
+  or stored.
 
 Sentinel tests MUST prove that a custom policy returning a secret value as
 its `code` (for example `{ accept: false, code: 'sk-abc123…' }`) yields
 `policy-failed` and that the secret appears nowhere in the outcome,
 diagnostics, or database.
+
+### Policy identity: unspoofable and leak-safe
+
+The storage-shipped reference policy is provided as a concrete exported
+value (for example, a singleton object or class instance) from
+`@signalglass/storage`. The constructor recognizes it by **object identity**
+(`===`) and/or an internal non-forgeable brand. A caller-supplied plain
+object whose `name` equals the reserved reference policy name
+`signalglass.persistence.metadata-safe` is rejected as a configuration
+error; only the genuine storage-shipped value may use that reserved name.
+This makes reference-policy identity unspoofable without requiring the
+storage layer to trust public name/version strings.
+
+**Policy-name grammar and safety.** Every policy name, including the
+reserved reference policy name, MUST satisfy a bounded structural grammar
+and be leak-safe:
+
+- Non-empty string, at most 128 code points.
+- Contains only lowercase ASCII letters (`a–z`), digits (`0–9`), dots
+  (`.`), hyphens (`-`), and underscores (`_`).
+- Starts with a lowercase ASCII letter.
+- Regular expression: `^[a-z][a-z0-9._-]{0,127}$`.
+- The name MUST NOT satisfy `isCredentialLikeText(name)` (default options).
+  Credential-like policy names are rejected at construction.
+
+**Policy-version safety.** Policy versions MUST be valid semantic-version
+strings (`MAJOR.MINOR.PATCH`, e.g. `1.0.0`). Non-semantic versions are
+rejected at construction.
+
+**Policy metadata in outcomes and manifests.** `policy-rejected`,
+`policy-failed`, and `StorageManifest` expose only the validated policy
+`name` and `version`. Because the grammar and credential scan bound both,
+policy identity cannot carry arbitrary secret text.
+
+Sentinel tests MUST prove: a caller cannot spoof the reference policy with
+a plain object bearing the reserved name; a policy with a credential-like
+name is rejected at construction; a policy name containing secrets does not
+appear in storage or outcomes.
 
 ### Persistence-time removal
 
@@ -885,7 +999,7 @@ export interface StorageSafeIssue {
    *  (for example "record_not_object"); never a parser message. */
   code: string;
   /** Normalized structural path, included ONLY when it consists solely of
-   *  known-schema field names and numeric array indices — never
+   *  known-schema field names and numeric indices — never
    *  caller-controlled identifiers, unknown keys, or values; else null. */
   path: string | null;
 }
@@ -904,25 +1018,25 @@ import type { EvidenceRecord } from '@signalglass/evidence';
 /** Deeply readonly structural variant of EvidenceRecord. */
 export type ReadonlyEvidenceRecord = DeepReadonly<EvidenceRecord>;
 
-/** Closed, storage-owned rejection codes (see "Runtime validation of policy
- *  decisions"). Custom policies MUST use 'rejected'; the storage-shipped
- *  reference policy uses the specific codes. */
+/** Closed, storage-owned rejection codes available to any policy
+ *  (see "Runtime validation of policy decisions"). */
 export type PolicyRejectionCode =
   | 'rejected'
   | 'captured-content'
   | 'unknown-additive-field'
   | 'unbounded-label';
 
-export type PersistencePolicyDecision =
-  | { accept: true }
-  | { accept: false; code: PolicyRejectionCode };
+/** Closed, storage-owned safety-gate codes (see "Storage safety admission
+ *  gate"). */
+export type StorageSafetyCode = 'S1' | 'S2' | 'S3' | 'S4' | 'S5' | 'S6';
 
 /** Fixed storage-owned failure reasons; never exception text, malformed
  *  values, or custom codes. */
 export type PolicyFailureReason = 'exception' | 'malformed-decision';
 
 export interface PersistencePolicy {
-  /** Nonempty, stable policy name, e.g. "signalglass.persistence.metadata-safe". */
+  /** Nonempty, stable policy name. Must satisfy the bounded grammar and
+   *  credential scan (see "Policy identity"). */
   name: string;
   /** Valid semantic version of this policy definition (Spec 013 §9.2). */
   version: string;
@@ -933,10 +1047,17 @@ export interface PersistencePolicy {
    *  decisions"). */
   decide(snapshot: ReadonlyEvidenceRecord): PersistencePolicyDecision;
 }
+
+export type PersistencePolicyDecision =
+  | { accept: true }
+  | { accept: false; code: PolicyRejectionCode };
 ```
 
-Policy name/version validity is enforced at construction: an empty name or a
-non-semantic version is a configuration error and the constructor throws.
+Policy name/version validity is enforced at construction: an empty name, a
+name violating the grammar, a credential-like name, or a non-semantic
+version is a configuration error and the constructor throws. The reserved
+reference policy name is accepted only from the storage-shipped reference
+policy value.
 
 ## Deletion and tombstones
 
@@ -1005,8 +1126,8 @@ export type SaveOutcome =
     }
   | { status: 'invalid'; identity: string | null; issues: readonly StorageSafeIssue[] }
   | { status: 'unsupported-version'; version: string }
-  /** Mandatory storage-safety gate rejection; structural codes only (S1–S5). */
-  | { status: 'safety-rejected'; reasons: readonly string[] }
+  /** Mandatory storage-safety gate rejection; closed StorageSafetyCode[] only. */
+  | { status: 'safety-rejected'; reasons: readonly StorageSafetyCode[] }
   | {
       status: 'policy-rejected';
       policy: { name: string; version: string };
@@ -1037,7 +1158,9 @@ export type StoredEvidenceReadResult =
 
 export interface EvidenceStorageConfig {
   databasePath: string;
-  /** Required — no implicit default policy (see Persistence-policy boundary). */
+  /** Required — no implicit default policy (see Persistence-policy boundary).
+   *  Custom policies are supported; the reserved reference policy name is
+   *  accepted only from the storage-shipped reference policy value. */
   persistencePolicy: PersistencePolicy;
   /** Injectable ISO 8601 UTC clock for storedAt; default: () => new Date().toISOString().
    *  Validated per new insertion; a throw or malformed result yields
@@ -1066,10 +1189,10 @@ The `identity` argument of the read APIs is the authoritative trace identity
 The runtime input contract is honest: `saveEvidenceRecord(input: unknown)`.
 The pipeline never dereferences malformed input and never throws for
 malformed input. **Idempotency classification never requires the clock**:
-validation, the mandatory gate, and the selected policy run on EVERY save,
-but an existing immutable row is classified (`already-present` / `conflict`)
-without calling `now()`; the clock is required only for a genuinely new
-insertion.
+validation, the mandatory safety gate, and the selected policy run on EVERY
+save, but an existing immutable row is classified (`already-present` /
+`conflict`) without calling `now()`; the clock is required only for a
+genuinely new insertion.
 
 1. **Shape guard.** `input` must be a non-null object (a plain structural
    object check). Otherwise return `invalid` with a single storage-safe
@@ -1089,19 +1212,25 @@ insertion.
    - success → `validatedRecord`. This is the ONLY record shape that is
      serialized and passed toward policy; the caller's original object is
      not used again.
-4. **Serialize first.** `storedDocument = serializeEvidenceRecord(validatedRecord)`
+4. **Mandatory safety gate — Phase A (S6, retained bytes).** Recursively
+   scan `validatedRecord` for any `Uint8Array` value. Any occurrence →
+   `safety-rejected` with `['S6']` (or combined with Phase B codes when
+   Phase B also finds issues); nothing written. This MUST happen before
+   serialization because `serializeEvidenceRecord` converts retained bytes
+   to Base64, which the string detector cannot decode.
+5. **Serialize first.** `storedDocument = serializeEvidenceRecord(validatedRecord)`
    — the exact text that will be persisted. (The serializer re-validates and
    throws only on an already-invalid record — a programming-error guard, not
    a data path.) The serializer snapshot
    (`parseEvidenceRecord(JSON.parse(storedDocument)).record`) is the parity
    baseline for everything downstream.
-5. **Detached snapshot.** `snapshot = parseEvidenceRecord(JSON.parse(storedDocument)).record`
+6. **Detached snapshot.** `snapshot = parseEvidenceRecord(JSON.parse(storedDocument)).record`
    (always `ok` — the same serializer produced the text) and **deep-freeze**
    it. The caller's mutable object is never passed to policy.
-6. **Mandatory safety gate.** `detectStorageProhibitedMaterial(snapshot)`:
-   any S1–S5 finding → return `safety-rejected` with the structural reason
-   codes; nothing written. Non-bypassable.
-7. **Policy admission.** `persistencePolicy.decide(snapshot)` (deep-frozen,
+7. **Mandatory safety gate — Phase B (S1–S5).** `detectStorageProhibitedMaterial(snapshot)`:
+   any S1–S5 finding → combine with Phase A codes, deduplicate, sort S1–S6,
+   return `safety-rejected`; nothing written. Non-bypassable.
+8. **Policy admission.** `persistencePolicy.decide(snapshot)` (deep-frozen,
    deeply readonly), then **runtime-validate the decision** (see "Runtime
    validation of policy decisions"):
    - `{ accept: false; code }` (valid) → `policy-rejected` with policy
@@ -1112,30 +1241,30 @@ insertion.
    - malformed decision → `policy-failed` (`reason: 'malformed-decision'`);
      nothing written; the malformed value and any custom code are never
      surfaced.
-8. **Digest.** `storageDigest = sha256Hex(utf8Encode(storedDocument))` — over
+9. **Digest.** `storageDigest = sha256Hex(utf8Encode(storedDocument))` — over
    the exact UTF-8 bytes of the exact stored serializer output (public
    `sha256Hex(bytes: Uint8Array)` and `utf8Encode(text: string)` from
    `@signalglass/evidence`).
-9. **Append (transactional).** Inside one transaction: read the existing
-   row by identity:
-   - **absent** → call and validate the clock:
-     - `now()` throws or returns a non-ISO-8601-UTC value →
-       `clock-failed`; the transaction rolls back; nothing written (a
-       structured configuration-failure outcome, not a database write);
-     - else `storedAt = now()`; `INSERT` (document + administrative
-       columns) → return `stored` with the manifest;
-   - **present** → **compare the exact stored `serialized_record` text with
-     `storedDocument` without calling the clock**: exact text equality →
-     `already-present`; different text → `conflict` — **regardless of
-     whether the digests match**. Digest equality is never proof of document
-     equality; the digest may be an integrity check or lookup optimization
-     but MUST NOT replace exact text comparison for correctness. The
-     `conflict` outcome reports the existing row's `stored_at` from the
-     administrative columns.
-   - A unique-key constraint raced by a concurrent writer is resolved by
-     re-reading inside the transaction and classifying by the same exact-text
-     comparison — never surfaced as a raw constraint error, and the clock is
-     not re-entered for a row that now exists.
+10. **Append (transactional).** Inside one transaction: read the existing
+    row by identity:
+    - **absent** → call and validate the clock:
+      - `now()` throws or returns a non-ISO-8601-UTC value →
+        `clock-failed`; the transaction rolls back; nothing written (a
+        structured configuration-failure outcome, not a database write);
+      - else `storedAt = now()`; `INSERT` (document + administrative
+        columns) → return `stored` with the manifest;
+    - **present** → **compare the exact stored `serialized_record` text with
+      `storedDocument` without calling the clock**: exact text equality →
+      `already-present`; different text → `conflict` — **regardless of
+      whether the digests match**. Digest equality is never proof of document
+      equality; the digest may be an integrity check or lookup optimization
+      but MUST NOT replace exact text comparison for correctness. The
+      `conflict` outcome reports the existing row's `stored_at` from the
+      administrative columns.
+    - A unique-key constraint raced by a concurrent writer is resolved by
+      re-reading inside the transaction and classifying by the same exact-text
+      comparison — never surfaced as a raw constraint error, and the clock is
+      not re-entered for a row that now exists.
 
 **Consequences (normative):** an unused or failing clock can never prevent
 classification of an existing immutable row. A byte-identical repeat or a
@@ -1424,21 +1553,23 @@ or production consumers):
 
 1. **Contracts, safety gate, and schema.** Public result/manifest/policy/
    config types (`SaveOutcome`, `StorageManifest`, `PersistencePolicy`,
-   `StorageSafeIssue`, `PolicyFailureReason`, `EvidenceStorageConfig`), the
-   deterministic structural safety-gate detector (S1–S5, including the
-   required `isCredentialLikeText` contract) and the `metadata-safe`
-   reference-policy contract with its field-level conformance table and
-   proof record, the additive `evidence_storage_meta` + `evidence_records`
-   schema, open-time schema verification, and contract tests
-   (serialized-shape and `PRAGMA table_info` schema pinning, ledger
+   `StorageSafeIssue`, `PolicyFailureReason`, `StorageSafetyCode`,
+   `EvidenceStorageConfig`), the deterministic structural safety-gate
+   detector (S1–S6, including the required `isCredentialLikeText` contract),
+   the `metadata-safe` reference-policy contract with its field-level
+   conformance table and proof record, policy-name grammar and identity
+   checks, runtime decision validation, the additive `evidence_storage_meta`
+   + `evidence_records` schema, open-time schema verification, and contract
+   tests (serialized-shape and `PRAGMA table_info` schema pinning, ledger
    namespacing, gate/policy detection matrix, storage-safe issue shaping,
-   runtime decision validation).
+   runtime decision validation, policy-name safety).
 2. **Append-only save, conflict detection, retrieval.**
-   `saveEvidenceRecord` with the normative pipeline (including clock
-   ordering: existing rows classified without the clock),
-   `getEvidenceRecord`, `getStoredEvidence`, `close`; tests for first write,
-   idempotent repeats, exact-text conflicts (including simulated digest
-   collision), rollback, clock validation, and close/reopen durability.
+   `saveEvidenceRecord` with the normative pipeline (including retained-bytes
+   scan before serialization and clock ordering: existing rows classified
+   without the clock), `getEvidenceRecord`, `getStoredEvidence`, `close`;
+   tests for first write, idempotent repeats, exact-text conflicts
+   (including simulated digest collision), rollback, clock validation, and
+   close/reopen durability.
 3. **Policy admission, mutation safety, failure, privacy, coexistence.**
    `policy-rejected` codes, `policy-failed` (`exception` /
    `malformed-decision`), runtime decision validation; mutation and exception
@@ -1468,14 +1599,19 @@ secrets, no raw payloads in fixtures — sentinel markers are used instead):
   (`parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(validatedRecord))).record`),
   using only gate-safe, policy-admitted records;
 - **serializer-boundary test (separate from persisted parity):** a record
-  with retained bytes (`byte_faithful` captured payload) demonstrates the
-  caller-input versus serializer-snapshot representation change
-  (`Uint8Array` → canonical Base64) at the serialization boundary WITHOUT
-  being persisted — the same record is rejected by the mandatory gate (S5)
-  and is never described as persisted-parity coverage;
+  with retained bytes (`Uint8Array`) demonstrates the caller-input versus
+  serializer-snapshot representation change (`Uint8Array` → canonical
+  Base64) at the serialization boundary WITHOUT being persisted — the same
+  record is rejected by Phase A of the mandatory gate (S6) and is never
+  described as persisted-parity coverage;
+- **retained-bytes evasion tests:** `Uint8Array` nested in normalized
+  messages, tool/MCP/retrieval/error content, declared redacted/truncated
+  content, unknown additive fields, and non-envelope paths — each rejected
+  by S6 before serialization, proving the rule does not depend on
+  `providerNativeFidelity`;
 - **no persisted byte-payload parity claim:** persisted-parity tests never
   contain retained bytes; byte-payload parity is deferred until a later
-  accepted specification permits `byte_faithful` payloads to be stored;
+  accepted specification permits byte-bearing payloads to be stored;
 - representation-sensitive ADMITTED cases through persistence: explicitly
   `undefined` optional properties when valid on the record (e.g.
   `participants`, `conditions`, `contextContributions`, `usage`,
@@ -1505,6 +1641,9 @@ secrets, no raw payloads in fixtures — sentinel markers are used instead):
   the same file; initialization against a pre-existing legacy database;
 - policy name/version recorded only in administrative metadata (manifest +
   columns; absent from `serialized_record`);
+- **policy-name safety:** names matching the grammar, credential-like names
+  rejected at construction, reserved reference policy name rejected for
+  plain-object custom policies, validated names in outcomes/manifests only;
 - **clock ordering:** a byte-identical repeat and a conflicting write both
   classify as `already-present` / `conflict` WITHOUT calling the injected
   clock (a throwing clock injected for the repeat/conflict save still
@@ -1518,18 +1657,22 @@ secrets, no raw payloads in fixtures — sentinel markers are used instead):
   only — sentinel tests prove no free-form policy text, payload values, or
   exception text ever surface (policy decisions, exceptions, invalid input,
   issue messages, issue paths, identifiers, keys, and values covered);
-- **runtime decision validation:** sentinel tests — `null`, a primitive, a
-  promise/thenable, `{ accept: 'yes' }`, `{ accept: true, code: 'x' }`,
+- **runtime decision validation:** sentinel tests — `null`, a primitive, an
+  array, a function, a promise/thenable, an object with a non-null/
+non-Object.prototype prototype, `{ accept: 'yes' }`, `{ accept: true, code: 'x' }`,
   `{ accept: false }` (missing code), an extra property, an unknown/data-
-  derived code (e.g. a secret string as `code`), and a custom policy
-  returning `captured-content` — each map to `policy-failed`
-  (`malformed-decision`), and the malformed value / custom code appears
-  nowhere in the outcome, diagnostics, or database;
-- safety-gate rejection (S1–S5) writes nothing, returns structural codes,
-  and echoes no detected values (sentinel-based); **positive and negative
-  matrix cases are pinned both ways** so implementations cannot silently
-  widen or narrow admission — e.g. `Authorization` header key/value rejected
-  (S2), `authorization: Bearer x` value shape rejected (S1 detector),
+  derived code (e.g. a secret string as `code`), a Proxy with a throwing
+  getter, and an accessor that throws on `.then` / `accept` / `code` — each
+  map to `policy-failed` (`malformed-decision`), and no malformed value or
+  partially read value appears in the outcome, diagnostics, or database;
+- **policy decision determinism:** the same malformed input always produces
+  the identical `policy-failed` outcome, never a throw or a leaked value;
+- safety-gate rejection (S1–S6) writes nothing, returns closed
+  `StorageSafetyCode[]`, deduplicated and canonically ordered, and echoes no
+  detected values (sentinel-based); **positive and negative matrix cases are
+  pinned both ways** so implementations cannot silently widen or narrow
+  admission — e.g. `Authorization` header key/value rejected (S2),
+  `authorization: Bearer x` value shape rejected (S1 detector),
   `sk-`-prefixed value rejected, `storageKey: "sk-…"` rejected (S4),
   `storageKey: "s3://bucket/key"` admitted, `password` key rejected even
   with an innocuous value (S3), a benign plain sentence admitted, uppercase
@@ -1542,13 +1685,18 @@ secrets, no raw payloads in fixtures — sentinel markers are used instead):
   record the gate rejects;
 - reference policy `metadata-safe`: the **field and category conformance
   table is tested cell by cell** for every event kind in both representations
-  (raw observation payload paths and projected `EventRecord` fields):
+  (raw observation payload paths and projected `EventRecord` fields), with
+  the exact TypeScript shapes (`ResponseEnvelope.usage` as `unknown`,
+  `chunkIndex` inside `responseEnvelope`, `contextContributions` in raw
+  `model_request`, `ContextProvider.kind` as arbitrary string bounded label,
+  `Condition.value` required and admitted only as `null`, control-event
+  `payload: null` typed contract):
   permitted metadata admitted; captured content of every kind rejected
   (`captured-content`); declared content (`redacted` / `truncated`)
   admitted; unknown additive fields at undeclared paths rejected
   (`unknown-additive-field`) and under declared content admitted;
   unbounded span / name labels rejected (`unbounded-label`); `conditions[].
-  value` rejected unless `null`/absent; recursive, case-normalized
+  value` rejected unless exactly `null`; recursive, case-normalized
   traversal (sentinel tests including uppercase sensitive keys); never
   rewrites evidence;
 - **proof record:** the fixture-derived record with captured lifecycle
@@ -1613,10 +1761,10 @@ secrets, no raw payloads in fixtures — sentinel markers are used instead):
   tested: retained `Uint8Array` bytes become canonical RFC 4648 §4 Base64;
   explicitly `undefined` optional properties are absent after round trip.
 - [ ] The retained-bytes representation change is demonstrated ONLY at the
-  serializer boundary: the same record is rejected by the mandatory gate
-  (S5) and is never described as persisted-parity coverage; no persisted
-  byte-payload parity is claimed until a later accepted specification
-  permits `byte_faithful` payloads to be stored.
+  serializer boundary: the same record is rejected by Phase A of the
+  mandatory gate (S6) and is never described as persisted-parity coverage;
+  no persisted byte-payload parity is claimed until a later accepted
+  specification permits byte-bearing payloads to be stored.
 - [ ] Persisted-parity tests use only gate-safe, policy-admitted records;
   representation-sensitive ADMITTED cases (explicitly `undefined` optional
   properties when valid on the record) are exercised through persistence;
@@ -1679,36 +1827,42 @@ secrets, no raw payloads in fixtures — sentinel markers are used instead):
   respectively — never a throw and never a silent misread.
 - [ ] Malformed runtime input (non-object, null) returns `invalid` without
   throwing.
-- [ ] The mandatory storage-safety gate is a closed deterministic contract:
-  exact case normalization (`toLowerCase()`), the exact closed
+- [ ] The mandatory storage-safety gate uses a closed deterministic
+  `StorageSafetyCode` union (`'S1'|'S2'|'S3'|'S4'|'S5'|'S6'`), deduplicates
+  codes, and emits them in canonical order S1→S6; every rejection produces
+  at least one code; the same input produces the identical complete outcome.
+- [ ] `SaveOutcome['safety-rejected']` carries `readonly StorageSafetyCode[]`,
+  not `string[]`.
+- [ ] S1–S5 are exact: `toLowerCase()` case normalization, the exact closed
   sensitive-header set (authorization, x-api-key, cookie, set-cookie,
   proxy-authorization), the exact closed key patterns, the exact
   storage-reference key rule (storageKey / storage_key with a
   credential-like value), and the required `isCredentialLikeText` value
   detector (default options) — pinned by positive and negative matrix cases
-  in both directions; the gate rejects API keys, tokens, sensitive headers,
-  secrets/credentials, credential-bearing storage references, and full
-  raw/provider-native payload captures with structural `safety-rejected`
-  codes and writes nothing.
+  in both directions.
 - [ ] Custom collection secret patterns do NOT participate in the mandatory
   gate (the gate uses only the default `isCredentialLikeText` contract);
   this is explicit and tested.
-- [ ] The safety gate traverses every object, array, key, string value, and
-  serialized Base64 value recursively; Base64-encoded credentials are not
-  decoded by the detector, and this is safe because S5 rejects every
-  captured `byte_faithful` payload before persistence and non-captured
-  payloads cannot declare byte fidelity (evidence validators).
+- [ ] S6 rejects every `Uint8Array` in the validated pre-serialization
+  record recursively, regardless of path, before serialization; this
+  includes bytes in normalized messages, tool/MCP/retrieval/error content,
+  declared redacted/truncated content, unknown additive fields, and non-
+  envelope paths; S6 does not depend on `providerNativeFidelity`.
+- [ ] The safety gate does not claim Base64 scanning detects encoded
+  credentials; Phase B scans Base64 strings as ordinary strings and does not
+  decode them, which is safe only because Phase A already rejected all
+  retained bytes.
 - [ ] S5's normative predicate is written over the actual evidence shapes
   (no generic event `payload`): it rejects captured `byte_faithful`
   envelopes and captured `structurally_faithful` envelopes carrying
   `providerNative`; declared (`redacted` / `truncated`) envelopes are not
-  S5-rejected but remain subject to S1–S4.
+  S5-rejected but remain subject to S1–S4 and S6.
 - [ ] The storage-safety gate is non-bypassable: no custom persistence policy
   can cause storage of material the gate rejects.
-- [ ] No unversioned "at minimum" extensions: no gate or policy extensions
-  exist in this slice, and any future conservative extension MUST be
-  versioned with documented compatibility consequences that do not change
-  the meaning of existing stored records.
+- [ ] No unversioned gate or policy extensions exist in this slice; any
+  future conservative extension MUST be versioned with documented
+  compatibility consequences that do not change the meaning of existing
+  stored records.
 - [ ] The reference policy `signalglass.persistence.metadata-safe` (v1.0.0)
   uses the actual evidence vocabularies only (`captured`, `redacted`,
   `truncated`, `missing`, `unknown`, `not_applicable`); it never uses
@@ -1719,7 +1873,8 @@ secrets, no raw payloads in fixtures — sentinel markers are used instead):
   captured structural metadata (including `span_start` span-derivation
   fields) is admitted; captured administrative facts (identities,
   timestamps, vocabulary values, lifecycle targeting, retry references,
-  numeric usage evidence, bounded structural labels) are admitted.
+  numeric usage evidence under the allowlist, bounded structural labels) are
+  admitted.
 - [ ] The reference policy rejects captured user/provider content fields —
   messages, provider-native bodies, tool arguments/results, MCP/retrieval
   content, error text, and equivalent unknown payload content — with
@@ -1733,34 +1888,52 @@ secrets, no raw payloads in fixtures — sentinel markers are used instead):
   against the public `normalizeEvidenceRecord` contract.
 - [ ] The reference policy's field and category conformance table is tested
   cell by cell for every event kind in BOTH representations (raw observation
-  payload paths and projected `EventRecord` fields); the projected
-  `EventRecord` includes `traceId` in its permitted common fields; unknown
-  additive fields fail closed at undeclared paths
-  (`unknown-additive-field`) and are admitted only under declared content.
+  payload paths and projected `EventRecord` fields), with the exact
+  TypeScript shapes: `ResponseEnvelope.usage` is `unknown` and admitted only
+  via the numeric allowlist; `chunkIndex` is inside `responseEnvelope`;
+  `contextContributions` is classified in raw `model_request` payloads;
+  `ContextProvider.kind` is an arbitrary string bounded as a label;
+  `Condition.value` is required by TypeScript and admitted only as `null`;
+  control-event `payload` is required and typed as `null`.
 - [ ] Bounded structural labels (span `name`, `participants[]`,
   `captureProfile.name`, `conditions[].label`, envelope `model` / `provider`,
   `finishReason`, tool `name`, MCP `server` / `tool`,
-  `contextProvider.name`, `error.type`, `cancellation.requestedBy`) are
-  admitted only as non-empty, control-character-free strings of at most 128
-  code points; longer or free-text values are rejected
-  (`unbounded-label`).
+  `contextProvider.name`, `contextProvider.kind`, `error.type`,
+  `cancellation.requestedBy`) are admitted only as non-empty,
+  control-character-free strings of at most 128 code points; longer or
+  free-text values are rejected (`unbounded-label`).
 - [ ] Schema-owned free-text metadata (declaration reasons/notes, validation
   messages, boundary statements, usage reasons) is admitted with the honest
   scope statement: `metadata-safe` is a schema-category policy, not proof
   that arbitrary metadata strings contain no sensitive content; the
   mandatory credential detector scans every string recursively.
-- [ ] `conditions[].value` is content-bearing and rejected unless `null` or
-  absent; `conditions[].label` / `version` are metadata.
-- [ ] Policy decisions are runtime-validated: `null`, primitives,
-  promises/thenables, missing or non-boolean `accept`, unexpected
-  properties, unknown/data-derived codes, and custom policies returning
-  reference-policy-specific codes map to `policy-failed`
-  (`malformed-decision`) and are never surfaced; a custom policy returning a
-  secret as its `code` cannot leak it (sentinel test).
-- [ ] `'rejected'` is the only rejection code available to custom policies;
-  `captured-content`, `unknown-additive-field`, and `unbounded-label` are
-  reference-policy-specific and are recognized only from the storage-shipped
-  reference policy (exact name/version constants).
+- [ ] `conditions[].value` is required by TypeScript; for `metadata-safe` it
+  is admitted only when exactly `null`; any other value is rejected
+  (`captured-content`).
+- [ ] Unknown additive fields at undeclared paths must be absent or exactly
+  `null`; present unknown fields (including empty strings, `0`, `false`,
+  `[]`, or `{}`) are rejected (`unknown-additive-field`).
+- [ ] Policy decisions are runtime-validated with guarded reflection: plain
+  object (`Object.prototype` or `null` prototype, not array), guarded
+  thenable check, guarded key enumeration, guarded `accept` read (strict
+  boolean), guarded `code` read (closed string); null/primitives/arrays/
+  functions/non-plain objects/promises/thenables/Proxies with throwing
+  getters/accessors/extra keys/missing keys/non-boolean `accept`/unknown
+  codes map to `policy-failed` (`malformed-decision`) and are never
+  surfaced; a custom policy returning a secret as its `code` cannot leak it
+  (sentinel test).
+- [ ] The closed `PolicyRejectionCode` vocabulary is available to any policy;
+  no policy can return free-form text or data-derived codes; malformed
+  decisions never leak partially read values.
+- [ ] The storage-shipped reference policy identity is unspoofable: the
+  constructor recognizes it by object identity/internal brand; a plain
+  object bearing the reserved name `signalglass.persistence.metadata-safe`
+  is rejected at construction; custom policies are supported and may use any
+  closed rejection code.
+- [ ] Policy names satisfy a bounded grammar (`^[a-z][a-z0-9._-]{0,127}$`,
+  max 128 code points) and are not credential-like; versions are valid
+  semantic versions; policy identity in outcomes and manifests cannot carry
+  arbitrary secret text.
 - [ ] A persistence policy that attempts to mutate the detached snapshot or
   that throws for any reason returns `policy-failed`
   (`reason: 'exception'`) and writes nothing; it cannot alter the caller's
@@ -1772,8 +1945,9 @@ secrets, no raw payloads in fixtures — sentinel markers are used instead):
   input, issue messages, issue paths, identifiers, keys, and values.
 - [ ] The clock is consulted ONLY for a genuinely new insertion: a
   byte-identical repeat and a conflicting write classify as
-  `already-present` / `conflict` without calling the injected clock (tested
-  with a throwing clock); a throwing or malformed `now()` on a new
+  `already-present` / `conflict` without calling the injected clock (a
+  throwing clock injected for the repeat/conflict save still produces the
+  correct classification); a throwing or malformed `now()` on a new
   insertion returns `clock-failed`, rolls back, and writes nothing; a
   concurrent unique-key race is resolved by exact-text re-read, never a raw
   constraint error.
@@ -1858,11 +2032,12 @@ consistently with this spec:
   `EvidenceStorage` responsibility and the dependency on
   `@signalglass/evidence` (plus `@signalglass/core`'s
   `isCredentialLikeText` for the gate).
-- `docs/privacy.md` — the mandatory storage-safety gate, the conservative
-  `metadata-safe` reference policy and its honest schema-category scope
-  statement, storage-safe (leak-free) policy and validation results,
-  administrative metadata separation, and the absence of canonical
-  hard-delete in this slice.
+- `docs/privacy.md` — the mandatory storage-safety gate (S1–S6, retained-
+  bytes rule, Base64 non-decoding limit), the conservative `metadata-safe`
+  reference policy and its honest schema-category scope statement,
+  storage-safe (leak-free) policy and validation results, administrative
+  metadata separation, and the absence of canonical hard-delete in this
+  slice.
 - `docs/capture-profiles.md` — persistence-policy recording location (already
   aligned; add the `EvidenceStorage` manifest reference).
 - `docs/model-versioning.md` — storage-format version vs. evidence-schema
@@ -1870,7 +2045,7 @@ consistently with this spec:
   canonical-storage ledger (already aligned in principle).
 - `docs/glossary.md` — `EvidenceStorage`, storage manifest, storage digest,
   authoritative identity, storage safety gate, serializer snapshot,
-  declared content entries.
+  declared content, `StorageSafetyCode` entries.
 - `docs/roadmap.md` and `specs/000-index.md` — status and slice registration.
 
 This Draft PR updates only: `specs/015-append-only-evidence-store.md` (this
@@ -1880,10 +2055,9 @@ rewritten.
 
 ## Open questions
 
-Limited to decisions that cannot be resolved from current repository
-evidence; they concern implementation mechanics, not core identity,
-overwrite, safety, policy, deletion, parity, or classification behavior
-(those are decided above):
+Limited to genuinely unresolved implementation mechanics; core identity,
+overwrite, safety, policy, deletion, parity, and classification behavior are
+decided above:
 
 1. **Connection and journaling strategy.** `TraceStorage` opens its own
    `better-sqlite3` connection with default journaling. Whether
@@ -1893,14 +2067,6 @@ overwrite, safety, policy, deletion, parity, or classification behavior
    evidence and is left to the slice-1 implementation review. Both options
    preserve the documented atomicity and durability guarantees because
    `better-sqlite3` is synchronous and every save is transactional.
-2. **Operator policy authoring surface.** The closed rejection-code
-   vocabulary means custom policies are binary accept/reject (code
-   `rejected`) until richer storage-owned codes are defined. Whether the
-   initial slice exposes policy authoring beyond the single `metadata-safe`
-   reference policy cannot be decided until a real collector exists to
-   expose operator needs; the contract supports any number of operator-
-   authored policies without schema changes, and any such policy remains
-   subordinate to the mandatory safety gate.
 
 ## References
 
