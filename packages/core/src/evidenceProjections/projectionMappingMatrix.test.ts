@@ -128,7 +128,8 @@ const PINNED_CLAIM_IDS: ReadonlyArray<string> = [
   'E2L-066', 'E2L-067',
   'E2L-069', 'E2L-070', 'E2L-071', 'E2L-072', 'E2L-073', 'E2L-074',
   'E2L-075', 'E2L-076', 'E2L-077', 'E2L-078', 'E2L-079', 'E2L-080',
-  'E2L-081', 'E2L-082', 'E2L-083',
+  'E2L-081', 'E2L-082', 'E2L-083', 'E2L-084', 'E2L-085', 'E2L-086',
+  'E2L-087',
 ];
 
 /**
@@ -541,6 +542,24 @@ describe('projection mapping matrix — gate strictness (regressions)', () => {
     ).toThrow(/must not contain marker/);
   });
 
+  it('byte-aware absence check inspects object property names as well as values', () => {
+    // A marker leaked as an object KEY (values are clean) must fail: the
+    // walk descends through `Object.entries`, not just `Object.values`.
+    const claim = syntheticClaim({
+      fixture: 'enriched',
+      path: 'events[2].requestEnvelope.providerNative',
+      outcome: 'unavailable',
+      viewAbsence: ['enriched-native-request-body'],
+    });
+    expect(() =>
+      assertViewAbsenceFree(claim, {
+        ok: true,
+        view: { [SENTINEL_REQ]: true },
+        report: emptyReport(),
+      }),
+    ).toThrow(/must not contain marker/);
+  });
+
   it('byte-aware absence check inspects the projection report too', () => {
     // A marker embedded in a mapping reason (e.g. an accidentally echoed
     // secret) must fail even when the view is clean.
@@ -769,7 +788,11 @@ function valueContainsMarker(
     return value.includes(marker);
   }
   if (value != null && typeof value === 'object') {
-    return Object.values(value).some((v) => valueContainsMarker(v, marker, markerBytes));
+    // Inspect object property NAMES as well as values: a marker leaked as a
+    // key (e.g. `{ [sentinel]: true }`) is still a leak.
+    return Object.entries(value).some(
+      ([key, v]) => key.includes(marker) || valueContainsMarker(v, marker, markerBytes),
+    );
   }
   return false;
 }

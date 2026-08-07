@@ -22,6 +22,13 @@ export const T3 = '2025-06-01T14:00:03.000Z';
 export const T4 = '2025-06-01T14:00:03.200Z';
 export const T5 = '2025-06-01T14:00:03.400Z';
 
+/**
+ * Sentinel error message carried by the all-kinds fixture's error event.
+ * It must never appear in projected views, reports, or mapping reasons
+ * (asserted by the matrix `viewAbsence` checks and the field-loss suite).
+ */
+export const ALL_KINDS_ERROR_MESSAGE = 'sentinel-error-message-must-not-leak';
+
 const PROFILE = { name: 'dev-basic', version: '1.2.0' };
 
 function buildBoundary(overrides: Partial<CaptureBoundary> = {}): CaptureBoundary {
@@ -235,7 +242,7 @@ export function allKindsObservations(): EvidenceObservation[] {
     obs({
       observationId: 'k15', eventId: 'evt-error', seq: 15, kind: 'error',
       capturedAt: T3, rawCapturedAt: T3, observationRole: 'returned',
-      payload: { actor: 'model', lifecycleTarget: 'none', lifecycleEffect: 'none', error: { type: 'timeout' } },
+      payload: { actor: 'model', lifecycleTarget: 'none', lifecycleEffect: 'none', error: { type: 'timeout', message: ALL_KINDS_ERROR_MESSAGE } },
     }),
     obs({
       observationId: 'k16', eventId: 'evt-cancelled', seq: 16, kind: 'cancelled',

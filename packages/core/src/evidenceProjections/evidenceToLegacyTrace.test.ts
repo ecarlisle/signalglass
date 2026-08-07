@@ -14,6 +14,7 @@ import {
 } from './eventMapping.js';
 import { EVIDENCE_TO_LEGACY_TRACE_PROJECTION_VERSION, PROJECTION_ISSUE_CODES } from './types.js';
 import {
+  ALL_KINDS_ERROR_MESSAGE,
   allKindsObservations,
   buildRecord,
   minimalObservations,
@@ -766,6 +767,54 @@ describe('evidenceToLegacyTrace — field-level loss mappings (present fields on
     expect(barePaths.has('events[1].usage.inputTokens')).toBe(false);
     expect(barePaths.has('events[1].usage.outputTokens')).toBe(false);
     expect(barePaths.has('events[1].usage.totalTokens')).toBe(false);
+  });
+
+  it('reports every error-event field as unavailable with a structural reason', () => {
+    // all-kinds carries the error event at events[15] with actor,
+    // lifecycleTarget, lifecycleEffect, and an error payload whose message
+    // is a sentinel that must never reach the view or any mapping reason.
+    const result = evidenceToLegacyTrace(buildRecord(allKindsObservations()));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const byPath = new Map(result.report.mappings.map((m) => [m.path, m]));
+    for (const path of [
+      'events[15].actor',
+      'events[15].lifecycleTarget',
+      'events[15].lifecycleEffect',
+      'events[15].error',
+    ]) {
+      const mapping = byPath.get(path);
+      expect(mapping, `mapping for ${path} must exist`).toBeDefined();
+      expect(mapping!.stage).toBe('evidence_to_legacy_trace');
+      expect(mapping!.outcome).toBe('unavailable');
+      expect(mapping!.reason.length).toBeGreaterThan(10);
+    }
+    // Structural reasons only: no error type, message, actor value, or
+    // lifecycle vocabulary value is echoed, and the sentinel message never
+    // reaches the projected view or the report.
+    for (const m of result.report.mappings) {
+      expect(m.reason).not.toContain('timeout');
+      expect(m.reason).not.toContain(ALL_KINDS_ERROR_MESSAGE);
+    }
+    const serialized = JSON.stringify(result.view);
+    expect(serialized).not.toContain('timeout');
+    expect(serialized).not.toContain(ALL_KINDS_ERROR_MESSAGE);
+  });
+
+  it('emits no error-field mappings for events that are not error events', () => {
+    // The minimal fixture has no error event; cancelled/retry (all-kinds)
+    // carry lifecycle fields but must not receive error-field mappings.
+    const result = evidenceToLegacyTrace(buildRecord(allKindsObservations()));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const paths = new Set(result.report.mappings.map((m) => m.path));
+    expect(paths.has('events[16].lifecycleTarget')).toBe(false); // cancelled
+    expect(paths.has('events[16].lifecycleEffect')).toBe(false);
+    expect(paths.has('events[17].error')).toBe(false); // retry
+    for (const m of result.report.mappings) {
+      expect(m.path).not.toBe('events[2].actor');
+      expect(m.path).not.toBe('events[3].error');
+    }
   });
 
   it('reports raw missing/redaction/truncation declarations without echoing declaration values', () => {

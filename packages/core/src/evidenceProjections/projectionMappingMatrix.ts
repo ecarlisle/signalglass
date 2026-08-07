@@ -44,6 +44,7 @@
  */
 import type { EventKind } from '@signalglass/evidence';
 import type { ProjectionOutcome } from './types.js';
+import { ALL_KINDS_ERROR_MESSAGE } from './testHelpers.js';
 
 /** Fixture used by a runtime check in the matrix conformance test. */
 export type MatrixFixtureName =
@@ -607,7 +608,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     legacyTarget: 'TraceEvent provider_error',
     classification: 'partial',
     reason: 'canonical error maps to the single legacy provider_error type; the canonical actor, lifecycleTarget, and lifecycleEffect vocabulary is not representable',
-    verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test; the per-field error losses are the separate rows E2L-084..E2L-087',
     runtime: {
       fixture: 'all-kinds',
       reasonIncludes: 'kind "error"',
@@ -1181,6 +1182,69 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[4].responseEnvelope.nativeContentHash',
       outcome: 'unavailable',
+    },
+  },
+
+  // ---- Error-event field loss (Spec 014 §3.3) — one executable row per
+  // ---- discarded error field, emitted only for actual error events. The
+  // ---- legacy provider_error type carries none of the canonical error
+  // ---- payload; the kind family row is E2L-041. Every reason is structural
+  // ---- and never echoes error types, messages, or payload values.
+  {
+    id: 'E2L-084',
+    primitive: 'ErrorEvent — actor',
+    spec013: '§3.3 error actor vocabulary',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent provider_error has no actor field; the canonical error actor is not projected',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the all-kinds fixture (events[15].actor unavailable)',
+    runtime: {
+      fixture: 'all-kinds',
+      path: 'events[15].actor',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-085',
+    primitive: 'ErrorEvent — lifecycleTarget',
+    spec013: '§3.3 error lifecycle targeting',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent provider_error has no lifecycle-target field; the canonical error lifecycleTarget is not projected',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the all-kinds fixture (events[15].lifecycleTarget unavailable)',
+    runtime: {
+      fixture: 'all-kinds',
+      path: 'events[15].lifecycleTarget',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-086',
+    primitive: 'ErrorEvent — lifecycleEffect',
+    spec013: '§3.3 error lifecycle effects',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent provider_error has no lifecycle-effect field; the canonical error lifecycleEffect is not projected',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the all-kinds fixture (events[15].lifecycleEffect unavailable)',
+    runtime: {
+      fixture: 'all-kinds',
+      path: 'events[15].lifecycleEffect',
+      outcome: 'unavailable',
+    },
+  },
+  {
+    id: 'E2L-087',
+    primitive: 'ErrorEvent — error payload',
+    spec013: '§3.3 observed error payload',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent provider_error has no error payload field; the canonical error payload (type, message, details) is not projected',
+    verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; matrix runtime check over the all-kinds fixture (events[15].error unavailable, sentinel error message additionally asserted absent from the view and report)',
+    runtime: {
+      fixture: 'all-kinds',
+      path: 'events[15].error',
+      outcome: 'unavailable',
+      viewAbsence: [ALL_KINDS_ERROR_MESSAGE],
     },
   },
 ];

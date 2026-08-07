@@ -422,6 +422,7 @@ function pushEventSpecificLossMappings(
   pushEnvelopeLossMappings(mappings, event, path);
   pushUsageRecordLossMappings(mappings, event, path);
   pushContextContributionLossMapping(mappings, event, path);
+  pushErrorFieldLossMappings(mappings, event, path);
 }
 
 /**
@@ -616,6 +617,30 @@ function pushRawDeclaration(
     outcome: 'unavailable',
     reason,
   });
+}
+
+/**
+ * Error-event field losses (Spec 014 §3.3): every field of the canonical
+ * error payload is discarded by the legacy `provider_error` type, which
+ * carries neither actor, lifecycle targeting, nor the observed error
+ * payload. Each field is reported `unavailable` at its exact event path,
+ * only for actual `error` events. Reasons are structural — field names and
+ * vocabulary only, never error types, messages, or payload values.
+ */
+function pushErrorFieldLossMappings(
+  mappings: ProjectionMapping[],
+  event: EventRecord,
+  path: string,
+): void {
+  if (event.kind !== 'error') return;
+  pushUnavailable(mappings, `${path}.actor`,
+    'legacy TraceEvent provider_error has no actor field; the canonical error actor is not projected');
+  pushUnavailable(mappings, `${path}.lifecycleTarget`,
+    'legacy TraceEvent provider_error has no lifecycle-target field; the canonical error lifecycleTarget is not projected');
+  pushUnavailable(mappings, `${path}.lifecycleEffect`,
+    'legacy TraceEvent provider_error has no lifecycle-effect field; the canonical error lifecycleEffect is not projected');
+  pushUnavailable(mappings, `${path}.error`,
+    'legacy TraceEvent provider_error has no error payload field; the canonical error payload is not projected');
 }
 
 /**

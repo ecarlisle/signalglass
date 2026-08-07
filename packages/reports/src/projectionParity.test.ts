@@ -573,15 +573,37 @@ describe('determinism, immutability, and privacy', () => {
     vi.useRealTimers();
   });
 
-  it('repeated pipelines produce deeply equal results', () => {
+  it('repeated pipelines produce deeply equal results (null results never pass)', () => {
     for (const fixture of FIXTURES) {
       const run = (): { view: AgentRun; analysis: ReturnType<typeof analyzeRun> } | null => {
         const canonical = evidenceToAgentRun(fixture.record);
         if (!canonical.ok) return null;
         return { view: canonical.view, analysis: analyzeRun(canonical.view) };
       };
-      expect(run()).toEqual(run());
+      // Evaluate both runs separately and require each to succeed BEFORE the
+      // deep equality: `expect(run()).toEqual(run())` would accept two null
+      // results (both projections failing) as "determinism". A null pipeline
+      // result is a failure, never evidence of determinism.
+      const first = run();
+      const second = run();
+      expect(first, `${fixture.name}: first pipeline run must not be null`).not.toBeNull();
+      expect(second, `${fixture.name}: second pipeline run must not be null`).not.toBeNull();
+      expect(first).toEqual(second);
     }
+  });
+
+  it('a null/null pipeline result cannot satisfy the determinism gate (negative self-test)', () => {
+    // Regression: with the old `expect(run()).toEqual(run())` form, two null
+    // results (both projections failing) compared deeply equal and passed.
+    // The gate must reject a null result before any deep comparison.
+    const run = (): { view: AgentRun; analysis: ReturnType<typeof analyzeRun> } | null => null;
+    const first = run();
+    const second = run();
+    expect(() => {
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(first).toEqual(second);
+    }).toThrow();
   });
 
   it('does not mutate the input record', () => {
