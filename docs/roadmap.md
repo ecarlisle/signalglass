@@ -16,30 +16,30 @@ The forecast assumes:
 - Near-term work proceeds at approximately one focused implementation PR every 3–5 working days; later integration and hardening slices may require 5–8 working days.
 - Review findings may change scope, dates, or ordering.
 - Slice names and dependency order are stable planning references. GitHub PR numbers are anticipated only and may shift if another PR is opened.
-- This documentation-only roadmap PR is expected to occupy #19; therefore the implementation PRs below begin at anticipated #20.
+- Spec 015 is accepted in the documentation-only PR #21; therefore the implementation PRs below begin at anticipated #22.
 
 | Slice | Anticipated PR | Forecast window | Planned result |
 |---|---:|---|---|
 | Analyzer parity | #20 | Aug 7–13 | **Done** — Spec 014 slice 4: projection parity and loss verification — paired projection gates, analyzer/report parity over the real pipelines, and the loss-and-mapping matrix. Implemented and merged to main in PR #20; see `packages/reports/src/projectionParity.test.ts`, `docs/evidence-projection-matrix.md`, and the executable claim table `packages/core/src/evidenceProjections/projectionMappingMatrix.ts`. |
-| Append-only evidence store | #21 | Aug 12–18 | Persist and retrieve canonical records without overwriting authoritative observations. [Spec 015 — Append-only evidence store](../specs/015-append-only-evidence-store.md) is **Accepted — not yet implemented** (append-only save/retrieve beside the legacy `TraceStorage`, authoritative identity, exact-text conflict resolution, a mandatory non-bypassable storage-safety gate with a closed deterministic `StorageSafetyCode` taxonomy (S1/S2/S3/S5/S6) and short-circuit retained-bytes rejection, the conservative `metadata-safe` reference persistence policy with field-level content classification aligned to the exact TypeScript shapes, unspoofable reference-policy identity with bounded policy-version metadata, hardened runtime-validated policy decisions, stored-versus-in-memory parity at the serializer snapshot, clock-independent idempotency classification, read integrity verified before any `unsupported-version` result, a dedicated WAL connection with contention contract, atomic initialization with rollback, and a namespaced storage-format ledger). Approved for implementation; runtime work belongs to a follow-up implementation branch/PR. |
-| Streaming ingress and trace assembly | #22 | Aug 17–21 | Assemble durable records from requests, response chunks, usage, errors, and lifecycle events. |
-| Pi provider-boundary capture | #23 | Aug 20–27 | Enable the first Pi smoke test, initially through stored evidence and JSON/report output. |
-| Pi agent, tool, and MCP instrumentation | #24 | Aug 25–Sep 1 | Make Pi testing representative of agent behavior by observing tool calls, MCP activity, context assembly, and provenance. |
-| Deterministic measurements | #25 | Aug 28–Sep 4 | Add versioned latency, token, usage, completeness, and cost derivations without changing evidence. |
-| Graphify capture adapter | #26 | Sep 2–9 | Observe Graphify-assisted activity as an explicitly labeled experimental condition. |
-| Trace query/read API | #27 | Sep 7–11 | Expose stable trace summaries, events, evidence, and measurements to UI consumers. |
-| React trace explorer MVP | #28 | Sep 10–17 | Make captured data viewable through a trace list, detail view, timeline, events, and basic measurements. |
-| Graphify provenance and comparison UI | #29 | Sep 15–22 | Make Graphify activity visible and comparable with baseline or non-Graphify runs. |
+| Append-only evidence store | #22 | Aug 12–18 | Persist and retrieve canonical records without overwriting authoritative observations. [Spec 015 — Append-only evidence store](../specs/015-append-only-evidence-store.md) is **Accepted — not yet implemented** (accepted in documentation PR #21; append-only save/retrieve beside the legacy `TraceStorage`, authoritative identity, exact-text conflict resolution, a mandatory non-bypassable storage-safety gate with a closed deterministic `StorageSafetyCode` taxonomy (S1/S2/S3/S5/S6) and short-circuit retained-bytes rejection, the conservative `metadata-safe` reference persistence policy with field-level content classification aligned to the exact TypeScript shapes, unspoofable reference-policy identity with bounded policy-version metadata, hardened runtime-validated policy decisions, stored-versus-in-memory parity at the serializer snapshot, clock-independent idempotency classification, read integrity verified before any `unsupported-version` result, a dedicated WAL connection with contention contract, atomic initialization with rollback, and a namespaced storage-format ledger). Implementation anticipated in PR #22. |
+| Streaming ingress and trace assembly | #23 | Aug 17–21 | Assemble durable records from requests, response chunks, usage, errors, and lifecycle events. |
+| Pi provider-boundary capture | #24 | Aug 20–27 | Enable the first Pi smoke test, initially through stored evidence and JSON/report output. |
+| Pi agent, tool, and MCP instrumentation | #25 | Aug 25–Sep 1 | Make Pi testing representative of agent behavior by observing tool calls, MCP activity, context assembly, and provenance. |
+| Deterministic measurements | #26 | Aug 28–Sep 4 | Add versioned latency, token, usage, completeness, and cost derivations without changing evidence. |
+| Graphify capture adapter | #27 | Sep 2–9 | Observe Graphify-assisted activity as an explicitly labeled experimental condition. |
+| Trace query/read API | #28 | Sep 7–11 | Expose stable trace summaries, events, evidence, and measurements to UI consumers. |
+| React trace explorer MVP | #29 | Sep 10–17 | Make captured data viewable through a trace list, detail view, timeline, events, and basic measurements. |
+| Graphify provenance and comparison UI | #30 | Sep 15–22 | Make Graphify activity visible and comparable with baseline or non-Graphify runs. |
 
 ### Forecast capability milestones
 
 | Capability | First useful slice | Forecast availability |
 |---|---|---|
-| Basic Pi testing | Pi provider-boundary capture (anticipated #23) | Around August 27 |
-| Full Pi agent/tool testing | Pi agent, tool, and MCP instrumentation (anticipated #24) | Around September 1 |
-| Initial Graphify integration | Graphify capture adapter (anticipated #26) | Around September 9 |
-| Data viewable in React | React trace explorer MVP (anticipated #28) | Around September 17 |
-| Graphify data visible and comparable in React | Graphify provenance and comparison UI (anticipated #29) | Around September 22 |
+| Basic Pi testing | Pi provider-boundary capture (anticipated #24) | Around August 27 |
+| Full Pi agent/tool testing | Pi agent, tool, and MCP instrumentation (anticipated #25) | Around September 1 |
+| Initial Graphify integration | Graphify capture adapter (anticipated #27) | Around September 9 |
+| Data viewable in React | React trace explorer MVP (anticipated #29) | Around September 17 |
+| Graphify data visible and comparable in React | Graphify provenance and comparison UI (anticipated #30) | Around September 22 |
 
 “Possible” arrives in stages. The first Pi milestone proves that SignalGlass can observe a real model interaction; the following Pi slice adds agent-level activity. The Graphify adapter captures a separately labeled condition before the React explorer displays it. The final comparison slice connects Graphify provenance to the controlled-comparison experience.
 
@@ -54,22 +54,22 @@ After the ten near-term slices, the anticipated sequence continues as follows:
 
 | Slice | Anticipated PR | Forecast window | Planned result |
 |---|---:|---|---|
-| Secure export and explicit redaction workflow | #30 | Sep 21–29 | Complete the initial trace-explorer feature set with safe, reviewable exports. |
-| Experiment manifests and declared conditions | #31 | Sep 25–Oct 5 | Make baseline, MCP-assisted, and Graphify-assisted runs formally reproducible. |
-| Deterministic comparison engine | #32 | Oct 1–9 | Compare evidence-backed measurements without declaring unsupported winners. |
-| React comparison experience | #33 | Oct 7–15 | Make controlled experiments usable through the UI. |
-| Replay package and reproducibility metadata | #34 | Oct 13–21 | Reconstruct or reissue captured interactions with visible limitations and declared environments. |
-| Second provider adapter | #35 | Oct 19–28 | Demonstrate that the evidence model is provider-neutral. |
-| OpenTelemetry export and import | #36 | Oct 26–Nov 4 | Establish initial ecosystem portability. |
-| Retention, deletion records, and access boundaries | #37 | Nov 2–11 | Make the evidence privacy lifecycle explicit and testable. |
-| Local/self-hosted deployment packaging | #38 | Nov 9–18 | Provide a documented installation and upgrade path. |
-| Reliability, recovery, and incomplete-trace handling | #39 | Nov 16–25 | Harden interrupted streams, partial writes, retries, and corrupted inputs. |
-| Security and privacy review corrections | #40 | Nov 23–Dec 4 | Verify secret handling, redaction, exports, retention, and safe defaults. |
-| Performance and scale qualification | #41 | Dec 1–11 | Establish practical ingestion, trace-size, query, and UI-performance limits. |
-| Documentation, onboarding, and example experiments | #42 | Dec 8–18 | Provide a complete guided workflow from Pi capture to React inspection. |
-| 1.0 release-candidate preparation | #43 | Dec 14–18 | Enter feature freeze; only release-blocking corrections follow. |
-| Release-candidate corrections | #44 | Jan 5–15 | Address defects found during real Pi and Graphify trials. |
-| 1.0 release preparation | #45 | Jan 12–22 | Complete versioning, migrations, compatibility notes, final checks, and the 1.0 release. |
+| Secure export and explicit redaction workflow | #31 | Sep 21–29 | Complete the initial trace-explorer feature set with safe, reviewable exports. |
+| Experiment manifests and declared conditions | #32 | Sep 25–Oct 5 | Make baseline, MCP-assisted, and Graphify-assisted runs formally reproducible. |
+| Deterministic comparison engine | #33 | Oct 1–9 | Compare evidence-backed measurements without declaring unsupported winners. |
+| React comparison experience | #34 | Oct 7–15 | Make controlled experiments usable through the UI. |
+| Replay package and reproducibility metadata | #35 | Oct 13–21 | Reconstruct or reissue captured interactions with visible limitations and declared environments. |
+| Second provider adapter | #36 | Oct 19–28 | Demonstrate that the evidence model is provider-neutral. |
+| OpenTelemetry export and import | #37 | Oct 26–Nov 4 | Establish initial ecosystem portability. |
+| Retention, deletion records, and access boundaries | #38 | Nov 2–11 | Make the evidence privacy lifecycle explicit and testable. |
+| Local/self-hosted deployment packaging | #39 | Nov 9–18 | Provide a documented installation and upgrade path. |
+| Reliability, recovery, and incomplete-trace handling | #40 | Nov 16–25 | Harden interrupted streams, partial writes, retries, and corrupted inputs. |
+| Security and privacy review corrections | #41 | Nov 23–Dec 4 | Verify secret handling, redaction, exports, retention, and safe defaults. |
+| Performance and scale qualification | #42 | Dec 1–11 | Establish practical ingestion, trace-size, query, and UI-performance limits. |
+| Documentation, onboarding, and example experiments | #43 | Dec 8–18 | Provide a complete guided workflow from Pi capture to React inspection. |
+| 1.0 release-candidate preparation | #44 | Dec 14–18 | Enter feature freeze; only release-blocking corrections follow. |
+| Release-candidate corrections | #45 | Jan 5–15 | Address defects found during real Pi and Graphify trials. |
+| 1.0 release preparation | #46 | Jan 12–22 | Complete versioning, migrations, compatibility notes, final checks, and the 1.0 release. |
 
 The period from **December 19, 2026 through January 8, 2027** is reserved for real-world release-candidate testing and holiday schedule variability. It is not assigned a separate implementation PR.
 
