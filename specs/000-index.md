@@ -66,7 +66,7 @@ Infrastructure specifications ([001](001-workspace.md), [005](005-provider-adapt
 | [011](011-cli.md) | CLI | Implemented (analyze, ingress, traces) |
 | [012](012-versioning-and-releases.md) | Versioning and releases | Accepted — references legacy v0.x public surfaces |
 | [013](013-evidence-model.md) | Evidence model | **Accepted — canonical evidence contract** |
-| [014](014-evidence-primitives.md) | Evidence primitives | **Accepted — not fully Implemented**; additive TypeScript primitives and compatibility projections for the accepted evidence contract (Spec 013). Slice 1 foundation (`@signalglass/evidence`, dependency-free) implemented; Slice 2 deterministic fixtures and negative controls implemented; Slice 3 compatibility projections (`@signalglass/core/src/evidenceProjections/`) implemented; parity verification (Slice 4) and migration slices pending |
+| [014](014-evidence-primitives.md) | Evidence primitives | **Implemented (27/27)** — additive TypeScript primitives and compatibility projections for the accepted evidence contract (Spec 013). Slices 1–4 implemented: foundation (`@signalglass/evidence`, dependency-free), deterministic fixtures and negative controls, compatibility projections (`@signalglass/core/src/evidenceProjections/`), and projection parity and loss verification (paired-fixture parity gates, analyzer/report parity, loss-and-mapping matrix). Production capture/storage migration belongs to later specifications, not unfinished Spec 014 work |
 
 ## Project framing
 
@@ -81,13 +81,14 @@ The v0.x models behind these modes (`AgentRun`, `Trace`/`TraceEvent`) are
 targeted to be expressed as compatibility projections over the canonical
 evidence model defined by [Spec 013](013-evidence-model.md) (Accepted;
 implementation proceeds incrementally through Spec 014). [Spec 014 — Evidence primitives](014-evidence-primitives.md)
-(Accepted; implementation in progress) defines the first additive TypeScript
-implementation increment of that contract: canonical evidence primitives
-beside the existing runtime model, plus the compatibility projections;
-its dependency-free foundation package (`@signalglass/evidence`), the
-deterministic fixture slice, and the compatibility projections
-(`@signalglass/core/src/evidenceProjections/`) are implemented, and the
-projection parity verification and migration slices remain pending.
+(Implemented) defined the additive TypeScript implementation increment of
+that contract: canonical evidence primitives beside the existing runtime
+model, plus the compatibility projections; its dependency-free foundation
+package (`@signalglass/evidence`), the deterministic fixture slice, the
+compatibility projections (`@signalglass/core/src/evidenceProjections/`),
+and projection parity and loss verification are all implemented. Production
+migration of capture/storage pipelines onto canonical evidence belongs to
+later specifications.
 
 ## References
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/fallowrc.json",
-  "entry": ["scripts/validate-evidence-examples.mjs"],
+  "entry": ["scripts/validate-evidence-examples.mjs", "scripts/verify-projection-matrix.mjs"],
   "ignorePatterns": [".pi/**", ".signalglass/**"],
   "rules": {
     "unused-files": "error",

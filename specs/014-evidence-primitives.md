@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted — ready for implementation.
+**Implemented.** All 27 acceptance criteria are satisfied (27 of 27) and
+`pnpm test` and `pnpm build` pass. Production migration of collectors,
+adapters, ingress paths, persistence, and capture pipelines to emit
+canonical evidence belongs to **later specifications** (beyond this spec's
+§8 slices — Spec 014 has no slice 5), not to unfinished Spec 014 work; the
+only canonical-record construction in this spec's implementation is test
+construction.
 
 This specification defines the first additive TypeScript implementation
 increment of the accepted Spec 013 evidence contract. Acceptance authorizes
@@ -11,9 +17,7 @@ implementation of the slices defined in this specification.
 The **foundation slice** (Spec 014 §8.1) — the dependency-free
 [`@signalglass/evidence`](../packages/evidence/README.md) package of canonical
 types, runtime validators, parse/serialize, and deterministic normalization
-— is implemented and satisfies the acceptance criteria checked below (25 of
-27). The migration and parity slices remain pending, so the spec is not yet
-**Implemented**: criteria 1 and 10 remain unchecked.
+— is implemented.
 
 **Slice 2 (deterministic fixtures and negative controls, §8.2)** — the
 deterministic serialized fixtures for the nine normative examples in
@@ -31,10 +35,18 @@ an explicit composition of the first two — with `ProjectionReport` /
 and `@signalglass/core`'s workspace dependency on `@signalglass/evidence` —
 is implemented. Legacy modules are untouched except for an additive,
 backward-compatible injectable identifier generator on `traceToAgentRun`.
-This slice checks acceptance criteria 2, 3, 6, 7, and 15; criteria 1
-(primitive-to-Spec-013 mapping documentation) and 10 (slice-4 parity
-verification) remain unchecked, and Spec 013's §14 acceptance criteria stay
-unchecked.
+
+**Slice 4 (projection parity and loss verification, §8.4)** — paired
+canonical/legacy fixtures with the exact-equality projection gate,
+analyzer/report parity over the real public pipelines with a frozen clock,
+and the loss-and-mapping matrix
+([`docs/evidence-projection-matrix.md`](../docs/evidence-projection-matrix.md)
+with the executable claim table
+`packages/core/src/evidenceProjections/projectionMappingMatrix.ts`) — is
+implemented. This slice checks acceptance criteria 1 (primitive-to-Spec-013
+mapping documentation with executable verification) and 10 (slice-4 parity
+verification). Spec 013's §14 acceptance criteria stay unchecked: they belong
+to Spec 013's own implementation status, not Spec 014.
 
 ## Purpose
 
@@ -1720,6 +1732,11 @@ projection parity and loss verification — nothing more.
    and report tests against projected views; verify deterministic outputs;
    explicitly document projection loss and backfill mapping cases; confirm
    `scripts/validate-evidence-examples.mjs` self-tests still pass unchanged.
+   (Implemented — paired fixtures with an exact-equality projection gate,
+   analyzer/report parity over the real public pipelines with a frozen
+   clock, and the loss-and-mapping matrix
+   [`docs/evidence-projection-matrix.md`](../docs/evidence-projection-matrix.md)
+   with its executable claim table and conformance test.)
 5. **Later specifications** (not this spec): persistence and migration;
    collector/adapter ingress onto evidence; native byte capture; streaming
    capture; MCP/tool capture and instrumentation; Graphify provenance;
@@ -1729,11 +1746,12 @@ projection parity and loss verification — nothing more.
 **Scope boundary.** None of the slices converts collectors, adapters, ingress
 paths, provider requests or responses, persistence, or capture pipelines to
 emit canonical evidence; those conversions belong to later specifications
-(slice 5). The only canonical-record construction during Spec 014
-implementation is **test construction** — fixtures and projection-test inputs
-built in memory inside the package's and projection modules' test suites
-(slices 2 and 4) — explicitly not production ingress adoption. No runtime
-production caller constructs canonical evidence records in this increment.
+(§8 defines slices 8.1–8.4 only). The only canonical-record construction
+during Spec 014 implementation is **test construction** — fixtures and
+projection-test inputs built in memory inside the package's and projection
+modules' test suites (slices 2 and 4) — explicitly not production ingress
+adoption. No runtime production caller constructs canonical evidence records
+in this increment.
 
 Later concerns that require separate specifications include, explicitly:
 storage/migration (schema, indices, tombstones), collector/adapter ingress
@@ -1984,8 +2002,14 @@ first slice; every decision needed to implement it is specified above.
 
 ## 13. Acceptance criteria
 
-- [ ] Spec 014 maps each initial primitive to its Spec 013 definition
-  (§2.2), with no competing names for Spec 013 concepts.
+- [x] Spec 014 maps each initial primitive to its Spec 013 definition
+  (§2.2), with no competing names for Spec 013 concepts. The loss-and-mapping
+  matrix ([`docs/evidence-projection-matrix.md`](../docs/evidence-projection-matrix.md),
+  executable claim table `packages/core/src/evidenceProjections/projectionMappingMatrix.ts`)
+  covers every initial §2.2 primitive/value family, uses only the required
+  `exact`/`partial`/`inferred`/`unavailable` classifications, cites governing
+  Spec 013 sections, and is verified by the conformance test
+  `packages/core/src/evidenceProjections/projectionMappingMatrix.test.ts`.
 - [x] The package/module boundary is explicit: `packages/evidence`
   (`@signalglass/evidence`) with projections in `@signalglass/core`
   (`packages/core/src/evidenceProjections/`) (§1.1). Canonical evidence
@@ -2022,10 +2046,17 @@ first slice; every decision needed to implement it is specified above.
 - [x] Initial and deferred primitive inventories are distinguishable; the
   evidence core contains no measurements, interpretations, cost, smells,
   recommendations, or optimization logic (§2.2–§2.3).
-- [ ] Implementation slices are independently testable and mergeable, with
+- [x] Implementation slices are independently testable and mergeable, with
   no flag-day migration and no storage, capture, collector, adapter, or
   ingress migration in any slice; Spec 014 implementation ends at the
   package, validators/fixtures, projections, and parity verification (§8).
+  Slice 4 (projection parity and loss verification) is complete: paired
+  projection gates pass, the analyzer and all three report paths establish
+  exact parity for the supported paired cases, all non-parity is accurately
+  declared loss, no unresolved projection defect remains, determinism,
+  immutability, and non-fabrication tests pass, full validation succeeds,
+  and the complete branch diff contains no migration or excluded work
+  (`packages/reports/src/projectionParity.test.ts`).
 - [x] Evidence remains separate from measurements and interpretations
   (§2.1); derived and administrative records never merge into payload
   status.
@@ -2034,12 +2065,12 @@ first slice; every decision needed to implement it is specified above.
   this spec's scope or planned slices; provider-neutral MCP/tool record
   kinds are type-system vocabulary only (§2.2, §8).
 - [x] Documentation and index references are consistent: the spec index
-  lists Spec 014 as Accepted (not fully Implemented); the roadmap,
-  glossary, and package README distinguish the implemented evidence
-  foundation, deterministic-fixture, and compatibility-projection slices
-  from the pending projection-parity verification and migration work, and
-  no documentation claims Spec 014 is fully Implemented or describes the
-  compatibility projections as pending.
+  lists Spec 014 as Implemented (27/27); the roadmap, glossary, and package
+  README describe the implemented evidence foundation, deterministic-
+  fixture, compatibility-projection, and projection-parity slices and
+  attribute production migration to later specifications — no documentation
+  describes the compatibility projections or parity verification as
+  pending, and none claims Spec 013 is implemented.
 - [x] The retained-byte serialization contract is pinned: RFC 4648 §4
   standard-alphabet Base64 with the canonical padding (zero, one, or two
   `=` characters exactly as the encoded length requires), canonical
