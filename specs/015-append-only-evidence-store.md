@@ -2,15 +2,16 @@
 
 ## Status
 
-**Draft (revision 6).** Proposed for architectural review; not Accepted and
-not to be implemented until accepted. Revision 6 redesigns the safety-code
-taxonomy so every code is reachable and non-overlapping, resolves the
-Phase-A/Phase-B execution contract, corrects the TypeScript-shape claims
+**Accepted (revision 6).** Architectural review is complete and the
+technical contract is approved. Implementation has not begun and is not
+included in this documentation-only acceptance PR. Revision 6 redesigns the
+safety-code taxonomy so every code is reachable and non-overlapping, resolves
+the Phase-A/Phase-B execution contract, corrects the TypeScript-shape claims
 against the actual source, hardens runtime policy-decision validation with
 an exact own-key contract, bounds policy-version metadata and validates it
-on read, and decides the connection/journaling strategy. Writing corrections
-does not mark the spec Accepted. This specification is documentation-only;
-the PR that introduces it MUST NOT contain production code changes.
+on read, and decides the connection/journaling strategy. This specification
+is documentation-only in its acceptance PR; the PR that introduces it MUST
+NOT contain production code changes.
 
 ## Purpose
 
@@ -2214,10 +2215,10 @@ consistently with this spec:
   declared content, `StorageSafetyCode` entries.
 - `docs/roadmap.md` and `specs/000-index.md` — status and slice registration.
 
-This Draft PR updates only: `specs/015-append-only-evidence-store.md` (this
-spec), `specs/000-index.md` (register Spec 015 as Draft), and
-`docs/roadmap.md` (near-term entries). Completed Spec 014 history is not
-rewritten.
+This acceptance update changes only: `specs/015-append-only-evidence-store.md`
+(this spec, now Accepted), `specs/000-index.md` (records Spec 015 as Accepted
+and not yet implemented), and `docs/roadmap.md` (near-term entries). Completed
+Spec 014 history is not rewritten.
 
 ## References
 
