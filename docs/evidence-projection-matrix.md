@@ -14,9 +14,13 @@ conformance test
 `packages/core/src/evidenceProjections/projectionMappingMatrix.test.ts`
 pins the claim IDs and **enforces every runtime claim against an actual
 projection report over a real fixture** (the check fails when the expected
-report entry is absent). The two must stay exactly aligned: the table below
-mirrors the executable table claim for claim, classification for
-classification, reason for reason.
+report entry is absent, when the matrix classification disagrees with the
+runtime outcome, or when a declared reason fragment is missing from either
+the documented reason or the report mapping's reason). The two must stay
+exactly aligned: the table below mirrors the executable table claim for
+claim, classification for classification, reason for reason, and the
+conformance test pins that mirror (claim IDs, order, classifications, and
+reasons) against this document directly.
 
 **Classification vocabulary** (Spec 014 §6.2) — every mapping is exactly one of:
 
@@ -47,7 +51,14 @@ any such observation as a failure, and none is currently known.
   **Every supplied constraint is asserted
   together** — a passing `viewAbsence`/`reportField` check never
   substitutes for an absent mapping entry. A claim can no longer cite a check
-  it does not perform.
+  it does not perform. Two binding invariants close the conformance loop:
+  every mapping-search claim must classify its runtime outcome exactly
+  (`runtime.outcome === classification` — a mismatch fails even when the
+  report contains the runtime outcome), and every non-exact mapping-search
+  claim must carry a non-empty `reasonIncludes` fragment that occurs in
+  **both** the claim's documented `reason` and the actual matching report
+  mapping's reason (constraining the real rationale, never a generic word
+  such as “legacy” or “unavailable”).
 - `gateVerified` — the exact paired-view equality gate
   (`packages/reports/src/projectionParity.test.ts`) proves value-level
   preservation; classification is `exact`. The matrix test also asserts the
@@ -98,7 +109,7 @@ The matrix below uses claim IDs `E2L-###` (evidence-to-legacy).
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-014 | (omitted) | unavailable | legacy `TraceEventType` has no span-lifecycle type; `span_start`/`span_end` control events are omitted rather than mis-mapped to a content-bearing legacy kind | `evidenceToLegacyTrace.test.ts` "projects every canonical event kind…"; matrix runtime check (`kind "span_start"`, minimal fixture) |
+| E2L-014 | (omitted) | unavailable | the canonical kind "span_start" has no legacy TraceEventType; span_start/span_end control events are omitted rather than mis-mapped to a content-bearing legacy kind | `evidenceToLegacyTrace.test.ts` "projects every canonical event kind…"; matrix runtime check (`kind "span_start"`, minimal fixture) |
 | E2L-015 | (no legacy span status) | unavailable | legacy has no span records, so span lifecycle status, `endSeq`, and `finishedAt` semantics have no target to express | matrix runtime check (`trace.spans` with `status` in the reason, enriched fixture) |
 | E2L-016 | (no legacy duration field) | unavailable | legacy TraceEvent has no durationMs field and no clock-basis contract; span durationMs is not projected | `evidenceToLegacyTrace.test.ts` "reports conditions and span loss only when those fields are present"; matrix runtime check (`trace.spans[0].durationMs`, enriched fixture) |
 
@@ -124,26 +135,26 @@ for every kind row.
 
 | Claim | Kind | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|---|
-| E2L-024 | `interaction_start` | (omitted) | unavailable | legacy has no lifecycle control event type; mapping to a content-bearing legacy kind would be semantically wrong | `evidenceToLegacyTrace.test.ts` all-kinds test; matrix runtime check (lifecycle-only fixture) |
-| E2L-025 | `interaction_end` | (omitted) | unavailable | legacy has no lifecycle control event type | all-kinds test; matrix runtime check |
-| E2L-026 | `span_start` | (omitted) | unavailable | legacy has no span-lifecycle event type | all-kinds test; matrix runtime check |
-| E2L-027 | `span_end` | (omitted) | unavailable | legacy has no span-lifecycle event type | all-kinds test; matrix runtime check |
-| E2L-028 | `model_request` | `provider_request` | partial | canonical model_request maps to the legacy provider_request control event; the request envelope, messages, and provider-native content are never inlined into legacy excerpts | "projects a minimal completed record…"; sentinel tests; matrix runtime check |
-| E2L-029 | `model_response` | `provider_response` | partial | canonical model_response maps to the legacy provider_response control event; provider-native response content is not projected | all-kinds test; sentinel tests; matrix runtime check |
+| E2L-024 | `interaction_start` | (omitted) | unavailable | the canonical kind "interaction_start" has no legacy lifecycle control event type; mapping to a content-bearing legacy kind would be semantically wrong | `evidenceToLegacyTrace.test.ts` all-kinds test; matrix runtime check (lifecycle-only fixture) |
+| E2L-025 | `interaction_end` | (omitted) | unavailable | the canonical kind "interaction_end" has no legacy lifecycle control event type | all-kinds test; matrix runtime check |
+| E2L-026 | `span_start` | (omitted) | unavailable | the canonical kind "span_start" has no legacy span-lifecycle event type | all-kinds test; matrix runtime check |
+| E2L-027 | `span_end` | (omitted) | unavailable | the canonical kind "span_end" has no legacy span-lifecycle event type | all-kinds test; matrix runtime check |
+| E2L-028 | `model_request` | `provider_request` | partial | kind "model_request": canonical model_request maps to the legacy provider_request control event; the request envelope, messages, and provider-native content are never inlined into legacy excerpts | "projects a minimal completed record…"; sentinel tests; matrix runtime check |
+| E2L-029 | `model_response` | `provider_response` | partial | kind "model_response": canonical model_response maps to the legacy provider_response control event; provider-native response content is not projected | all-kinds test; sentinel tests; matrix runtime check |
 | E2L-030 | `model_response_chunk` | `provider_response` (one per chunk) | partial | legacy has no chunk type; every canonical chunk becomes its own provider_response event in seq order (no aggregation) and the chunk kind/index semantics are lost | "emits one legacy provider_response per canonical chunk (no aggregation)"; `projectionParity.test.ts` streaming-chunks block; matrix runtime check (chunks fixture) |
-| E2L-031 | `model_usage` | `inference` | partial | canonical model_usage maps to the legacy inference event type, but numeric token accounting is unavailable until the measurement layer exists (Spec 014 §6.3) | `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)" |
-| E2L-032 | `tool_call` | `tool_call` | partial | canonical tool_call maps to the legacy tool_call type; tool arguments are not inlined into a legacy excerpt (no safe excerpt is synthesized) | all-kinds test; matrix runtime check |
-| E2L-033 | `tool_result` | `tool_result` | partial | canonical tool_result maps to the legacy tool_result type; tool output is not inlined into a legacy excerpt | all-kinds test; matrix runtime check |
-| E2L-034 | `mcp_request` | (omitted) | unavailable | legacy has no MCP concept; mapping to `tool_call` would conflate the MCP protocol boundary | all-kinds test; matrix runtime check |
-| E2L-035 | `mcp_result` | (omitted) | unavailable | legacy has no MCP concept | all-kinds test; matrix runtime check |
-| E2L-036 | `retrieval_request` | (omitted) | unavailable | legacy has no retrieval concept | all-kinds test; matrix runtime check |
-| E2L-037 | `retrieval_result` | (omitted) | unavailable | legacy has no retrieval concept | all-kinds test; matrix runtime check |
-| E2L-038 | `context_provider_request` | (omitted) | unavailable | legacy has no context-provider protocol concept | all-kinds test; matrix runtime check |
-| E2L-039 | `context_provider_result` | (omitted) | unavailable | legacy has no context-provider protocol concept | all-kinds test; matrix runtime check |
-| E2L-040 | `context_assembled` | `context` | partial | canonical context_assembled maps to the legacy context event; artifact references and assembled content are not inlined | all-kinds test; matrix runtime check |
-| E2L-041 | `error` | `provider_error` | partial | canonical error maps to the single legacy provider_error type; the canonical actor, lifecycleTarget, and lifecycleEffect vocabulary is not representable | all-kinds test; matrix runtime check; the per-field error losses are the separate rows E2L-084..E2L-087 |
-| E2L-042 | `cancelled` | (omitted) | unavailable | legacy has no cancellation type | all-kinds test; matrix runtime check |
-| E2L-043 | `retry` | (omitted) | unavailable | legacy has no retry type | all-kinds test; matrix runtime check |
+| E2L-031 | `model_usage` | `inference` | partial | kind "model_usage": canonical model_usage maps to the legacy inference event type, but numeric token accounting is unavailable until the measurement layer exists (Spec 014 §6.3) | `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)" |
+| E2L-032 | `tool_call` | `tool_call` | partial | kind "tool_call": canonical tool_call maps to the legacy tool_call type; tool arguments are not inlined into a legacy excerpt (no safe excerpt is synthesized) | all-kinds test; matrix runtime check |
+| E2L-033 | `tool_result` | `tool_result` | partial | kind "tool_result": canonical tool_result maps to the legacy tool_result type; tool output is not inlined into a legacy excerpt | all-kinds test; matrix runtime check |
+| E2L-034 | `mcp_request` | (omitted) | unavailable | the canonical kind "mcp_request" has no legacy MCP concept; mapping to tool_call would conflate the MCP protocol boundary | all-kinds test; matrix runtime check |
+| E2L-035 | `mcp_result` | (omitted) | unavailable | the canonical kind "mcp_result" has no legacy MCP concept | all-kinds test; matrix runtime check |
+| E2L-036 | `retrieval_request` | (omitted) | unavailable | the canonical kind "retrieval_request" has no legacy retrieval concept | all-kinds test; matrix runtime check |
+| E2L-037 | `retrieval_result` | (omitted) | unavailable | the canonical kind "retrieval_result" has no legacy retrieval concept | all-kinds test; matrix runtime check |
+| E2L-038 | `context_provider_request` | (omitted) | unavailable | the canonical kind "context_provider_request" has no legacy context-provider protocol concept | all-kinds test; matrix runtime check |
+| E2L-039 | `context_provider_result` | (omitted) | unavailable | the canonical kind "context_provider_result" has no legacy context-provider protocol concept | all-kinds test; matrix runtime check |
+| E2L-040 | `context_assembled` | `context` | partial | kind "context_assembled": canonical context_assembled maps to the legacy context event; artifact references and assembled content are not inlined | all-kinds test; matrix runtime check |
+| E2L-041 | `error` | `provider_error` | partial | kind "error": canonical error maps to the single legacy provider_error type; the canonical actor, lifecycleTarget, and lifecycleEffect vocabulary is not representable | all-kinds test; matrix runtime check; the per-field error losses are the separate rows E2L-084..E2L-087 |
+| E2L-042 | `cancelled` | (omitted) | unavailable | the canonical kind "cancelled" has no legacy cancellation type | all-kinds test; matrix runtime check |
+| E2L-043 | `retry` | (omitted) | unavailable | the canonical kind "retry" has no legacy retry type | all-kinds test; matrix runtime check |
 
 ## RequestEnvelope (Spec 014 §2.2.4; Spec 013 §3.2)
 
@@ -157,7 +168,7 @@ for every kind row.
 
 | Claim | Legacy target | Classification | Reason | Verified by |
 |---|---|---|---|---|
-| E2L-047 | (no legacy excerpt) | unavailable | the canonical response `finishReason` is not representable in the legacy vocabulary and is never projected into a legacy excerpt; provider-native response content is the separate row E2L-072 | field-loss suite; sentinel assertions; `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material"; matrix runtime check (`events[4].responseEnvelope.finishReason` unavailable, enriched fixture, with the response-body sentinel additionally asserted absent from the view) |
+| E2L-047 | (no legacy excerpt) | unavailable | the canonical response finishReason (no legacy finish-reason field) is not representable in the legacy vocabulary and is never projected into a legacy excerpt; provider-native response content is the separate row E2L-072 | field-loss suite; sentinel assertions; `evidenceToAgentRun.test.ts` "does not leak provider-native bodies or authorization material"; matrix runtime check (`events[4].responseEnvelope.finishReason` unavailable, enriched fixture, with the response-body sentinel additionally asserted absent from the view) |
 | E2L-048 | `AgentRun`/`Turn` token fields | unavailable | the canonical `responseEnvelope.usage` record (with per-field evidence status) has no legacy field; it is not projected and token values are never invented from character counts (Spec 014 §6.3) — verified against the actual `responseEnvelope.usage` field, not the separate `model_usage` event | field-loss suite; `evidenceToAgentRun.test.ts` "leaves token fields unavailable (no invented token counts)"; matrix runtime check (`events[4].responseEnvelope.usage` unavailable, enriched fixture) |
 
 ## ContextArtifact (Spec 014 §2.2.6; Spec 013 §6.1)
@@ -298,11 +309,15 @@ agent-run parity blocks.
   claim modes (exactly one of `runtime`/`gateVerified`/`conceptual`),
   enforces event-kind exclusivity, **executes every runtime claim against an
   actual projection report over a real fixture** (mapping path + stage +
-  outcome + constrained reason; `reportField` equality; `viewAbsence`
-  guarantees), enforces gate-verified identity claims at the value level,
-  and verifies the composed `evidenceToAgentRun` report (both stages in
-  stage order, first-stage mappings survive unchanged, `sourceSchemaVersion`
-  stays canonical).
+  outcome + constrained reason, with the classification-to-outcome and
+  documented-reason/report-reason bindings enforced conjunctively;
+  `reportField` equality; `viewAbsence` guarantees), enforces gate-verified
+  identity claims at the value level, and verifies the composed
+  `evidenceToAgentRun` report (both stages in stage order, first-stage
+  mappings survive unchanged, `sourceSchemaVersion` stays canonical).
+  `scripts/verify-projection-matrix.mjs` pins the documentation mirror
+  (claim IDs, order, classifications, and reasons) against
+  `docs/evidence-projection-matrix.md`.
 - `packages/reports/src/projectionParity.test.ts` — paired-fixture gates,
   AgentRun parity, analyzer parity (frozen clock), exact terminal/JSON/HTML
   parity, declared-loss verification, determinism, immutability, and sentinel

@@ -5,18 +5,26 @@
  * every claim carries a stable ID and valid classification, that the
  * canonical event-kind coverage is exclusive over the mapping tables, and
  * that every presentable-info claim is enforced against a real projection
- * report over a real fixture (path, stage, outcome, and constrained reason
- * must all match — the check fails when the expected report entry is absent).
+ * report over a real fixture. Every mapping-search claim must classify its
+ * runtime outcome exactly (`runtime.outcome === classification`) and every
+ * non-exact mapping-search claim must constrain its rationale with a
+ * non-empty `reasonIncludes` fragment that occurs BOTH in the claim's
+ * documented `reason` AND in the actual matching report mapping's reason —
+ * the check fails when the expected report entry is absent or when either
+ * binding is violated.
  *
  * Claim verification modes (exactly one per claim):
  * - `runtime` — the conformance test runs the named projection over the
  *   named fixture and asserts the actual report entry (path + stage +
  *   outcome, plus a constrained `reasonIncludes` fragment where given), a
  *   `reportField` equality, and/or a `viewAbsence` guarantee (serialized
- *   view contains none of the markers). EVERY supplied constraint is
- *   asserted together — `viewAbsence`/`reportField` are additional
- *   assertions, never a substitute for a mapping check. The check fails
- *   when the expected entry is absent.
+ *   view contains none of the markers). The matrix classification must
+ *   equal the runtime outcome, and for every non-exact mapping-search
+ *   claim the declared `reasonIncludes` fragment must occur in the claim's
+ *   documented `reason` as well as in the actual report mapping's reason.
+ *   EVERY supplied constraint is asserted together — `viewAbsence`/
+ *   `reportField` are additional assertions, never a substitute for a
+ *   mapping check. The check fails when the expected entry is absent.
  * - `gateVerified` — the exact paired-view equality gate
  *   (`packages/reports/src/projectionParity.test.ts`) proves value-level
  *   preservation; classification must be `exact`.
@@ -71,6 +79,10 @@ export type MatrixProjectionStage =
  * must contain none of the `viewAbsence` markers when given. The check
  * fails when the expected entry is absent; `viewAbsence`/`reportField` are
  * additional assertions and never a substitute for a mapping check.
+ * Binding invariants: `outcome` must equal the claim's `classification` for
+ * every mapping-search claim, and every non-exact mapping-search claim
+ * must carry a non-empty `reasonIncludes` fragment that appears in the
+ * claim's documented `reason` as well as in the matched mapping's reason.
  */
 export type MatrixRuntimeCheck = {
   fixture: MatrixFixtureName;
@@ -84,7 +96,11 @@ export type MatrixRuntimeCheck = {
   /** Exact mapping path (or `reasonIncludes` for kind rows with dynamic paths). */
   path?: string;
   outcome?: ProjectionOutcome;
-  /** Constrained reason fragment the mapping reason must include. */
+  /**
+   * Constrained reason fragment the mapping reason must include AND that
+   * must also occur in the claim's documented `reason` (required for every
+   * non-exact mapping-search claim; see the gate invariants in the test).
+   */
   reasonIncludes?: string;
   /** Restrict the search to one stage's mappings. */
   stage?: MatrixProjectionStage;
@@ -159,7 +175,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'legacy StorageMode is not carried by canonical evidence; the projected view defaults to mode "standard" with its default capture policy, and the canonical captureProfile name/version is not representable',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports exact, partial, inferred, and unavailable mappings" (trace.captureProfile partial)',
-    runtime: { fixture: 'minimal', path: 'trace.captureProfile', outcome: 'partial' },
+    runtime: { fixture: 'minimal', path: 'trace.captureProfile', outcome: 'partial', reasonIncludes: 'StorageMode' },
   },
   {
     id: 'E2L-005',
@@ -169,7 +185,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy Trace has no capture-surface field; the declared capture surface is not projected',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports completeness, capture surface, observation boundary, and evidenceStatus loss"',
-    runtime: { fixture: 'minimal', path: 'trace.captureSurface', outcome: 'unavailable' },
+    runtime: { fixture: 'minimal', path: 'trace.captureSurface', outcome: 'unavailable', reasonIncludes: 'capture-surface field' },
   },
   {
     id: 'E2L-006',
@@ -179,7 +195,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy Trace has no observation-boundary field; the declared observation boundary is not projected (reported separately from the capture surface)',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports completeness, capture surface, observation boundary, and evidenceStatus loss"',
-    runtime: { fixture: 'minimal', path: 'trace.observationBoundary', outcome: 'unavailable' },
+    runtime: { fixture: 'minimal', path: 'trace.observationBoundary', outcome: 'unavailable', reasonIncludes: 'observation-boundary field' },
   },
   {
     id: 'E2L-007',
@@ -209,7 +225,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'canonical trace has no observed terminal time (status "unknown"); legacy endedAt is omitted and the unobserved termination is never fabricated',
     verifiedBy: 'paired projection gate (lifecycle-only fixture); projectionMappingMatrix.test.ts runtime check',
-    runtime: { fixture: 'lifecycle-only', path: 'trace.finishedAt', outcome: 'unavailable' },
+    runtime: { fixture: 'lifecycle-only', path: 'trace.finishedAt', outcome: 'unavailable', reasonIncludes: 'observed terminal time' },
   },
   {
     id: 'E2L-010',
@@ -219,7 +235,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'the canonical four-state status vocabulary (completed/failed/cancelled/unknown) is approximated by the three-value legacy set (success/error/started): completed→success, failed→error, cancelled→error (no legacy cancellation status), unknown→started (termination unobserved)',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports legacy status vocabulary loss as partial"',
-    runtime: { fixture: 'minimal', path: 'trace.status', outcome: 'partial' },
+    runtime: { fixture: 'minimal', path: 'trace.status', outcome: 'partial', reasonIncludes: 'completed' },
   },
   {
     id: 'E2L-011',
@@ -229,7 +245,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy Trace has no conditions field; canonical experimental/environmental conditions are not projected (mapping emitted only when conditions are present)',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports conditions and span loss only when those fields are present"; projectionMappingMatrix.test.ts runtime check',
-    runtime: { fixture: 'enriched', path: 'trace.conditions', outcome: 'unavailable' },
+    runtime: { fixture: 'enriched', path: 'trace.conditions', outcome: 'unavailable', reasonIncludes: 'experimental/environmental conditions' },
   },
   {
     id: 'E2L-012',
@@ -239,7 +255,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy Trace has no span records; span hierarchy, kind, name, lifecycle status, seq ordering, and timing are not projected',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports conditions and span loss only when those fields are present"; projectionMappingMatrix.test.ts runtime check',
-    runtime: { fixture: 'minimal', path: 'trace.spans', outcome: 'unavailable' },
+    runtime: { fixture: 'minimal', path: 'trace.spans', outcome: 'unavailable', reasonIncludes: 'span records' },
   },
   {
     id: 'E2L-013',
@@ -260,7 +276,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§1.3 spans versus events',
     legacyTarget: '(no legacy span records; span_start/span_end events omitted)',
     classification: 'unavailable',
-    reason: 'legacy TraceEventType has no span-lifecycle type; span_start/span_end control events are omitted rather than mis-mapped to a content-bearing legacy kind',
+    reason: 'the canonical kind "span_start" has no legacy TraceEventType; span_start/span_end control events are omitted rather than mis-mapped to a content-bearing legacy kind',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "projects every canonical event kind to its legacy type or omits it with an unavailable mapping"',
     runtime: {
       fixture: 'minimal',
@@ -276,7 +292,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy has no span records, so span lifecycle status, endSeq, and finishedAt semantics have no target to express',
     verifiedBy: 'projectionMappingMatrix.test.ts runtime check over the enriched fixture',
-    runtime: { fixture: 'enriched', path: 'trace.spans', outcome: 'unavailable', reasonIncludes: 'status' },
+    runtime: { fixture: 'enriched', path: 'trace.spans', outcome: 'unavailable', reasonIncludes: 'lifecycle status' },
   },
   {
     id: 'E2L-016',
@@ -286,7 +302,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy TraceEvent has no durationMs field and no clock-basis contract; span durationMs is not projected',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports conditions and span loss only when those fields are present"; projectionMappingMatrix.test.ts runtime check',
-    runtime: { fixture: 'enriched', path: 'trace.spans[0].durationMs', outcome: 'unavailable' },
+    runtime: { fixture: 'enriched', path: 'trace.spans[0].durationMs', outcome: 'unavailable', reasonIncludes: 'clock-basis contract' },
   },
 
   // ---- EventRecord common fields (Spec 014 §2.2.3; Spec 013 §3.1) ----
@@ -318,7 +334,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'legacy Trace has no seq field; canonical seq ordering is preserved by event order (including ties resolved by seq over equal timestamps), but the seq value itself is not representable',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "preserves seq ordering over equal timestamps" and "reports the canonical seq ordering restriction as partial loss"',
-    runtime: { fixture: 'minimal', path: 'trace.events[].seq', outcome: 'partial' },
+    runtime: { fixture: 'minimal', path: 'trace.events[].seq', outcome: 'partial', reasonIncludes: 'seq value' },
   },
   {
     id: 'E2L-020',
@@ -338,7 +354,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy TraceEvent has no evidenceStatus field; redacted/truncated/missing/unknown evidence is never turned into content',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports completeness, capture surface, observation boundary, and evidenceStatus loss"',
-    runtime: { fixture: 'minimal', path: 'trace.events[].evidenceStatus', outcome: 'unavailable' },
+    runtime: { fixture: 'minimal', path: 'trace.events[].evidenceStatus', outcome: 'unavailable', reasonIncludes: 'evidenceStatus field' },
   },
   {
     id: 'E2L-022',
@@ -348,7 +364,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'ContentPhase is the documented approximation of observation roles; every conversion is partial, and role "unobservable" has no phase approximation (reported unavailable, E2L-055)',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "approximates observation roles with ContentPhase and reports partial"',
-    runtime: { fixture: 'minimal', path: 'trace.events[].observationRole', outcome: 'partial' },
+    runtime: { fixture: 'minimal', path: 'trace.events[].observationRole', outcome: 'partial', reasonIncludes: 'ContentPhase' },
   },
   {
     id: 'E2L-023',
@@ -369,7 +385,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 lifecycle control events',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no lifecycle control event type; mapping to a content-bearing legacy kind would be semantically wrong',
+    reason: 'the canonical kind "interaction_start" has no legacy lifecycle control event type; mapping to a content-bearing legacy kind would be semantically wrong',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "projects every canonical event kind to its legacy type or omits it with an unavailable mapping"',
     runtime: {
       fixture: 'lifecycle-only',
@@ -383,7 +399,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 lifecycle control events',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no lifecycle control event type',
+    reason: 'the canonical kind "interaction_end" has no legacy lifecycle control event type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -397,7 +413,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 lifecycle control events',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no span-lifecycle event type',
+    reason: 'the canonical kind "span_start" has no legacy span-lifecycle event type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -411,7 +427,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 lifecycle control events',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no span-lifecycle event type',
+    reason: 'the canonical kind "span_end" has no legacy span-lifecycle event type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -425,7 +441,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1; §11.2 legacy conversion',
     legacyTarget: 'TraceEvent provider_request',
     classification: 'partial',
-    reason: 'canonical model_request maps to the legacy provider_request control event; the request envelope, messages, and provider-native content are never inlined into legacy excerpts',
+    reason: 'kind "model_request": canonical model_request maps to the legacy provider_request control event; the request envelope, messages, and provider-native content are never inlined into legacy excerpts',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "projects a minimal completed record into a valid legacy Trace"; sentinel non-leakage tests',
     runtime: {
       fixture: 'all-kinds',
@@ -439,7 +455,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1; §11.2',
     legacyTarget: 'TraceEvent provider_response',
     classification: 'partial',
-    reason: 'canonical model_response maps to the legacy provider_response control event; provider-native response content is not projected',
+    reason: 'kind "model_response": canonical model_response maps to the legacy provider_response control event; provider-native response content is not projected',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test; sentinel non-leakage tests',
     runtime: {
       fixture: 'all-kinds',
@@ -457,7 +473,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "emits one legacy provider_response per canonical chunk (no aggregation)"; projectionParity.test.ts — "streaming response chunks"',
     runtime: {
       fixture: 'chunks',
-      reasonIncludes: 'chunk',
+      reasonIncludes: 'chunk type',
       outcome: 'partial',
     },
   },
@@ -467,7 +483,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§7 measurement records (usage is provider-reported, token accounting is a later measurement)',
     legacyTarget: 'TraceEvent inference',
     classification: 'partial',
-    reason: 'canonical model_usage maps to the legacy inference event type, but numeric token accounting is unavailable until the measurement layer exists (Spec 014 §6.3)',
+    reason: 'kind "model_usage": canonical model_usage maps to the legacy inference event type, but numeric token accounting is unavailable until the measurement layer exists (Spec 014 §6.3)',
     verifiedBy: 'evidenceToAgentRun.test.ts — "leaves token fields unavailable (no invented token counts)"',
     runtime: {
       fixture: 'all-kinds',
@@ -481,7 +497,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 tool activity',
     legacyTarget: 'TraceEvent tool_call',
     classification: 'partial',
-    reason: 'canonical tool_call maps to the legacy tool_call type; tool arguments are not inlined into a legacy excerpt (no safe excerpt is synthesized)',
+    reason: 'kind "tool_call": canonical tool_call maps to the legacy tool_call type; tool arguments are not inlined into a legacy excerpt (no safe excerpt is synthesized)',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -495,7 +511,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 tool activity',
     legacyTarget: 'TraceEvent tool_result',
     classification: 'partial',
-    reason: 'canonical tool_result maps to the legacy tool_result type; tool output is not inlined into a legacy excerpt',
+    reason: 'kind "tool_result": canonical tool_result maps to the legacy tool_result type; tool output is not inlined into a legacy excerpt',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -509,7 +525,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 MCP activity (type-system vocabulary only in this increment)',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no MCP concept; mapping to tool_call would conflate the MCP protocol boundary',
+    reason: 'the canonical kind "mcp_request" has no legacy MCP concept; mapping to tool_call would conflate the MCP protocol boundary',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -523,7 +539,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 MCP activity',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no MCP concept',
+    reason: 'the canonical kind "mcp_result" has no legacy MCP concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -537,7 +553,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 retrieval activity',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no retrieval concept',
+    reason: 'the canonical kind "retrieval_request" has no legacy retrieval concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -551,7 +567,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 retrieval activity',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no retrieval concept',
+    reason: 'the canonical kind "retrieval_result" has no legacy retrieval concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -565,7 +581,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 context-provider activity',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no context-provider protocol concept',
+    reason: 'the canonical kind "context_provider_request" has no legacy context-provider protocol concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -579,7 +595,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 context-provider activity',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no context-provider protocol concept',
+    reason: 'the canonical kind "context_provider_result" has no legacy context-provider protocol concept',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -593,7 +609,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.1 context assembly; §6 provenance',
     legacyTarget: 'TraceEvent context',
     classification: 'partial',
-    reason: 'canonical context_assembled maps to the legacy context event; artifact references and assembled content are not inlined',
+    reason: 'kind "context_assembled": canonical context_assembled maps to the legacy context event; artifact references and assembled content are not inlined',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -607,7 +623,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.3 errors, cancellation, retries',
     legacyTarget: 'TraceEvent provider_error',
     classification: 'partial',
-    reason: 'canonical error maps to the single legacy provider_error type; the canonical actor, lifecycleTarget, and lifecycleEffect vocabulary is not representable',
+    reason: 'kind "error": canonical error maps to the single legacy provider_error type; the canonical actor, lifecycleTarget, and lifecycleEffect vocabulary is not representable',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test; the per-field error losses are the separate rows E2L-084..E2L-087',
     runtime: {
       fixture: 'all-kinds',
@@ -621,7 +637,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.3 errors, cancellation, retries',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no cancellation type',
+    reason: 'the canonical kind "cancelled" has no legacy cancellation type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -635,7 +651,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.3 errors, cancellation, retries',
     legacyTarget: '(omitted)',
     classification: 'unavailable',
-    reason: 'legacy has no retry type',
+    reason: 'the canonical kind "retry" has no legacy retry type',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — all-kinds projection test',
     runtime: {
       fixture: 'all-kinds',
@@ -653,7 +669,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'inferred',
     reason: 'legacy trace-level provider/model are derived from the first canonical model_request envelope in seq order; reported inferred and never presented as canonical evidence',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "projects a minimal completed record into a valid legacy Trace" (provider/model); projectionParity.test.ts analyzer-parity block',
-    runtime: { fixture: 'minimal', path: 'trace.events[].requestEnvelope', outcome: 'inferred' },
+    runtime: { fixture: 'minimal', path: 'trace.events[].requestEnvelope', outcome: 'inferred', reasonIncludes: 'first canonical model_request envelope' },
   },
   {
     id: 'E2L-045',
@@ -667,6 +683,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[2].requestEnvelope.messages',
       outcome: 'unavailable',
+      reasonIncludes: 'normalized request messages',
       viewAbsence: ['enriched-native-request-body'],
     },
   },
@@ -682,6 +699,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[2].requestEnvelope.nativeContentHash',
       outcome: 'unavailable',
+      reasonIncludes: 'content-hash',
     },
   },
 
@@ -692,12 +710,13 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     spec013: '§3.2 responses including stream chunks and final usage',
     legacyTarget: '(no legacy excerpt)',
     classification: 'unavailable',
-    reason: 'the canonical response finishReason is not representable in the legacy vocabulary and is never projected into a legacy excerpt; provider-native response content is the separate row E2L-072',
+    reason: 'the canonical response finishReason (no legacy finish-reason field) is not representable in the legacy vocabulary and is never projected into a legacy excerpt; provider-native response content is the separate row E2L-072',
     verifiedBy: 'evidenceToLegacyTrace.test.ts field-loss suite; projectionParity.test.ts sentinel assertions; evidenceToAgentRun.test.ts — "does not leak provider-native bodies or authorization material"; matrix runtime check over the enriched fixture (events[4].responseEnvelope.finishReason unavailable, with the response-body sentinel additionally asserted absent from the view)',
     runtime: {
       fixture: 'enriched',
       path: 'events[4].responseEnvelope.finishReason',
       outcome: 'unavailable',
+      reasonIncludes: 'finish-reason field',
       viewAbsence: ['enriched-native-response-body'],
     },
   },
@@ -713,6 +732,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[4].responseEnvelope.usage',
       outcome: 'unavailable',
+      reasonIncludes: 'usage record',
     },
   },
 
@@ -742,6 +762,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'chunks',
       path: 'events[1].contextContributions',
       outcome: 'unavailable',
+      reasonIncludes: 'context-contribution concept',
     },
   },
 
@@ -767,7 +788,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'unavailable',
     reason: 'legacy Trace has no completeness record; the canonical derived completeness (eventsByStatus, seqGaps, duplicatesDetected, boundaryStatement) is not projected. The mapping path is the canonical record path "completeness" (Spec 014 §2.2.9 uses the finalized derived type TraceCompleteness)',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "reports completeness, capture surface, observation boundary, and evidenceStatus loss"',
-    runtime: { fixture: 'minimal', path: 'completeness', outcome: 'unavailable' },
+    runtime: { fixture: 'minimal', path: 'completeness', outcome: 'unavailable', reasonIncludes: 'completeness record' },
   },
 
   // ---- Observation boundary and capture surface (Spec 014 §2.2.10; Spec 013 §5) ----
@@ -779,7 +800,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'observation roles are approximated by legacy ContentPhase with the same boundary discipline (phase labels describe where content was observed, never provider-internal state)',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "approximates observation roles with ContentPhase and reports partial"',
-    runtime: { fixture: 'minimal', path: 'trace.events[].observationRole', outcome: 'partial' },
+    runtime: { fixture: 'minimal', path: 'trace.events[].observationRole', outcome: 'partial', reasonIncludes: 'ContentPhase' },
   },
   {
     id: 'E2L-054',
@@ -804,6 +825,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[3].observationRole',
       outcome: 'unavailable',
+      reasonIncludes: 'ContentPhase approximation',
     },
   },
 
@@ -856,6 +878,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       stage: 'legacy_trace_to_agent_run',
       path: 'turns[0].id',
       outcome: 'inferred',
+      reasonIncludes: 'deterministically synthesized',
     },
   },
   {
@@ -870,7 +893,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'minimal',
       path: 'trace.status',
       outcome: 'partial',
-      reasonIncludes: '"completed"',
+      reasonIncludes: 'completed',
     },
   },
   {
@@ -881,7 +904,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
     classification: 'partial',
     reason: 'order is preserved by event order with seq tie-breaks over equal timestamps; the seq value is not representable and the restriction is reported',
     verifiedBy: 'evidenceToLegacyTrace.test.ts — "preserves seq ordering over equal timestamps"; projectionParity.test.ts streaming-chunks block',
-    runtime: { fixture: 'chunks', path: 'trace.events[].seq', outcome: 'partial' },
+    runtime: { fixture: 'chunks', path: 'trace.events[].seq', outcome: 'partial', reasonIncludes: 'seq value' },
   },
   {
     id: 'E2L-061',
@@ -916,6 +939,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[2].requestEnvelope.providerNativeFidelity',
       outcome: 'unavailable',
+      reasonIncludes: 'fidelity discriminant',
       viewAbsence: ['sk-enriched-sentinel-auth', 'enriched-native-request-body', 'enriched-native-response-body'],
     },
   },
@@ -931,6 +955,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[2].requestEnvelope.nativeContentHash',
       outcome: 'unavailable',
+      reasonIncludes: 'content-hash contract',
     },
   },
   {
@@ -984,6 +1009,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[2].requestEnvelope.providerNative',
       outcome: 'unavailable',
+      reasonIncludes: 'provider-native payload field',
       viewAbsence: ['enriched-native-request-body'],
     },
   },
@@ -999,6 +1025,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[2].requestEnvelope.nativeEncoding',
       outcome: 'unavailable',
+      reasonIncludes: 'native-encoding field',
     },
   },
   {
@@ -1013,6 +1040,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[2].requestEnvelope.nativeContentType',
       outcome: 'unavailable',
+      reasonIncludes: 'native-content-type field',
     },
   },
   {
@@ -1027,6 +1055,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[4].responseEnvelope.providerNative',
       outcome: 'unavailable',
+      reasonIncludes: 'provider-native payload field',
       viewAbsence: ['sk-enriched-sentinel-auth', 'enriched-native-response-body'],
     },
   },
@@ -1042,6 +1071,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'chunks',
       path: 'events[2].responseEnvelope.chunkIndex',
       outcome: 'unavailable',
+      reasonIncludes: 'chunk-index field',
     },
   },
   {
@@ -1056,6 +1086,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[3].usage.evidenceStatus',
       outcome: 'unavailable',
+      reasonIncludes: 'per-field evidence-status surface',
     },
   },
   {
@@ -1070,6 +1101,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'all-kinds',
       path: 'events[5].usage.inputTokens',
       outcome: 'unavailable',
+      reasonIncludes: 'inputTokens value',
     },
   },
   {
@@ -1084,6 +1116,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'all-kinds',
       path: 'events[5].usage.outputTokens',
       outcome: 'unavailable',
+      reasonIncludes: 'outputTokens value',
     },
   },
   {
@@ -1098,6 +1131,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'all-kinds',
       path: 'events[5].usage.totalTokens',
       outcome: 'unavailable',
+      reasonIncludes: 'totalTokens value',
     },
   },
   {
@@ -1112,6 +1146,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'redacted',
       path: 'rawObservations[1].payload.redaction',
       outcome: 'unavailable',
+      reasonIncludes: 'redaction declaration',
     },
   },
   {
@@ -1126,6 +1161,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'redacted',
       path: 'rawObservations[2].payload.missing',
       outcome: 'unavailable',
+      reasonIncludes: 'missing-evidence declaration',
     },
   },
   {
@@ -1140,6 +1176,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'redacted',
       path: 'rawObservations[3].payload.truncation',
       outcome: 'unavailable',
+      reasonIncludes: 'truncation declaration',
     },
   },
   {
@@ -1154,6 +1191,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[4].responseEnvelope.nativeEncoding',
       outcome: 'unavailable',
+      reasonIncludes: 'native-encoding field',
     },
   },
   {
@@ -1168,6 +1206,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[4].responseEnvelope.nativeContentType',
       outcome: 'unavailable',
+      reasonIncludes: 'native-content-type field',
     },
   },
   {
@@ -1182,6 +1221,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'enriched',
       path: 'events[4].responseEnvelope.nativeContentHash',
       outcome: 'unavailable',
+      reasonIncludes: 'content-hash contract',
     },
   },
 
@@ -1202,6 +1242,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'all-kinds',
       path: 'events[15].actor',
       outcome: 'unavailable',
+      reasonIncludes: 'error actor',
     },
   },
   {
@@ -1216,6 +1257,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'all-kinds',
       path: 'events[15].lifecycleTarget',
       outcome: 'unavailable',
+      reasonIncludes: 'lifecycle-target field',
     },
   },
   {
@@ -1230,6 +1272,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'all-kinds',
       path: 'events[15].lifecycleEffect',
       outcome: 'unavailable',
+      reasonIncludes: 'lifecycle-effect field',
     },
   },
   {
@@ -1244,6 +1287,7 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       fixture: 'all-kinds',
       path: 'events[15].error',
       outcome: 'unavailable',
+      reasonIncludes: 'error payload field',
       viewAbsence: [ALL_KINDS_ERROR_MESSAGE],
     },
   },

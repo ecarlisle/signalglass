@@ -20,7 +20,21 @@
  *    together — a passing `viewAbsence`/`reportField` check never substitutes
  *    for an absent mapping entry. A claim can no longer hide behind a check
  *    it does not perform — the check fails when the expected report entry is
- *    absent.
+ *    absent. Two binding invariants close the conformance loop: every
+ *    mapping-search claim must classify its runtime outcome exactly
+ *    (`runtime.outcome === classification` — a mismatch fails even when the
+ *    report contains the runtime outcome), and every non-exact mapping-search
+ *    claim must carry a non-empty `reasonIncludes` fragment that occurs BOTH
+ *    in the claim's documented `reason` AND in the actual matching report
+ *    mapping's reason (constraining the actual rationale, never a generic
+ *    word such as "legacy" or "unavailable");
+ * 4. the human-facing `docs/evidence-projection-matrix.md` table is verified
+ *    as a durable mirror of the executable claims by the committed script
+ *    `scripts/verify-projection-matrix.mjs` — identical claim IDs in the
+ *    same order, identical classifications, and identical reasons
+ *    (backtick/pipe-normalized) — replacing any uncommitted comparison
+ *    script with a narrow, committed check (no generator, no conformance
+ *    framework).
  *
  * The composed-report test runs the public `evidenceToAgentRun` projection
  * and asserts both stages in stage order, that first-stage mappings survive
@@ -451,45 +465,156 @@ describe('projection mapping matrix — runtime report alignment', () => {
 });
 
 describe('projection mapping matrix — gate strictness (regressions)', () => {
-  /** Synthetic claim carrying only the runtime descriptor under test. */
+  /**
+   * Synthetic claim carrying only the runtime descriptor under test, with
+   * optional `classification`/`reason` overrides so each regression can
+   * isolate exactly the binding it exercises (defaults: `unavailable`,
+   * `'regression'`).
+   */
   function syntheticClaim(
     runtime: NonNullable<ProjectionMatrixClaim['runtime']>,
+    extra?: {
+      classification?: ProjectionMatrixClaim['classification'];
+      reason?: string;
+    },
   ): ProjectionMatrixClaim {
     return {
       id: 'REG-0',
       primitive: 'regression',
       spec013: 'regression',
       legacyTarget: 'regression',
-      classification: 'unavailable',
-      reason: 'regression',
+      classification: extra?.classification ?? 'unavailable',
+      reason: extra?.reason ?? 'regression',
       verifiedBy: 'regression',
       runtime,
     };
   }
 
   it('rejects a claim with the correct path/outcome but a reason fragment that matches nothing', () => {
-    // trace.status IS partial and its reason DOES contain "\"completed\"",
-    // but the fragment below appears in no mapping reason, so the gate must
-    // fail even though path and outcome are correct.
-    const wrongReason = syntheticClaim({
-      fixture: 'minimal',
-      path: 'trace.status',
-      outcome: 'partial',
-      reasonIncludes: 'zzz-reason-fragment-that-matches-nothing-zzz',
-    });
+    // trace.status IS partial, the documented reason contains the fragment,
+    // but the fragment appears in no mapping reason — the gate must fail
+    // even though path and outcome are correct.
+    const wrongReason = syntheticClaim(
+      {
+        fixture: 'minimal',
+        path: 'trace.status',
+        outcome: 'partial',
+        reasonIncludes: 'zzz-reason-fragment-that-matches-nothing-zzz',
+      },
+      {
+        classification: 'partial',
+        reason: 'status mapping documented with the zzz-reason-fragment-that-matches-nothing-zzz rationale',
+      },
+    );
     expect(() => runRuntimeClaim(wrongReason)).toThrow();
   });
 
   it('rejects a claim with the correct reason but the wrong outcome', () => {
-    // The trace.status mapping reason contains "\"completed\"" but the
-    // mapping outcome is partial, never exact: the gate must fail.
-    const wrongOutcome = syntheticClaim({
-      fixture: 'minimal',
-      path: 'trace.status',
-      outcome: 'exact',
-      reasonIncludes: '"completed"',
-    });
+    // The trace.status mapping reason contains "completed" and the claim
+    // classifies it exactly — but the mapping outcome is partial, never
+    // exact: the conjunctive search must fail even though path and reason
+    // would match.
+    const wrongOutcome = syntheticClaim(
+      {
+        fixture: 'minimal',
+        path: 'trace.status',
+        outcome: 'exact',
+        reasonIncludes: 'completed',
+      },
+      {
+        classification: 'exact',
+        reason: 'status mapping documented with the completed rationale',
+      },
+    );
     expect(() => runRuntimeClaim(wrongOutcome)).toThrow();
+  });
+
+  it('rejects a claim whose classification disagrees with its runtime outcome even when the report entry exists', () => {
+    // trace.agent really is unavailable in the minimal report — the runtime
+    // outcome and the actual mapping agree — but the claim classifies the
+    // row partial. The classification-to-outcome binding must fail the gate
+    // even though a mapping with the runtime outcome exists (the old gate,
+    // which only searched the report, would have let it through).
+    const mismatched = syntheticClaim(
+      {
+        fixture: 'minimal',
+        path: 'trace.agent',
+        outcome: 'unavailable',
+        reasonIncludes: 'agent concept',
+      },
+      {
+        classification: 'partial',
+        reason: 'the canonical evidence has no agent concept; the row was classified partial by mistake',
+      },
+    );
+    const result = evidenceToLegacyTrace(fixtureFor('minimal'));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(
+      findMapping(result.report.mappings, mismatched.runtime!),
+      'the actual report must contain the unavailable trace.agent mapping',
+    ).toBeDefined();
+    expect(() => runRuntimeClaim(mismatched)).toThrow();
+  });
+
+  it('rejects a claim whose documented reason omits its declared reason fragment', () => {
+    // The real report mapping DOES contain "completed", so path, outcome,
+    // and the report-side reason would all match — but the claim's
+    // documented reason never mentions the declared fragment: the
+    // documented-reason binding must fail.
+    const claim = syntheticClaim(
+      {
+        fixture: 'minimal',
+        path: 'trace.status',
+        outcome: 'partial',
+        reasonIncludes: 'completed',
+      },
+      {
+        classification: 'partial',
+        reason: 'status vocabulary regression without the mapping word',
+      },
+    );
+    expect(() => runRuntimeClaim(claim)).toThrow();
+  });
+
+  it('rejects a claim whose reason fragment is absent from the report mapping reason', () => {
+    // The documented reason contains the fragment and path/outcome are
+    // correct — but the actual trace.status mapping reason (completed →
+    // success) does not support the declared rationale: the conjunctive
+    // search must fail on the report-side reason.
+    const claim = syntheticClaim(
+      {
+        fixture: 'minimal',
+        path: 'trace.status',
+        outcome: 'partial',
+        reasonIncludes: 'termination unobserved',
+      },
+      {
+        classification: 'partial',
+        reason: 'status mapping documented with the termination unobserved rationale',
+      },
+    );
+    expect(() => runRuntimeClaim(claim)).toThrow();
+  });
+
+  it('passes an honest claim whose classification and reason fragments align with the report', () => {
+    // Same path/outcome as the negative cases above, but the fragment
+    // genuinely appears in BOTH the documented reason and the report mapping
+    // reason, and the classification equals the runtime outcome: the
+    // conjunctive path/outcome/reason gate must accept it.
+    const honest = syntheticClaim(
+      {
+        fixture: 'minimal',
+        path: 'trace.status',
+        outcome: 'partial',
+        reasonIncludes: 'completed',
+      },
+      {
+        classification: 'partial',
+        reason: 'the canonical four-state status vocabulary (completed/failed/cancelled/unknown) is approximated by the three-value legacy set',
+      },
+    );
+    expect(() => runRuntimeClaim(honest)).not.toThrow();
   });
 
   it('rejects a claim whose sentinel-absence check passes but whose mapping entry is absent', () => {
@@ -666,15 +791,7 @@ function assertRuntimeCheckShape(claim: ProjectionMatrixClaim): void {
     hasCheck,
     `runtime claim ${claim.id} must carry a check`,
   ).toBe(true);
-  // Any mapping-search claim (path or reasonIncludes) must also constrain the
-  // outcome so the gate verifies the actual report outcome, never just a
-  // kind name or path appearing in a reason.
-  if (r.path != null || r.reasonIncludes != null) {
-    expect(
-      r.outcome != null,
-      `runtime claim ${claim.id} with a mapping search must also constrain the outcome`,
-    ).toBe(true);
-  }
+  if (r.path != null || r.reasonIncludes != null) assertMappingSearchShape(claim);
   // A report-field claim must name the expected value it compares against.
   if (r.reportField != null) {
     expect(
@@ -682,6 +799,34 @@ function assertRuntimeCheckShape(claim: ProjectionMatrixClaim): void {
       `runtime claim ${claim.id} with reportField must also provide expected`,
     ).toBe(true);
   }
+}
+
+/**
+ * Mapping-search invariants (see the module docstring): the outcome must be
+ * constrained AND equal the matrix classification, and every non-exact
+ * claim must bind its rationale with a non-empty `reasonIncludes` fragment
+ * that also occurs in the claim's documented `reason` (the report-side
+ * occurrence is asserted conjunctively by `findMapping`).
+ */
+function assertMappingSearchShape(claim: ProjectionMatrixClaim): void {
+  const r = claim.runtime!;
+  expect(
+    r.outcome != null,
+    `runtime claim ${claim.id} with a mapping search must also constrain the outcome`,
+  ).toBe(true);
+  expect(
+    r.outcome === claim.classification,
+    `runtime claim ${claim.id}: matrix classification "${claim.classification}" must equal its runtime outcome "${r.outcome}"`,
+  ).toBe(true);
+  if (claim.classification === 'exact') return;
+  expect(
+    r.reasonIncludes != null && r.reasonIncludes.trim().length > 0,
+    `runtime claim ${claim.id} (classified "${claim.classification}") must constrain its rationale with a non-empty reasonIncludes`,
+  ).toBe(true);
+  expect(
+    claim.reason.includes(r.reasonIncludes ?? ''),
+    `runtime claim ${claim.id}: its documented reason must contain the declared reason fragment "${r.reasonIncludes}"`,
+  ).toBe(true);
 }
 
 /**
@@ -702,6 +847,25 @@ function runRuntimeClaim(claim: ProjectionMatrixClaim): void {
       : evidenceToLegacyTrace(record);
   expect(result.ok, `claim ${claim.id}: fixture ${runtime.fixture} must project`).toBe(true);
   if (!result.ok) return;
+
+  // Classification-to-outcome binding: the matrix must classify exactly what
+  // the runtime reports. Even when the report really contains the runtime
+  // outcome, a claim whose classification disagrees is a conformance failure.
+  if (runtime.path != null || runtime.reasonIncludes != null) {
+    expect(
+      runtime.outcome === claim.classification,
+      `claim ${claim.id}: runtime outcome "${runtime.outcome}" must equal matrix classification "${claim.classification}"`,
+    ).toBe(true);
+  }
+  // Documented-reason binding: the declared fragment must ALSO occur in the
+  // claim's documented reason (the report-side occurrence is part of the
+  // conjunctive search below).
+  if (runtime.reasonIncludes != null) {
+    expect(
+      claim.reason.includes(runtime.reasonIncludes),
+      `claim ${claim.id}: documented reason must contain the declared fragment "${runtime.reasonIncludes}"`,
+    ).toBe(true);
+  }
 
   assertReportFieldEquals(claim, result);
   assertViewAbsenceFree(claim, result);
