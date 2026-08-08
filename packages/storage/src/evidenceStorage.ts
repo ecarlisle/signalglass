@@ -1713,11 +1713,18 @@ export class EvidenceStorage {
       if (err?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
         // Retry a few times to give the other worker time to commit
         for (let i = 0; i < 5; i++) {
-          const existing = selectExisting.get(identity) as
-            | { serialized_record: string; storage_digest: string; stored_at: string }
-            | undefined;
-          const classified = this.classifyExistingRow(existing, identity, storedDocument, storageDigest);
-          if (classified) return classified;
+          try {
+            const existing = selectExisting.get(identity) as
+              | { serialized_record: string; storage_digest: string; stored_at: string }
+              | undefined;
+            const classified = this.classifyExistingRow(existing, identity, storedDocument, storageDigest);
+            if (classified) return classified;
+          } catch (readErr: any) {
+            // If we can't read the existing row, continue retrying
+            if (readErr?.code !== 'SQLITE_BUSY') {
+              throw readErr;
+            }
+          }
           // Small delay before retry (synchronous sleep)
           const start = Date.now();
           while (Date.now() - start < 10) {
