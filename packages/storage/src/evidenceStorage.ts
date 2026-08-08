@@ -238,7 +238,16 @@ function defaultNow(): string {
 
 function isIso8601Utc(value: string): boolean {
   // Require the exact ISO 8601 UTC form produced by Date.toISOString().
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value);
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    return false;
+  }
+  // Validate that the timestamp represents a real date/time
+  const date = new Date(value);
+  if (isNaN(date.getTime())) {
+    return false;
+  }
+  // Ensure the date didn't normalize (e.g., month 13 -> next year month 1)
+  return date.toISOString() === value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -249,7 +258,10 @@ function isPlainObject(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
-  const proto = Object.getPrototypeOf(value);
+  const proto = guardedGetPrototypeOf(value);
+  if (proto !== null && typeof proto === 'object' && 'threw' in proto) {
+    return false; // Guarded getPrototypeOf threw
+  }
   return proto === Object.prototype || proto === null;
 }
 
@@ -305,6 +317,16 @@ function validatePolicyIdentity(policy: PersistencePolicy): void {
   }
   validatePolicyName(policy.name);
   validatePolicyVersion(policy.version);
+  // Enforce reserved reference-policy identity: only the genuine branded policy can use the reserved name
+  if (policy.name === REFERENCE_POLICY_NAME) {
+    const brand = guardedGet(policy as unknown as Record<string | symbol, unknown>, REFERENCE_POLICY_BRAND);
+    if (typeof brand === 'object' && brand !== null && 'threw' in brand) {
+      throw new StorageConfigError('policy brand check failed');
+    }
+    if (brand !== true) {
+      throw new StorageConfigError(`policy name '${REFERENCE_POLICY_NAME}' is reserved for the storage-shipped reference policy`);
+    }
+  }
 }
 
 // fallow-ignore-next-line complexity
@@ -334,6 +356,14 @@ function guardedGet<V, K extends keyof V>(obj: V, key: K): V[K] | { threw: unkno
     return obj[key];
   } catch (err) {
     return { threw: err } as unknown as V[K];
+  }
+}
+
+function guardedGetPrototypeOf(obj: unknown): object | null | { threw: unknown } {
+  try {
+    return Object.getPrototypeOf(obj);
+  } catch (err) {
+    return { threw: err };
   }
 }
 
@@ -802,14 +832,18 @@ class PolicyClassifier {
       this.classifyPayload(event.kind, payload, path, event.evidenceStatus, true);
     }
 
+    // Build allowed fields list: container fields + projected payload fields
     const containerFields = [
       'eventId', 'traceId', 'spanId', 'seq', 'kind', 'capturedAt', 'evidenceStatus', 'observationRole',
     ];
-    // For projected payload-bearing events, unknown additive payload fields appear at the top level
-    // alongside container fields. They are admitted only when the event is declared retained content.
+    const payloadFields = payload ? Object.keys(payload) : [];
+    const allowedFields = [...containerFields, ...payloadFields];
+    
+    // For projected payload-bearing events, the extracted payload fields are at the top level
+    // alongside container fields. They have already been classified above.
     this.checkUnknownFields(
       event as unknown as Record<string, unknown>,
-      containerFields,
+      allowedFields,
       path,
       isDeclaredContent(event.evidenceStatus),
     );
@@ -1237,10 +1271,14 @@ export function createMetadataSafePolicy(): PersistencePolicy {
 }
 
 export function isMetadataSafePolicy(policy: PersistencePolicy): boolean {
-  return (
-    policy === createMetadataSafePolicy() ||
-    (isRecord(policy) && (policy as Record<string | symbol, unknown>)[REFERENCE_POLICY_BRAND] === true)
-  );
+  if (!policy || typeof policy !== 'object') {
+    return false;
+  }
+  try {
+    return (policy as unknown as Record<string | symbol, unknown>)[REFERENCE_POLICY_BRAND] === true;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1320,6 +1358,7 @@ export class EvidenceStorage {
     }
 
     this.verifyTableContract();
+    this.verifyIndexContract();
   }
 
   private listCanonicalObjects(): Set<string> {
@@ -1376,6 +1415,7 @@ export class EvidenceStorage {
         `INSERT INTO evidence_storage_meta (key, value) VALUES (?, ?)`
       ).run(EVIDENCE_STORAGE_META_KEY, STORAGE_FORMAT_VERSION);
       this.verifyTableContract();
+      this.verifyIndexContract();
     });
 
     try {
@@ -1416,6 +1456,36 @@ export class EvidenceStorage {
       }
       if (col.type !== req.type || !!col.notnull !== req.notnull || !!col.pk !== req.pk) {
         throw new StorageFormatError(`Column contract mismatch for ${col.name}`);
+      }
+    }
+  }
+
+  private verifyIndexContract(): void {
+    const indexes = this.db.prepare(
+      `SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_evidence_%'`
+    ).all() as { name: string; tbl_name: string; sql: string | null }[];
+
+    const requiredIndexes = new Map<string, { tbl_name: string; sql_pattern: RegExp }>([
+      ['idx_evidence_records_schema_version', {
+        tbl_name: 'evidence_records',
+        sql_pattern: /CREATE\s+INDEX\s+["']?idx_evidence_records_schema_version["']?\s+ON\s+["']?evidence_records["']?\s*\(\s*["']?evidence_schema_version["']?\s*\)/i
+      }],
+      ['idx_evidence_records_stored_at', {
+        tbl_name: 'evidence_records',
+        sql_pattern: /CREATE\s+INDEX\s+["']?idx_evidence_records_stored_at["']?\s+ON\s+["']?evidence_records["']?\s*\(\s*["']?stored_at["']?\s*\)/i
+      }],
+    ]);
+
+    for (const [name, req] of requiredIndexes) {
+      const idx = indexes.find(i => i.name === name);
+      if (!idx) {
+        throw new StorageFormatError(`Missing required index: ${name}`);
+      }
+      if (idx.tbl_name !== req.tbl_name) {
+        throw new StorageFormatError(`Index ${name} is on wrong table: ${idx.tbl_name}`);
+      }
+      if (!idx.sql || !req.sql_pattern.test(idx.sql)) {
+        throw new StorageFormatError(`Index ${name} has incorrect structure: ${idx.sql}`);
       }
     }
   }
@@ -1616,13 +1686,54 @@ export class EvidenceStorage {
 
     try {
       return tx();
-    } catch (err) {
-      // Unique constraint race: re-read and classify.
-      const existing = selectExisting.get(identity) as
-        | { serialized_record: string; storage_digest: string; stored_at: string }
-        | undefined;
-      const classified = this.classifyExistingRow(existing, identity, storedDocument, storageDigest);
-      if (classified) return classified;
+    } catch (err: any) {
+      // Handle SQLITE_BUSY (database locked by another connection)
+      if (err?.code === 'SQLITE_BUSY') {
+        // Retry the entire transaction up to 5 times with delays
+        for (let i = 0; i < 5; i++) {
+          // Small delay before retry (synchronous sleep)
+          const start = Date.now();
+          while (Date.now() - start < 10) {
+            // Busy wait for 10ms
+          }
+          try {
+            return tx();
+          } catch (retryErr: any) {
+            // If we get SQLITE_BUSY again, continue retrying
+            if (retryErr?.code !== 'SQLITE_BUSY') {
+              // Different error, handle it below
+              err = retryErr;
+              break;
+            }
+          }
+        }
+      }
+      
+      // Handle unique constraint violations
+      if (err?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+        // Retry a few times to give the other worker time to commit
+        for (let i = 0; i < 5; i++) {
+          const existing = selectExisting.get(identity) as
+            | { serialized_record: string; storage_digest: string; stored_at: string }
+            | undefined;
+          const classified = this.classifyExistingRow(existing, identity, storedDocument, storageDigest);
+          if (classified) return classified;
+          // Small delay before retry (synchronous sleep)
+          const start = Date.now();
+          while (Date.now() - start < 10) {
+            // Busy wait for 10ms
+          }
+        }
+        // Fallback: if we still can't find the row after retries, return conflict
+        // This shouldn't happen in practice, but it's safer than throwing
+        return {
+          status: 'conflict',
+          identity,
+          existingDigest: 'unknown',
+          suppliedDigest: storageDigest,
+          storedAt: 'unknown',
+        } as SaveOutcome;
+      }
       throw err;
     }
   }

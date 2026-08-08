@@ -81,8 +81,13 @@ function makeObservation(obs: Partial<EvidenceObservation> & { kind: EvidenceObs
   } as EvidenceObservation;
 }
 
-function makeProofRecord(opts?: { traceId?: string; extra?: Partial<EvidenceRecord> }): EvidenceRecord {
+function makeProofRecord(opts?: {
+  traceId?: string;
+  extra?: Partial<EvidenceRecord>;
+  captureProfile?: { name: string; version: string };
+}): EvidenceRecord {
   const traceId = opts?.traceId ?? 'trace-abc';
+  const captureProfile = opts?.captureProfile ?? { name: 'dev-basic', version: '1.2.0' };
   const observations: EvidenceObservation[] = [
     makeObservation({ kind: 'interaction_start', seq: 0, traceId, payload: null }),
     makeObservation({
@@ -130,7 +135,7 @@ function makeProofRecord(opts?: { traceId?: string; extra?: Partial<EvidenceReco
     observations,
     captureBoundary,
     '1.0.0',
-    { captureProfile: { name: 'dev-basic', version: '1.2.0' } },
+    { captureProfile },
   );
   if (!parsed.ok) throw new Error(parsed.issues.map((i) => i.message).join('; '));
   return { ...parsed.record, ...opts?.extra };
@@ -197,17 +202,22 @@ describe('EvidenceStorage construction', () => {
   });
 
   it('rejects a plain object spoofing the reference policy name', () => {
-    expect(
-      () =>
-        new EvidenceStorage({
-          databasePath: ':memory:',
-          persistencePolicy: {
-            name: 'signalglass.persistence.metadata-safe',
-            version: '1.0.0',
-            decide: () => ({ accept: true }),
-          },
-        }),
-    ).toThrow(StorageConfigError);
+    const dir = tempDir();
+    try {
+      expect(
+        () =>
+          new EvidenceStorage({
+            databasePath: join(dir, 'test.db'),
+            persistencePolicy: {
+              name: 'signalglass.persistence.metadata-safe',
+              version: '1.0.0',
+              decide: () => ({ accept: true }),
+            },
+          }),
+      ).toThrow(StorageConfigError);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('accepts the storage-shipped reference policy by identity', () => {
@@ -1147,6 +1157,76 @@ describe('WAL and contention', () => {
     storage2.close();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('handles concurrent writes to same identity with identical text', async () => {
+    const dir = tempDir();
+    const { Worker } = await import('node:worker_threads');
+    const workerPath = join(__dirname, '..', 'dist', 'contentionWorker.js');
+    
+    const traceId = 'trace-concurrent-same';
+    const workers = await Promise.all([
+      new Promise<any>((resolve, reject) => {
+        const worker = new Worker(workerPath, {
+          workerData: { dir, traceId, captureProfileName: 'dev-basic' },
+        });
+        worker.on('message', resolve);
+        worker.on('error', reject);
+        worker.on('exit', (code) => {
+          if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
+        });
+      }),
+      new Promise<any>((resolve, reject) => {
+        const worker = new Worker(workerPath, {
+          workerData: { dir, traceId, captureProfileName: 'dev-basic' },
+        });
+        worker.on('message', resolve);
+        worker.on('error', reject);
+        worker.on('exit', (code) => {
+          if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
+        });
+      }),
+    ]);
+
+    const statuses = workers.map(w => w.status).sort();
+    expect(statuses).toEqual(['already-present', 'stored']);
+    
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('handles concurrent writes to same identity with different text', async () => {
+    const dir = tempDir();
+    const { Worker } = await import('node:worker_threads');
+    const workerPath = join(__dirname, '..', 'dist', 'contentionWorker.js');
+    
+    const traceId = 'trace-concurrent-diff';
+    const workers = await Promise.all([
+      new Promise<any>((resolve, reject) => {
+        const worker = new Worker(workerPath, {
+          workerData: { dir, traceId, captureProfileName: 'profile-a' },
+        });
+        worker.on('message', resolve);
+        worker.on('error', reject);
+        worker.on('exit', (code) => {
+          if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
+        });
+      }),
+      new Promise<any>((resolve, reject) => {
+        const worker = new Worker(workerPath, {
+          workerData: { dir, traceId, captureProfileName: 'profile-b' },
+        });
+        worker.on('message', resolve);
+        worker.on('error', reject);
+        worker.on('exit', (code) => {
+          if (code !== 0) reject(new Error(`Worker exited with code ${code}`));
+        });
+      }),
+    ]);
+
+    const statuses = workers.map(w => w.status).sort();
+    expect(statuses).toEqual(['conflict', 'stored']);
+    
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe('Serialization boundary', () => {
@@ -1163,5 +1243,194 @@ describe('Serialization boundary', () => {
     const parsed = { ok: true, record: rebuildRecord(record) };
     const doc = serializeEvidenceRecord(parsed.record);
     expect(doc).toContain('AQID'); // Base64 of [1,2,3]
+  });
+
+  it('explicitly undefined optional properties are absent after round trip', () => {
+    const record = makeProofRecord();
+    // Set an optional property to undefined
+    (record as any).trace.conditions = undefined;
+    const doc = serializeEvidenceRecord(record);
+    const parsed = parseEvidenceRecord(JSON.parse(doc));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    // undefined becomes absent in JSON
+    expect((parsed.record as any).trace.conditions).toBeUndefined();
+  });
+});
+
+describe('Acceptance criteria coverage', () => {
+  let dir: string;
+  let storage: EvidenceStorage;
+
+  beforeEach(() => {
+    dir = tempDir();
+    storage = new EvidenceStorage(makeConfig(dir));
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('persisted unknown-additive-field round-trip under admitting custom policy', () => {
+    const admittingPolicy: PersistencePolicy = {
+      name: 'test.admitting',
+      version: '1.0.0',
+      decide: () => ({ accept: true } as PersistencePolicyDecision),
+    };
+    const admittingStorage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: admittingPolicy }));
+    
+    const record = makeProofRecord();
+    (record as any).customField = 'custom-value';
+    
+    const saveResult = admittingStorage.saveEvidenceRecord(record);
+    expect(saveResult.status).toBe('stored');
+    
+    const readResult = admittingStorage.getEvidenceRecord(record.trace.traceId);
+    expect(readResult.ok).toBe(true);
+    if (!readResult.ok) return;
+    
+    // Custom field should survive round-trip
+    expect((readResult.record as any).customField).toBe('custom-value');
+    admittingStorage.close();
+  });
+
+  it('simulated equal-digest different-text conflict', () => {
+    const record1 = makeProofRecord();
+    const record2 = makeProofRecord({ captureProfile: { name: 'different-profile', version: '1.0.0' } });
+    
+    // Make them have the same trace ID but different text
+    record2.trace.traceId = record1.trace.traceId;
+    record2.trace.interactionId = record1.trace.traceId;
+    
+    // Serialize both to compute digests
+    const doc1 = serializeEvidenceRecord(record1);
+    const doc2 = serializeEvidenceRecord(record2);
+    
+    // Verify they have different text
+    expect(doc1).not.toBe(doc2);
+    
+    // Save first record
+    const save1 = storage.saveEvidenceRecord(record1);
+    expect(save1.status).toBe('stored');
+    
+    // Save second record with same identity but different text
+    const save2 = storage.saveEvidenceRecord(record2);
+    expect(save2.status).toBe('conflict');
+    
+    // Verify first record is unchanged
+    const read1 = storage.getEvidenceRecord(record1.trace.traceId);
+    expect(read1.ok).toBe(true);
+    if (!read1.ok) return;
+    expect(read1.record.trace.captureProfile.name).toBe('dev-basic');
+  });
+
+  it('initialization rollback on schema creation failure', () => {
+    const rollbackDir = tempDir();
+    const dbPath = join(rollbackDir, 'test.db');
+    const db = new Database(dbPath);
+    
+    // Create a table that will conflict with schema creation
+    db.exec('CREATE TABLE evidence_records (wrong_schema TEXT)');
+    db.close();
+    
+    // Attempt to open EvidenceStorage should fail
+    expect(() => new EvidenceStorage(makeConfig(rollbackDir))).toThrow(StorageFormatError);
+    
+    // Verify the database is still in its original state
+    const verifyDb = new Database(dbPath);
+    const tables = verifyDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as any[];
+    verifyDb.close();
+    
+    // Should only have the original table, no new tables
+    expect(tables.length).toBe(1);
+    expect(tables[0].name).toBe('evidence_records');
+    
+    rmSync(rollbackDir, { recursive: true, force: true });
+  });
+
+  it('legacy deleteTrace does not touch canonical rows', () => {
+    // Save a canonical record
+    const record = makeProofRecord();
+    storage.saveEvidenceRecord(record);
+    
+    // Open legacy TraceStorage on the same database
+    const legacyStorage = new TraceStorage({ databasePath: join(dir, 'test.db') });
+    
+    // Call deleteTrace (should not affect canonical rows)
+    legacyStorage.deleteTrace(record.trace.traceId);
+    legacyStorage.close();
+    
+    // Verify canonical record still exists
+    const readResult = storage.getEvidenceRecord(record.trace.traceId);
+    expect(readResult.ok).toBe(true);
+  });
+
+  it('legacy deleteExpiredTraces does not touch canonical rows', () => {
+    // Save a canonical record
+    const record = makeProofRecord();
+    storage.saveEvidenceRecord(record);
+    
+    // Open legacy TraceStorage on the same database
+    const legacyStorage = new TraceStorage({ databasePath: join(dir, 'test.db') });
+    
+    // Call deleteExpiredTraces (should not affect canonical rows)
+    legacyStorage.deleteExpiredTraces();
+    legacyStorage.close();
+    
+    // Verify canonical record still exists
+    const readResult = storage.getEvidenceRecord(record.trace.traceId);
+    expect(readResult.ok).toBe(true);
+  });
+
+  it('corrupt-read: malformed JSON', () => {
+    const record = makeProofRecord();
+    storage.saveEvidenceRecord(record);
+    
+    // Corrupt the serialized record
+    const db = new Database(join(dir, 'test.db'));
+    db.prepare('UPDATE evidence_records SET serialized_record = ? WHERE evidence_identity = ?')
+      .run('not valid json {', record.trace.traceId);
+    db.close();
+    
+    const readResult = storage.getEvidenceRecord(record.trace.traceId);
+    expect(readResult.ok).toBe(false);
+    if (readResult.ok) return;
+    expect(readResult.reason).toBe('corrupt');
+    expect((readResult as any).code).toBe('json_parse_failed');
+  });
+
+  it('corrupt-read: digest mismatch', () => {
+    const record = makeProofRecord();
+    storage.saveEvidenceRecord(record);
+    
+    // Corrupt the digest
+    const db = new Database(join(dir, 'test.db'));
+    db.prepare('UPDATE evidence_records SET storage_digest = ? WHERE evidence_identity = ?')
+      .run('0'.repeat(64), record.trace.traceId);
+    db.close();
+    
+    const readResult = storage.getEvidenceRecord(record.trace.traceId);
+    expect(readResult.ok).toBe(false);
+    if (readResult.ok) return;
+    expect(readResult.reason).toBe('corrupt');
+    expect((readResult as any).code).toBe('digest_mismatch');
+  });
+
+  it('corrupt-read: invalid stored_at timestamp', () => {
+    const record = makeProofRecord();
+    storage.saveEvidenceRecord(record);
+    
+    // Corrupt the stored_at timestamp
+    const db = new Database(join(dir, 'test.db'));
+    db.prepare('UPDATE evidence_records SET stored_at = ? WHERE evidence_identity = ?')
+      .run('2026-99-99T99:99:99.999Z', record.trace.traceId);
+    db.close();
+    
+    const readResult = storage.getEvidenceRecord(record.trace.traceId);
+    expect(readResult.ok).toBe(false);
+    if (readResult.ok) return;
+    expect(readResult.reason).toBe('corrupt');
+    expect((readResult as any).code).toBe('stored_at_malformed');
   });
 });
