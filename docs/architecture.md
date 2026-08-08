@@ -58,7 +58,7 @@ Response Normalizer
         │
         ▼
 ┌───────────────────┐
-│ @signalglass/storage │  → metadata, metrics, redacted excerpts
+│ @signalglass/storage │  → evidence records + legacy trace data
 └───────────────────┘
         │
         ▼
@@ -109,14 +109,14 @@ Providers depend only on `@signalglass/core` and must not leak provider shapes i
 
 ### `@signalglass/storage`
 
-Persists traces, events, metrics, and redacted excerpts.
+Persists canonical evidence records (append-only) beside the legacy trace storage.
 
 Responsibilities:
-- SQLite schema for traces and timeline events.
-- Query and export APIs (list traces, fetch trace, convert trace to `AgentRun`).
+- **Append-only evidence store** ([Spec 015](../specs/015-append-only-evidence-store.md)): save and retrieve canonical `EvidenceRecord`s in their own SQLite schema (`evidence_records`, `evidence_storage_meta`, namespaced indices) beside the legacy `traces` / `trace_events` tables. Saves are transactional with exact-text idempotency and structured conflict classification, a mandatory storage-safety gate, the `metadata-safe` reference persistence policy, and read-integrity verification before trust.
+- **Legacy trace storage**: SQLite schema for traces and timeline events; query and export APIs (list traces, fetch trace, convert trace to `AgentRun`).
 - Apply capture and retention policies before writing.
 
-Storage depends on `@signalglass/core` and follows the privacy defaults in `docs/privacy.md`.
+Storage depends on `@signalglass/core` (legacy trace model) and `@signalglass/evidence` (canonical record types, validators, serialization) and follows the privacy defaults in `docs/privacy.md`.
 
 ### `@signalglass/reports`
 

@@ -56,6 +56,13 @@ import {
 const STORAGE_FORMAT_VERSION = '1.0.0';
 const EVIDENCE_STORAGE_META_KEY = 'evidence_storage_format_version';
 
+// Busy-handler wait for the dedicated connection. A bounded, short wait plus
+// the append-time retry policy (see appendRecord) converts cross-connection
+// SQLITE_BUSY contention into structured outcomes instead of surfacing raw
+// constraint errors; spec 015 requires contention behavior to be testable and
+// deterministic.
+const SQLITE_BUSY_TIMEOUT_MS = 500;
+
 const POLICY_NAME_MAX_LENGTH = 128;
 const POLICY_VERSION_MAX_LENGTH = 64;
 const LABEL_MAX_CODE_POINTS = 128;
@@ -1299,7 +1306,7 @@ export class EvidenceStorage {
     this.now = config.now ?? defaultNow;
 
     this.ensureDirectoryExists(config.databasePath);
-    this.db = new Database(config.databasePath);
+    this.db = new Database(config.databasePath, { timeout: SQLITE_BUSY_TIMEOUT_MS });
     this.db.pragma('journal_mode = WAL');
     const journalMode = this.db.pragma('journal_mode', { simple: true });
     if (journalMode !== 'wal') {
@@ -1491,7 +1498,7 @@ export class EvidenceStorage {
   }
 
   // fallow-ignore-next-line complexity
-  saveEvidenceRecord(input: unknown): SaveOutcome {
+  async saveEvidenceRecord(input: unknown): Promise<SaveOutcome> {
     // Step 1: shape guard.
     if (!isRecord(input)) {
       return {
@@ -1622,12 +1629,12 @@ export class EvidenceStorage {
     };
   }
 
-  private appendRecord(
+  private async appendRecord(
     identity: string,
     evidenceSchemaVersion: string,
     storedDocument: string,
     storageDigest: string,
-  ): SaveOutcome {
+  ): Promise<SaveOutcome> {
     const selectExisting = this.db.prepare(
       `SELECT serialized_record, storage_digest, stored_at FROM evidence_records WHERE evidence_identity = ?`
     );
@@ -1684,67 +1691,29 @@ export class EvidenceStorage {
       } as SaveOutcome;
     });
 
-    try {
-      return tx();
-    } catch (err: any) {
-      // Handle SQLITE_BUSY (database locked by another connection)
-      if (err?.code === 'SQLITE_BUSY') {
-        // Retry the entire transaction up to 5 times with delays
-        for (let i = 0; i < 5; i++) {
-          // Small delay before retry (synchronous sleep)
-          const start = Date.now();
-          while (Date.now() - start < 10) {
-            // Busy wait for 10ms
-          }
-          try {
-            return tx();
-          } catch (retryErr: any) {
-            // If we get SQLITE_BUSY again, continue retrying
-            if (retryErr?.code === 'SQLITE_BUSY') {
-              continue;
-            }
-            // Different error, handle it below
-            err = retryErr;
-            break;
-          }
+    // BEGIN IMMEDIATE serializes writers at transaction start, so the
+    // in-transaction re-read observes any concurrently committed row and
+    // classification is authoritative (spec 015: contention behavior).
+    // Bounded retries convert residual SQLITE_BUSY / unique-key races into
+    // structured outcomes; a raw constraint error is never surfaced.
+    const MAX_CONTENTION_RETRIES = 10;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return tx.immediate();
+      } catch (err: any) {
+        const retryable =
+          err?.code === 'SQLITE_BUSY' || err?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY';
+        if (retryable && attempt < MAX_CONTENTION_RETRIES) {
+          await new Promise(resolve => setTimeout(resolve, 10 + attempt * 10));
+          continue;
         }
-      }
-      
-      // Handle unique constraint violations
-      if (err?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-        // Retry a few times to give the other worker time to commit
-        for (let i = 0; i < 5; i++) {
-          try {
-            const existing = selectExisting.get(identity) as
-              | { serialized_record: string; storage_digest: string; stored_at: string }
-              | undefined;
-            const classified = this.classifyExistingRow(existing, identity, storedDocument, storageDigest);
-            if (classified) return classified;
-          } catch (readErr: any) {
-            // If we can't read the existing row due to busy, continue retrying
-            if (readErr?.code === 'SQLITE_BUSY') {
-              continue;
-            }
-            // Other errors should be thrown
-            throw readErr;
-          }
-          // Small delay before retry (synchronous sleep)
-          const start = Date.now();
-          while (Date.now() - start < 10) {
-            // Busy wait for 10ms
-          }
+        if (retryable) {
+          throw new Error(
+            'SQLITE_CONTENTION_FAILURE: Unable to resolve competing write after bounded retries'
+          );
         }
-        // Fallback: if we still can't find the row after retries, return conflict
-        // This shouldn't happen in practice, but it's safer than throwing
-        return {
-          status: 'conflict',
-          identity,
-          existingDigest: 'unknown',
-          suppliedDigest: storageDigest,
-          storedAt: 'unknown',
-        } as SaveOutcome;
+        throw err;
       }
-      throw err;
     }
   }
 

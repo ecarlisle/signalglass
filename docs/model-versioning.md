@@ -18,6 +18,7 @@ normative contract is [Spec 013 §10](../specs/013-evidence-model.md). The goal:
 | Canonicalizer registry | Canonicalizer name + version | Artifacts that hash content: `contentFidelity` + `contentType` select the path; `contentCanonicalizer` is required for non-JSON structured formats (RFC 8785/JCS is the schema-fixed default for JSON, optionally pinned to a registry version). Structurally faithful retained content with no supported canonicalizer records `contentHashUnavailableReason` instead of a hash |
 | Interpretation labels | Label id + version | Every interpretation |
 | Export shape | Export/projection version | Every export |
+| Canonical storage format | `evidence_storage_format_version` ledger (semantic, currently `1.0.0`) | Namespaced `evidence_storage_meta` ledger table in the SQLite file (Spec 015) |
 
 ## Schema evolution rules
 
@@ -49,6 +50,26 @@ normative contract is [Spec 013 §10](../specs/013-evidence-model.md). The goal:
   are preserved, not dropped, when evidence is re-serialized.
 - Records MUST be self-describing: the schema version is on the record, so
   decoding never depends on the exporting application's current build.
+
+## Canonical storage format versioning
+
+The canonical evidence store ([Spec 015](../specs/015-append-only-evidence-store.md))
+versions its **storage format** separately from the evidence schema:
+
+- **Storage-format version vs. evidence-schema version.** The storage format
+  (`evidence_storage_format_version`, currently `1.0.0`) versions the canonical
+  SQLite schema, ledger, and storage behavior; `evidenceSchemaVersion` versions
+  the record shape and lives on the record itself. They are independent axes.
+- **Namespaced ledger.** The `evidence_storage_meta` ledger versions only the
+  canonical evidence storage and is never presented as a version for the
+  legacy `traces` / `trace_events` schema.
+- **Open-time refusal.** Opening a database whose ledger names an unsupported
+  higher or lower storage format throws a storage-format error; version 1.0.0
+  has no registered migration path.
+- **Gate/policy extension versioning.** Any future conservative extension of
+  the storage-safety gate or persistence policies MUST be versioned with
+  documented compatibility consequences that do not change the meaning of
+  existing stored records.
 
 ## Measurement determinism
 

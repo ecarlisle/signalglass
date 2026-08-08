@@ -2182,7 +2182,7 @@ non-Object.prototype prototype, `{ accept: 'yes' }`, `{ accept: true, code: 'x' 
 ## Test mapping
 
 All 70 acceptance criteria are covered by `packages/storage/src/evidenceStorage.test.ts`
-(66 tests) and the existing `@signalglass/evidence` contract tests. Key groupings:
+(82 tests) and the existing `@signalglass/evidence` contract tests. Key groupings:
 
 - Save/retrieve round trip, manifest, close/reopen, coexistence with
   `TraceStorage`, exact digest, and idempotency/conflict behavior are
@@ -2194,7 +2194,16 @@ All 70 acceptance criteria are covered by `packages/storage/src/evidenceStorage.
   behavior are exercised in `Persistence policy validation`.
 - Read-integrity outcomes (`corrupt`, `unsupported-version`, `not-found`) are
   exercised in `Read integrity`.
-- WAL connection and contention behavior are exercised in `WAL connection`.
+- WAL connection and contention behavior (deterministic two-connection races
+  on one WAL database, plus different-identity concurrency) are exercised in
+  `WAL and contention`; the equal-digest regression, initialization rollback,
+  the SQLite PRAGMA column/index contract, policy-metadata separation, and
+  legacy delete-trace isolation are exercised in `EvidenceStorage save and
+  retrieve`, `EvidenceStorage schema initialization`, and
+  `Acceptance criteria coverage`.
+- The `metadata-safe` field conformance table, the S1–S6 matrix with
+  overlap controls, and Phase-A short-circuit are exercised in
+  `Storage safety gate` and `metadata-safe reference policy`.
 
 ## Explicit exclusions
 
