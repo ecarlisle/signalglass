@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import Database from 'better-sqlite3';
 import {
   EvidenceStorage,
@@ -17,6 +18,8 @@ import {
   isMetadataSafePolicy,
   StorageConfigError,
   StorageFormatError,
+  EvidenceContentionError,
+  EVIDENCE_CONTENTION_EXHAUSTED,
   type PersistencePolicy,
   type PersistencePolicyDecision,
   type SaveOutcome,
@@ -32,8 +35,11 @@ import {
   type EvidenceRecord,
   type EvidenceObservation,
   type CaptureBoundary,
+  type EventKind,
   CONTROL_EVENT_KINDS,
+  EVENT_KINDS,
 } from '@signalglass/evidence';
+import { evidenceToLegacyTrace, evidenceToAgentRun } from '@signalglass/core';
 
 const METADATA_SAFE = createMetadataSafePolicy();
 
@@ -156,8 +162,111 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'signalglass-storage-test-'));
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** URL of the committed contention-worker fixture (plain JS, no dist dependency). */
+const CONTENTION_WORKER_URL = new URL('./fixtures/contention-worker.mjs', import.meta.url);
+
+/** Row shape the contention worker inserts on its own connection (raw SQL). */
+interface ContentionRow {
+  evidence_identity: string;
+  evidence_schema_version: string;
+  storage_format_version: string;
+  persistence_policy_name: string;
+  persistence_policy_version: string;
+  stored_at: string;
+  storage_digest: string;
+  serialized_record: string;
+}
+
+/**
+ * Spawns the contention fixture and resolves phases in arrival order. Phases
+ * are barrier messages from the worker's own event loop, so ordering between
+ * 'locked' and 'committed'/'released' is guaranteed FIFO — overlap is proven
+ * by the lock + message sequence, never by wall-clock timing.
+ */
+function spawnContentionWorker(workerData: {
+  databasePath: string;
+  operation: 'hold-then-commit' | 'hold-indefinitely';
+  commitDelayMs?: number;
+  row: ContentionRow;
+}): { worker: Worker; phases: string[]; waitFor: (phase: string) => Promise<void> } {
+  const phases: string[] = [];
+  const waiters = new Map<string, Array<() => void>>();
+  const worker = new Worker(CONTENTION_WORKER_URL, { workerData });
+  worker.on('message', (m: { phase: string; message?: string }) => {
+    phases.push(m.phase);
+    const pending = waiters.get(m.phase);
+    if (pending) {
+      waiters.delete(m.phase);
+      for (const resolve of pending) resolve();
+    }
+    if (m.phase === 'error') {
+      const pending = waiters.get('error');
+      if (pending) {
+        waiters.delete('error');
+        for (const resolve of pending) resolve();
+      }
+    }
+  });
+  const waitFor = (phase: string): Promise<void> =>
+    new Promise((resolve, reject) => {
+      if (phases.includes(phase)) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(
+        () => reject(new Error(`Timed out waiting for worker phase '${phase}'`)),
+        10000,
+      );
+      const pending = waiters.get(phase) ?? [];
+      pending.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+      waiters.set(phase, pending);
+    });
+  return { worker, phases, waitFor };
+}
+
+/** Builds the exact row the storage would store for a serialized document. */
+function contentionRowFor(
+  identity: string,
+  document: string,
+  schemaVersion: string,
+): ContentionRow {
+  return {
+    evidence_identity: identity,
+    evidence_schema_version: schemaVersion,
+    storage_format_version: '1.0.0',
+    persistence_policy_name: METADATA_SAFE.name,
+    persistence_policy_version: METADATA_SAFE.version,
+    stored_at: '2026-08-12T12:00:00.000Z',
+    storage_digest: sha256Hex(utf8Encode(document)),
+    serialized_record: document,
+  };
+}
+
+/** Creates a database with the exact canonical schema, for adversarial open tests. */
+function createCanonicalBase(dir: string): string {
+  const dbPath = join(dir, 'adversarial.db');
+  const db = new Database(dbPath);
+  db.exec(`
+    CREATE TABLE evidence_storage_meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE evidence_records (
+      evidence_identity TEXT NOT NULL PRIMARY KEY,
+      evidence_schema_version TEXT NOT NULL,
+      storage_format_version TEXT NOT NULL,
+      persistence_policy_name TEXT NOT NULL,
+      persistence_policy_version TEXT NOT NULL,
+      stored_at TEXT NOT NULL,
+      storage_digest TEXT NOT NULL,
+      serialized_record TEXT NOT NULL
+    );
+    CREATE INDEX idx_evidence_records_schema_version ON evidence_records (evidence_schema_version);
+    CREATE INDEX idx_evidence_records_stored_at ON evidence_records (stored_at);
+    INSERT INTO evidence_storage_meta (key, value) VALUES ('evidence_storage_format_version', '1.0.0');
+  `);
+  db.close();
+  return dbPath;
 }
 
 function makeConfig(dir: string, overrides?: Partial<EvidenceStorageConfig>): EvidenceStorageConfig {
@@ -169,13 +278,13 @@ function makeConfig(dir: string, overrides?: Partial<EvidenceStorageConfig>): Ev
 }
 
 describe('EvidenceStorage construction', () => {
-  it('requires a persistence policy', async () => {
+  it('requires a persistence policy', () => {
     expect(() => new EvidenceStorage({ databasePath: ':memory:' } as unknown as EvidenceStorageConfig)).toThrow(
       StorageConfigError,
     );
   });
 
-  it('rejects an invalid policy name', async () => {
+  it('rejects an invalid policy name', () => {
     expect(
       () =>
         new EvidenceStorage({
@@ -185,7 +294,7 @@ describe('EvidenceStorage construction', () => {
     ).toThrow(StorageConfigError);
   });
 
-  it('rejects a credential-like policy name', async () => {
+  it('rejects a credential-like policy name', () => {
     expect(
       () =>
         new EvidenceStorage({
@@ -195,7 +304,7 @@ describe('EvidenceStorage construction', () => {
     ).toThrow(StorageConfigError);
   });
 
-  it('rejects an invalid policy version', async () => {
+  it('rejects an invalid policy version', () => {
     expect(
       () =>
         new EvidenceStorage({
@@ -205,7 +314,7 @@ describe('EvidenceStorage construction', () => {
     ).toThrow(StorageConfigError);
   });
 
-  it('rejects a plain object spoofing the reference policy name', async () => {
+  it('rejects a plain object spoofing the reference policy name', () => {
     const dir = tempDir();
     try {
       expect(
@@ -224,7 +333,7 @@ describe('EvidenceStorage construction', () => {
     }
   });
 
-  it('accepts the storage-shipped reference policy by identity', async () => {
+  it('accepts the storage-shipped reference policy by identity', () => {
     const dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     expect(isMetadataSafePolicy(storage as unknown as PersistencePolicy)).toBe(false);
@@ -235,7 +344,7 @@ describe('EvidenceStorage construction', () => {
 });
 
 describe('EvidenceStorage schema initialization', () => {
-  it('creates canonical tables on a fresh database', async () => {
+  it('creates canonical tables on a fresh database', () => {
     const dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const db = new Database(join(dir, 'test.db'));
@@ -248,16 +357,20 @@ describe('EvidenceStorage schema initialization', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('creates the evidence_records column contract and canonical indices (SQLite PRAGMA)', async () => {
+  it('creates the evidence_records column contract and canonical indices (SQLite PRAGMA)', () => {
     // The read/save pipeline depends on this column contract; verify it via
     // PRAGMA rather than assuming it from CREATE TABLE success.
     const dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const db = new Database(join(dir, 'test.db'));
+
+    // evidence_records: exact column names, order, types, NOT NULL, PK.
     const columns = db.pragma('table_info(evidence_records)') as {
+      cid: number;
       name: string;
       type: string;
       notnull: number;
+      dflt_value: string | null;
       pk: number;
     }[];
     expect(columns.map((c) => c.name)).toEqual([
@@ -270,23 +383,197 @@ describe('EvidenceStorage schema initialization', () => {
       'storage_digest',
       'serialized_record',
     ]);
-    expect(columns.find((c) => c.name === 'evidence_identity')?.pk).toBe(1);
+    expect(columns.every((c) => c.type === 'TEXT')).toBe(true);
     expect(columns.every((c) => c.notnull === 1)).toBe(true);
-    const indices = db
-      .prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND name LIKE 'idx_evidence_%'")
-      .all() as { name: string; sql: string }[];
-    expect(indices.map((i) => i.name).sort()).toEqual([
+    expect(columns.find((c) => c.name === 'evidence_identity')?.pk).toBe(1);
+    expect(columns.filter((c) => c.pk === 1)).toHaveLength(1);
+
+    // evidence_storage_meta: exact ledger column contract.
+    const metaColumns = db.pragma('table_info(evidence_storage_meta)') as {
+      name: string;
+      type: string;
+      notnull: number;
+      pk: number;
+    }[];
+    expect(metaColumns.map((c) => c.name)).toEqual(['key', 'value']);
+    expect(metaColumns.map((c) => c.type)).toEqual(['TEXT', 'TEXT']);
+    expect(metaColumns.map((c) => c.notnull)).toEqual([1, 1]);
+    expect(metaColumns.map((c) => c.pk)).toEqual([1, 0]);
+
+    // Canonical index set is exact, with exact columns and non-unique origin.
+    const indexList = db.pragma('index_list(evidence_records)') as {
+      seq: number;
+      name: string;
+      unique: number;
+      origin: string;
+      partial: number;
+    }[];
+    const canonical = indexList.filter((i) => i.name.startsWith('idx_evidence_'));
+    expect(canonical.map((i) => i.name).sort()).toEqual([
       'idx_evidence_records_schema_version',
       'idx_evidence_records_stored_at',
     ]);
+    expect(canonical.every((i) => i.origin === 'c' && i.unique === 0 && i.partial === 0)).toBe(true);
+    const schemaIndex = db.pragma('index_info(idx_evidence_records_schema_version)') as {
+      seqno: number;
+      cid: number;
+      name: string;
+    }[];
+    expect(schemaIndex.map((c) => c.name)).toEqual(['evidence_schema_version']);
+    const storedAtIndex = db.pragma('index_info(idx_evidence_records_stored_at)') as {
+      seqno: number;
+      cid: number;
+      name: string;
+    }[];
+    expect(storedAtIndex.map((c) => c.name)).toEqual(['stored_at']);
     // The administrative storage digest is intentionally unindexed (spec 015).
-    expect(indices.every((i) => !i.sql.includes('storage_digest'))).toBe(true);
+    const allIndexInfo = db.pragma('index_list(evidence_records)') as { name: string }[];
+    for (const idx of allIndexInfo) {
+      const info = db.pragma(`index_info(${JSON.stringify(idx.name)})`) as { name: string }[];
+      expect(info.map((c) => c.name)).not.toContain('storage_digest');
+    }
+
+    // Ledger cardinality: exactly one format-version row.
+    const ledgerCount = db
+      .prepare('SELECT COUNT(*) AS n FROM evidence_storage_meta')
+      .get() as { n: number };
+    expect(ledgerCount.n).toBe(1);
     db.close();
     storage.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('rolls back partially-created canonical objects when initialization fails', async () => {
+  it('refuses a composite index that only begins with the expected column', () => {
+    const dir = tempDir();
+    createCanonicalBase(dir);
+    const db = new Database(join(dir, 'adversarial.db'));
+    db.exec('DROP INDEX idx_evidence_records_schema_version');
+    db.exec('CREATE INDEX idx_evidence_records_schema_version ON evidence_records (evidence_schema_version, stored_at)');
+    db.close();
+    expect(() => new EvidenceStorage(makeConfig(dir, { databasePath: join(dir, 'adversarial.db') }))).toThrow(
+      StorageFormatError,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses a unique index where a plain index is required', () => {
+    const dir = tempDir();
+    createCanonicalBase(dir);
+    const db = new Database(join(dir, 'adversarial.db'));
+    db.exec('DROP INDEX idx_evidence_records_schema_version');
+    db.exec('CREATE UNIQUE INDEX idx_evidence_records_schema_version ON evidence_records (evidence_schema_version)');
+    db.close();
+    expect(() => new EvidenceStorage(makeConfig(dir, { databasePath: join(dir, 'adversarial.db') }))).toThrow(
+      StorageFormatError,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses an index with the wrong column', () => {
+    const dir = tempDir();
+    createCanonicalBase(dir);
+    const db = new Database(join(dir, 'adversarial.db'));
+    db.exec('DROP INDEX idx_evidence_records_schema_version');
+    db.exec('CREATE INDEX idx_evidence_records_schema_version ON evidence_records (stored_at)');
+    db.close();
+    expect(() => new EvidenceStorage(makeConfig(dir, { databasePath: join(dir, 'adversarial.db') }))).toThrow(
+      StorageFormatError,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses an unexpected canonical index', () => {
+    const dir = tempDir();
+    createCanonicalBase(dir);
+    const db = new Database(join(dir, 'adversarial.db'));
+    db.exec('CREATE INDEX idx_evidence_records_extra ON evidence_records (evidence_schema_version)');
+    db.close();
+    expect(() => new EvidenceStorage(makeConfig(dir, { databasePath: join(dir, 'adversarial.db') }))).toThrow(
+      StorageFormatError,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses a malformed ledger table (missing value column)', () => {
+    const dir = tempDir();
+    createCanonicalBase(dir);
+    const db = new Database(join(dir, 'adversarial.db'));
+    db.exec('DROP TABLE evidence_storage_meta');
+    db.exec('CREATE TABLE evidence_storage_meta (key TEXT NOT NULL PRIMARY KEY)');
+    db.prepare('INSERT INTO evidence_storage_meta (key) VALUES (?)').run('evidence_storage_format_version');
+    db.close();
+    expect(() => new EvidenceStorage(makeConfig(dir, { databasePath: join(dir, 'adversarial.db') }))).toThrow(
+      StorageFormatError,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses duplicate ledger entries', () => {
+    // A ledger whose key column is not a PRIMARY KEY can hold duplicate
+    // format-version rows; the constructor must refuse the duplicate.
+    const dir = tempDir();
+    createCanonicalBase(dir);
+    const db = new Database(join(dir, 'adversarial.db'));
+    db.exec('DROP TABLE evidence_storage_meta');
+    db.exec('CREATE TABLE evidence_storage_meta (key TEXT, value TEXT NOT NULL)');
+    db.prepare('INSERT INTO evidence_storage_meta (key, value) VALUES (?, ?)').run(
+      'evidence_storage_format_version',
+      '1.0.0',
+    );
+    db.prepare('INSERT INTO evidence_storage_meta (key, value) VALUES (?, ?)').run(
+      'evidence_storage_format_version',
+      '1.0.0',
+    );
+    db.close();
+    expect(() => new EvidenceStorage(makeConfig(dir, { databasePath: join(dir, 'adversarial.db') }))).toThrow(
+      StorageFormatError,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses an unexpected canonical table', () => {
+    const dir = tempDir();
+    createCanonicalBase(dir);
+    const db = new Database(join(dir, 'adversarial.db'));
+    db.exec('CREATE TABLE evidence_extra (id TEXT PRIMARY KEY)');
+    db.close();
+    expect(() => new EvidenceStorage(makeConfig(dir, { databasePath: join(dir, 'adversarial.db') }))).toThrow(
+      StorageFormatError,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses without mutating schema, ledger, or journal mode', () => {
+    // Compatibility refusal must be side-effect free: a refused open leaves
+    // the schema, the ledger row, and the journal mode exactly as they were.
+    const dir = tempDir();
+    createCanonicalBase(dir);
+    const dbPath = join(dir, 'adversarial.db');
+    const db = new Database(dbPath);
+    db.prepare('UPDATE evidence_storage_meta SET value = ? WHERE key = ?').run(
+      '9.0.0',
+      'evidence_storage_format_version',
+    );
+    const beforeJournal = db.pragma('journal_mode', { simple: true });
+    const beforeSchema = JSON.stringify(db.prepare("SELECT name, type FROM sqlite_master ORDER BY name").all());
+    const beforeLedger = JSON.stringify(db.prepare('SELECT * FROM evidence_storage_meta').all());
+    db.close();
+
+    expect(() => new EvidenceStorage(makeConfig(dir, { databasePath: dbPath }))).toThrow(StorageFormatError);
+
+    const db2 = new Database(dbPath);
+    const afterJournal = db2.pragma('journal_mode', { simple: true });
+    const afterSchema = JSON.stringify(db2.prepare("SELECT name, type FROM sqlite_master ORDER BY name").all());
+    const afterLedger = JSON.stringify(db2.prepare('SELECT * FROM evidence_storage_meta').all());
+    db2.close();
+    expect(afterJournal).toBe(beforeJournal);
+    expect(afterJournal).not.toBe('wal');
+    expect(afterSchema).toBe(beforeSchema);
+    expect(afterLedger).toBe(beforeLedger);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('rolls back partially-created canonical objects when initialization fails', () => {
     // Force the init transaction to fail after it has already created one
     // canonical object: a pre-existing VIEW named evidence_records collides
     // with the canonical table name, so CREATE TABLE evidence_records throws
@@ -310,12 +597,12 @@ describe('EvidenceStorage schema initialization', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('reopens a compatible database without mutation', async () => {
+  it('reopens a compatible database without mutation', () => {
     const dir = tempDir();
     const config = makeConfig(dir);
     const s1 = new EvidenceStorage(config);
     const record = makeProofRecord();
-    await s1.saveEvidenceRecord(record);
+    s1.saveEvidenceRecord(record);
     s1.close();
     const s2 = new EvidenceStorage(config);
     const read = s2.getEvidenceRecord(record.trace.traceId);
@@ -324,7 +611,7 @@ describe('EvidenceStorage schema initialization', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('refuses to open when canonical tables exist without a ledger', async () => {
+  it('refuses to open when canonical tables exist without a ledger', () => {
     const dir = tempDir();
     const db = new Database(join(dir, 'test.db'));
     db.exec('CREATE TABLE evidence_records (id TEXT PRIMARY KEY)');
@@ -333,7 +620,7 @@ describe('EvidenceStorage schema initialization', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('refuses to open when the ledger names a higher format version', async () => {
+  it('refuses to open when the ledger names a higher format version', () => {
     const dir = tempDir();
     const db = new Database(join(dir, 'test.db'));
     db.exec('CREATE TABLE evidence_storage_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
@@ -343,7 +630,7 @@ describe('EvidenceStorage schema initialization', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('refuses to open when the ledger names a lower format version', async () => {
+  it('refuses to open when the ledger names a lower format version', () => {
     const dir = tempDir();
     const db = new Database(join(dir, 'test.db'));
     db.exec('CREATE TABLE evidence_storage_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
@@ -353,7 +640,7 @@ describe('EvidenceStorage schema initialization', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('leaves legacy tables untouched and coexists with TraceStorage', async () => {
+  it('leaves legacy tables untouched and coexists with TraceStorage', () => {
     const dir = tempDir();
     const traceStorage = new TraceStorage({ databasePath: join(dir, 'test.db') });
     traceStorage.saveTrace({
@@ -380,7 +667,7 @@ describe('EvidenceStorage schema initialization', () => {
     traceStorage.close();
     const storage = new EvidenceStorage(makeConfig(dir));
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     storage.close();
     const db = new Database(join(dir, 'test.db'));
     const legacy = db.prepare('SELECT id FROM traces').all() as { id: string }[];
@@ -404,9 +691,9 @@ describe('EvidenceStorage save and retrieve', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('stores a valid record and retrieves the serializer snapshot', async () => {
+  it('stores a valid record and retrieves the serializer snapshot', () => {
     const record = makeProofRecord();
-    const save = await storage.saveEvidenceRecord(record);
+    const save = storage.saveEvidenceRecord(record);
     expect(save.status).toBe('stored');
     const parsedSnapshot = parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(record)));
     expect(parsedSnapshot.ok).toBe(true);
@@ -418,21 +705,21 @@ describe('EvidenceStorage save and retrieve', () => {
     expect(read.record).toEqual(snapshot);
   });
 
-  it('preserves the exact serialized-record text', async () => {
+  it('preserves the exact serialized-record text', () => {
     const record = makeProofRecord();
     const expected = serializeEvidenceRecord(record);
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     const db = new Database(join(dir, 'test.db'));
     const row = db.prepare('SELECT serialized_record FROM evidence_records WHERE evidence_identity = ?').get(record.trace.traceId) as { serialized_record: string };
     db.close();
     expect(row.serialized_record).toBe(expected);
   });
 
-  it('returns already-present for a byte-identical repeat', async () => {
+  it('returns already-present for a byte-identical repeat', () => {
     const record = makeProofRecord();
-    const first = await storage.saveEvidenceRecord(record);
+    const first = storage.saveEvidenceRecord(record);
     expect(first.status).toBe('stored');
-    const second = await storage.saveEvidenceRecord(record);
+    const second = storage.saveEvidenceRecord(record);
     expect(second.status).toBe('already-present');
     const db = new Database(join(dir, 'test.db'));
     const count = (db.prepare('SELECT COUNT(*) AS c FROM evidence_records').get() as { c: number }).c;
@@ -440,9 +727,9 @@ describe('EvidenceStorage save and retrieve', () => {
     expect(count).toBe(1);
   });
 
-  it('returns conflict for same identity with different text', async () => {
+  it('returns conflict for same identity with different text', () => {
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     const modified = makeProofRecord({
       extra: {
         trace: {
@@ -451,7 +738,7 @@ describe('EvidenceStorage save and retrieve', () => {
         },
       },
     });
-    const outcome = await storage.saveEvidenceRecord(modified);
+    const outcome = storage.saveEvidenceRecord(modified);
     expect(outcome.status).toBe('conflict');
     const read = storage.getEvidenceRecord(record.trace.traceId);
     expect(read.ok).toBe(true);
@@ -459,13 +746,13 @@ describe('EvidenceStorage save and retrieve', () => {
     expect(read.record.trace.captureProfile.name).toBe('dev-basic');
   });
 
-  it('decides idempotency by exact stored text, never by digest equality', async () => {
+  it('decides idempotency by exact stored text, never by digest equality', () => {
     // Regression: even when the persisted row's recorded digest coincides with
     // the supplied document's digest (a simulated collision), different text
     // for the same identity MUST be a conflict. The deciding comparison is
     // exact stored-text equality, never digest equality (spec 015).
     const record = makeProofRecord();
-    const first = await storage.saveEvidenceRecord(record);
+    const first = storage.saveEvidenceRecord(record);
     expect(first.status).toBe('stored');
 
     const conflicting = makeProofRecord({
@@ -491,29 +778,29 @@ describe('EvidenceStorage save and retrieve', () => {
 
     // Digests coincide but texts differ: must be a structured conflict, never
     // a false idempotent `already-present`.
-    const outcome = await storage.saveEvidenceRecord(conflicting);
+    const outcome = storage.saveEvidenceRecord(conflicting);
     expect(outcome.status).toBe('conflict');
   });
 
-  it('computes the digest over the exact UTF-8 bytes of the serializer output', async () => {
+  it('computes the digest over the exact UTF-8 bytes of the serializer output', () => {
     const record = makeProofRecord();
     const doc = serializeEvidenceRecord(record);
     const expected = sha256Hex(utf8Encode(doc));
-    const save = await storage.saveEvidenceRecord(record) as Extract<SaveOutcome, { status: 'stored' }>;
+    const save = storage.saveEvidenceRecord(record) as Extract<SaveOutcome, { status: 'stored' }>;
     expect(save.status).toBe('stored');
     expect(save.digest).toBe(expected);
   });
 
-  it('returns not-found for an unknown identity', async () => {
+  it('returns not-found for an unknown identity', () => {
     const result = storage.getEvidenceRecord('nonexistent');
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('not-found');
   });
 
-  it('returns stored evidence with a manifest', async () => {
+  it('returns stored evidence with a manifest', () => {
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     const result = storage.getStoredEvidence(record.trace.traceId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -523,7 +810,7 @@ describe('EvidenceStorage save and retrieve', () => {
     expect(result.manifest.storedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
 
-  it('keeps persistence-policy metadata out of the stored document', async () => {
+  it('keeps persistence-policy metadata out of the stored document', () => {
     // Policy name/version live only in administrative metadata (manifest and
     // columns), never inside the serialized document (spec 015). Use a custom
     // policy whose name/version cannot coincide with any record content.
@@ -536,7 +823,7 @@ describe('EvidenceStorage save and retrieve', () => {
     storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: distinctivePolicy }));
 
     const record = makeProofRecord();
-    const save = await storage.saveEvidenceRecord(record);
+    const save = storage.saveEvidenceRecord(record);
     expect(save.status).toBe('stored');
     if (save.status !== 'stored') return;
     expect(save.manifest.persistencePolicy).toEqual({
@@ -561,19 +848,19 @@ describe('EvidenceStorage save and retrieve', () => {
     expect(row.serialized_record).not.toContain('9.8.7');
   });
 
-  it('survives close and reopen', async () => {
+  it('survives close and reopen', () => {
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     storage.close();
     storage = new EvidenceStorage(makeConfig(dir));
     const read = storage.getEvidenceRecord(record.trace.traceId);
     expect(read.ok).toBe(true);
   });
 
-  it('rolls back a failed save without partial state', async () => {
+  it('rolls back a failed save without partial state', () => {
     // Force a conflict on an otherwise valid save by pre-seeding with a different document for the same identity.
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     const modified = makeProofRecord({
       extra: {
         trace: {
@@ -582,7 +869,7 @@ describe('EvidenceStorage save and retrieve', () => {
         },
       },
     });
-    const outcome = await storage.saveEvidenceRecord(modified);
+    const outcome = storage.saveEvidenceRecord(modified);
     expect(outcome.status).toBe('conflict');
     const db = new Database(join(dir, 'test.db'));
     const count = (db.prepare('SELECT COUNT(*) AS c FROM evidence_records').get() as { c: number }).c;
@@ -605,41 +892,41 @@ describe('EvidenceStorage save pipeline outcomes', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('returns invalid for non-object input', async () => {
-    const outcome = await storage.saveEvidenceRecord('not an object');
+  it('returns invalid for non-object input', () => {
+    const outcome = storage.saveEvidenceRecord('not an object');
     expect(outcome.status).toBe('invalid');
     if (outcome.status !== 'invalid') return;
     expect(outcome.issues).toEqual([{ code: 'record_not_object', path: '$' }]);
     expect(outcome.identity).toBeNull();
   });
 
-  it('returns invalid for null input', async () => {
-    const outcome = await storage.saveEvidenceRecord(null);
+  it('returns invalid for null input', () => {
+    const outcome = storage.saveEvidenceRecord(null);
     expect(outcome.status).toBe('invalid');
   });
 
-  it('returns invalid for malformed version syntax', async () => {
-    const outcome = await storage.saveEvidenceRecord({ evidenceSchemaVersion: 'not-a-version' });
+  it('returns invalid for malformed version syntax', () => {
+    const outcome = storage.saveEvidenceRecord({ evidenceSchemaVersion: 'not-a-version' });
     expect(outcome.status).toBe('invalid');
   });
 
-  it('returns unsupported-version for unsupported major', async () => {
-    const outcome = await storage.saveEvidenceRecord({ evidenceSchemaVersion: '99.0.0' });
+  it('returns unsupported-version for unsupported major', () => {
+    const outcome = storage.saveEvidenceRecord({ evidenceSchemaVersion: '99.0.0' });
     expect(outcome.status).toBe('unsupported-version');
     if (outcome.status !== 'unsupported-version') return;
     expect(outcome.version).toBe('99.0.0');
   });
 
-  it('does not write for invalid or unsupported-version outcomes', async () => {
-    await storage.saveEvidenceRecord('bad');
-    await storage.saveEvidenceRecord({ evidenceSchemaVersion: '99.0.0' });
+  it('does not write for invalid or unsupported-version outcomes', () => {
+    storage.saveEvidenceRecord('bad');
+    storage.saveEvidenceRecord({ evidenceSchemaVersion: '99.0.0' });
     const db = new Database(join(dir, 'test.db'));
     const count = (db.prepare('SELECT COUNT(*) AS c FROM evidence_records').get() as { c: number }).c;
     db.close();
     expect(count).toBe(0);
   });
 
-  it('returns clock-failed for a throwing clock on new insertion', async () => {
+  it('returns clock-failed for a throwing clock on new insertion', () => {
     const record = makeProofRecord();
     const throwingStorage = new EvidenceStorage({
       databasePath: join(dir, 'throw.db'),
@@ -648,7 +935,7 @@ describe('EvidenceStorage save pipeline outcomes', () => {
         throw new Error('clock failed');
       },
     });
-    const outcome = await throwingStorage.saveEvidenceRecord(record);
+    const outcome = throwingStorage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('clock-failed');
     throwingStorage.close();
     const db = new Database(join(dir, 'throw.db'));
@@ -657,9 +944,9 @@ describe('EvidenceStorage save pipeline outcomes', () => {
     expect(count).toBe(0);
   });
 
-  it('does not consult the clock for an existing row', async () => {
+  it('does not consult the clock for an existing row', () => {
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     let called = false;
     const throwingStorage = new EvidenceStorage({
       databasePath: join(dir, 'test.db'),
@@ -669,19 +956,19 @@ describe('EvidenceStorage save pipeline outcomes', () => {
         throw new Error('clock failed');
       },
     });
-    const outcome = await throwingStorage.saveEvidenceRecord(record);
+    const outcome = throwingStorage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('already-present');
     expect(called).toBe(false);
     throwingStorage.close();
   });
 
-  it('returns policy-rejected for a rejecting policy', async () => {
+  it('returns policy-rejected for a rejecting policy', () => {
     const record = makeProofRecord();
     const rejectingStorage = new EvidenceStorage({
       databasePath: join(dir, 'reject.db'),
       persistencePolicy: ALWAYS_REJECT,
     });
-    const outcome = await rejectingStorage.saveEvidenceRecord(record);
+    const outcome = rejectingStorage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-rejected');
     if (outcome.status !== 'policy-rejected') return;
     expect(outcome.code).toBe('rejected');
@@ -689,13 +976,13 @@ describe('EvidenceStorage save pipeline outcomes', () => {
     rejectingStorage.close();
   });
 
-  it('does not write for policy-rejected outcomes', async () => {
+  it('does not write for policy-rejected outcomes', () => {
     const record = makeProofRecord();
     const rejectingStorage = new EvidenceStorage({
       databasePath: join(dir, 'reject.db'),
       persistencePolicy: ALWAYS_REJECT,
     });
-    await rejectingStorage.saveEvidenceRecord(record);
+    rejectingStorage.saveEvidenceRecord(record);
     rejectingStorage.close();
     const db = new Database(join(dir, 'reject.db'));
     const count = (db.prepare('SELECT COUNT(*) AS c FROM evidence_records').get() as { c: number }).c;
@@ -729,67 +1016,67 @@ describe('Storage safety gate', () => {
     };
   }
 
-  it('rejects credential-like value with S1', async () => {
+  it('rejects credential-like value with S1', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].payload = dangerousPayload({ someBody: 'Bearer abc123' });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S1']);
   });
 
-  it('rejects sensitive header key with S2 regardless of value', async () => {
+  it('rejects sensitive header key with S2 regardless of value', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].payload = dangerousPayload({ authorization: 'anything' });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S2']);
   });
 
-  it('rejects sensitive key name with S3 when value is not credential-like', async () => {
+  it('rejects sensitive key name with S3 when value is not credential-like', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].payload = dangerousPayload({ password: 'not-a-secret' });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S3']);
   });
 
-  it('rejects storageKey with S3', async () => {
+  it('rejects storageKey with S3', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].payload = dangerousPayload({ storageKey: 's3://bucket/key' });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S3']);
   });
 
-  it('gives S2 precedence over S1 for sensitive-header keys', async () => {
+  it('gives S2 precedence over S1 for sensitive-header keys', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].payload = dangerousPayload({ authorization: 'Bearer abc123' });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S2']);
   });
 
-  it('gives S1 precedence over S3 for sensitive-key with credential-like value', async () => {
+  it('gives S1 precedence over S3 for sensitive-key with credential-like value', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].payload = dangerousPayload({ password: 'Bearer abc123' });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S1']);
   });
 
-  it('rejects byte_faithful captured envelope with S5', async () => {
+  it('rejects byte_faithful captured envelope with S5', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].evidenceStatus = 'captured';
     (record.rawObservations as EvidenceObservation[])[2].payload = {
@@ -803,13 +1090,13 @@ describe('Storage safety gate', () => {
       },
     };
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S5']);
   });
 
-  it('rejects captured structurally_faithful envelope carrying providerNative with S5', async () => {
+  it('rejects captured structurally_faithful envelope carrying providerNative with S5', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].evidenceStatus = 'captured';
     (record.rawObservations as EvidenceObservation[])[2].payload = {
@@ -821,13 +1108,13 @@ describe('Storage safety gate', () => {
       },
     };
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S5']);
   });
 
-  it('does not reject declared redacted payload with providerNativeFidelity', async () => {
+  it('does not reject declared redacted payload with providerNativeFidelity', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].evidenceStatus = 'redacted';
     (record.rawObservations as EvidenceObservation[])[2].payload = {
@@ -839,32 +1126,32 @@ describe('Storage safety gate', () => {
       },
     };
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('stored');
   });
 
-  it('short-circuits on retained bytes with exactly S6', async () => {
+  it('short-circuits on retained bytes with exactly S6', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].payload = dangerousPayload({ secretBytes: new Uint8Array([1, 2, 3]) });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S6']);
   });
 
-  it('rejects Uint8Array in declared redacted content', async () => {
+  it('rejects Uint8Array in declared redacted content', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].evidenceStatus = 'redacted';
     (record.rawObservations as EvidenceObservation[])[2].payload = dangerousPayload({ raw: new Uint8Array([1, 2, 3]) });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S6']);
   });
 
-  it('deduplicates and orders safety codes canonically', async () => {
+  it('deduplicates and orders safety codes canonically', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].payload = dangerousPayload({
       password: 'not-a-secret',
@@ -872,7 +1159,7 @@ describe('Storage safety gate', () => {
       authorization: 'Bearer xyz',
     });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('safety-rejected');
     if (outcome.status !== 'safety-rejected') return;
     expect(outcome.reasons).toEqual(['S1', 'S2', 'S3']);
@@ -893,13 +1180,13 @@ describe('metadata-safe reference policy', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('admits the proof record', async () => {
+  it('admits the proof record', () => {
     const record = makeProofRecord();
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('stored');
   });
 
-  it('rejects captured user/provider content', async () => {
+  it('rejects captured user/provider content', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].evidenceStatus = 'captured';
     (record.rawObservations as EvidenceObservation[])[2].payload = {
@@ -912,13 +1199,13 @@ describe('metadata-safe reference policy', () => {
       contextContributions: [],
     };
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('policy-rejected');
     if (outcome.status !== 'policy-rejected') return;
     expect(outcome.code).toBe('captured-content');
   });
 
-  it('rejects unbounded label', async () => {
+  it('rejects unbounded label', () => {
     const record = makeProofRecord();
     const obs = record.rawObservations[1];
     if (!obs || obs.kind !== 'span_start' || !obs.payload || typeof obs.payload !== 'object') {
@@ -926,33 +1213,33 @@ describe('metadata-safe reference policy', () => {
     }
     (obs.payload as Record<string, unknown>).span = { kind: 'model', name: 'x'.repeat(200), parentSpanId: null };
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('policy-rejected');
     if (outcome.status !== 'policy-rejected') return;
     expect(outcome.code).toBe('unbounded-label');
   });
 
-  it('rejects condition value that is not null', async () => {
+  it('rejects condition value that is not null', () => {
     let record = makeProofRecord();
     record = rebuildRecord(record);
     record.trace.conditions = [{ label: 'env', value: 'production', version: '1.0.0' }];
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-rejected');
     if (outcome.status !== 'policy-rejected') return;
     expect(outcome.code).toBe('captured-content');
   });
 
-  it('rejects unknown additive field at undeclared path', async () => {
+  it('rejects unknown additive field at undeclared path', () => {
     let record = makeProofRecord();
     record = rebuildRecord(record);
     (record as unknown as Record<string, unknown>)['extraTopLevel'] = 'value';
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-rejected');
     if (outcome.status !== 'policy-rejected') return;
     expect(outcome.code).toBe('unknown-additive-field');
   });
 
-  it('rejects responseEnvelope.usage outside the numeric allowlist', async () => {
+  it('rejects responseEnvelope.usage outside the numeric allowlist', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[3].payload = {
       responseEnvelope: {
@@ -962,13 +1249,13 @@ describe('metadata-safe reference policy', () => {
       },
     };
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('policy-rejected');
     if (outcome.status !== 'policy-rejected') return;
     expect(outcome.code).toBe('captured-content');
   });
 
-  it('rejects model_usage.usage token as plain number', async () => {
+  it('rejects model_usage.usage token as plain number', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[5] = makeObservation({
       kind: 'model_usage',
@@ -981,15 +1268,318 @@ describe('metadata-safe reference policy', () => {
       },
     });
     const parsed = { ok: true, record: rebuildRecord(record) };
-    const outcome = await storage.saveEvidenceRecord(parsed.record);
+    const outcome = storage.saveEvidenceRecord(parsed.record);
     expect(outcome.status).toBe('policy-rejected');
     if (outcome.status !== 'policy-rejected') return;
     expect(outcome.code).toBe('captured-content');
   });
 });
 
+// ---------------------------------------------------------------------------
+// Metadata-safe policy matrix (spec 015 §5): every event kind, in both raw
+// (observation payload) and projected (derived event) representations, with
+// the normative cells: null control payloads, optional exitCode/topK/
+// resultCount, nested usage allowlist, analysis/completeness, and unknown
+// nested fields failing closed.
+// ---------------------------------------------------------------------------
+type MatrixRow = {
+  kind: EventKind;
+  /** Conforming payload (null for lifecycle control kinds). */
+  payload: Record<string, unknown> | null;
+  /** Removes the schema-optional field for the optionality cell. */
+  withoutOptional?: (payload: Record<string, unknown>) => void;
+  /** Injects an unknown nested field for the fail-closed cell. */
+  injectUnknown?: (payload: Record<string, unknown>) => void;
+};
+
+const POLICY_MATRIX: MatrixRow[] = [
+  { kind: 'interaction_start', payload: null },
+  { kind: 'interaction_end', payload: null },
+  { kind: 'span_start', payload: { span: { kind: 'model', name: 'model:claude-sonnet-4', parentSpanId: null } } },
+  { kind: 'span_end', payload: { durationMs: 3000 } },
+  {
+    kind: 'model_request',
+    payload: {
+      requestEnvelope: { model: 'claude-sonnet-4', provider: 'anthropic', providerNativeFidelity: 'structurally_faithful' },
+      contextContributions: [],
+    },
+    injectUnknown: (p) => {
+      (p['contextContributions'] as unknown[]).push({ artifactId: 'a-1', locator: { type: 'whole' }, position: 0, provenanceState: 'recorded', extra: 'x' });
+    },
+  },
+  {
+    kind: 'model_response',
+    payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', finishReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 2 } } },
+    injectUnknown: (p) => {
+      (p['responseEnvelope'] as Record<string, unknown>)['usage'] = { inputTokens: 1, extra: 'x' };
+    },
+  },
+  {
+    kind: 'model_response_chunk',
+    payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', chunkIndex: 0 } },
+  },
+  {
+    kind: 'model_usage',
+    payload: { usage: { evidenceStatus: 'captured', inputTokens: { value: 3 }, outputTokens: { value: 1 } } },
+    injectUnknown: (p) => {
+      (p['usage'] as Record<string, unknown>)['totalTokens'] = 7; // plain number, not UsageValue
+    },
+  },
+  {
+    kind: 'tool_call',
+    payload: { tool: { name: 'tool-x', arguments: null } },
+    injectUnknown: (p) => {
+      (p['tool'] as Record<string, unknown>)['extra'] = 'x';
+    },
+  },
+  {
+    kind: 'tool_result',
+    payload: { toolResult: { exitCode: 0, stdout: null, stderr: null } },
+    withoutOptional: (p) => {
+      delete (p['toolResult'] as Record<string, unknown>)['exitCode'];
+    },
+    injectUnknown: (p) => {
+      (p['toolResult'] as Record<string, unknown>)['extra'] = 'x';
+    },
+  },
+  {
+    kind: 'mcp_request',
+    payload: { mcp: { server: 'srv', tool: 'tool-x', arguments: null } },
+    injectUnknown: (p) => {
+      (p['mcp'] as Record<string, unknown>)['extra'] = 'x';
+    },
+  },
+  {
+    kind: 'mcp_result',
+    payload: { mcpResult: { content: null } },
+    injectUnknown: (p) => {
+      (p['mcpResult'] as Record<string, unknown>)['extra'] = 'x';
+    },
+  },
+  {
+    kind: 'retrieval_request',
+    payload: { retrieval: { query: 'find x', topK: 5 } },
+    withoutOptional: (p) => {
+      delete (p['retrieval'] as Record<string, unknown>)['topK'];
+    },
+    injectUnknown: (p) => {
+      p['extraTop'] = 'x';
+    },
+  },
+  {
+    kind: 'retrieval_result',
+    payload: { retrievalResult: { query: 'find x', resultCount: 3 } },
+    withoutOptional: (p) => {
+      delete (p['retrievalResult'] as Record<string, unknown>)['resultCount'];
+    },
+    injectUnknown: (p) => {
+      p['extraTop'] = 'x';
+    },
+  },
+  {
+    kind: 'context_provider_request',
+    payload: { contextProvider: { name: 'provider-x', kind: 'file' } },
+    injectUnknown: (p) => {
+      (p['contextProvider'] as Record<string, unknown>)['extra'] = 'x';
+    },
+  },
+  {
+    kind: 'context_provider_result',
+    payload: { contextProvider: { name: 'provider-x', kind: 'file' } },
+    injectUnknown: (p) => {
+      (p['contextProvider'] as Record<string, unknown>)['extra'] = 'x';
+    },
+  },
+  {
+    kind: 'context_assembled',
+    payload: { contextContributions: [] },
+    injectUnknown: (p) => {
+      (p['contextContributions'] as unknown[]).push({ artifactId: 'a-1', locator: { type: 'whole' }, position: 0, provenanceState: 'recorded', extra: 'x' });
+    },
+  },
+  {
+    kind: 'error',
+    payload: { actor: 'tool', lifecycleTarget: 'trace', lifecycleEffect: 'fail', error: { type: 'timeout' } },
+    injectUnknown: (p) => {
+      (p['error'] as Record<string, unknown>)['extra'] = 'x';
+    },
+  },
+  {
+    kind: 'cancelled',
+    payload: { lifecycleTarget: 'trace', lifecycleEffect: 'cancel', cancellation: { requestedBy: 'user' } },
+    injectUnknown: (p) => {
+      (p['cancellation'] as Record<string, unknown>)['extra'] = 'x';
+    },
+  },
+  {
+    kind: 'retry',
+    payload: { retry: { originalRequestEventId: 'evt-model_request-2', attempt: 2 } },
+    injectUnknown: (p) => {
+      (p['retry'] as Record<string, unknown>)['extra'] = 'x';
+    },
+  },
+];
+
+// fallow-ignore-next-line complexity
+function recordWithKind(kind: EventKind, payload: Record<string, unknown> | null): EvidenceRecord {
+  const record = makeProofRecord();
+  if (kind === 'interaction_start' || kind === 'interaction_end' || kind === 'span_start' || kind === 'span_end') {
+    const obs = record.rawObservations.find((o) => o.kind === kind);
+    if (!obs) throw new Error(`base record missing ${kind} observation`);
+    if (payload !== null) {
+      obs.payload = payload as EvidenceObservation['payload'];
+    }
+    return rebuildRecord(record);
+  }
+  if (kind === 'error' || kind === 'cancelled') {
+    // Terminal lifecycle events must be the final applicable event: build a
+    // minimal interaction that ends with the error/cancellation targeting the
+    // trace (mirrors the evidence lifecycle fixtures; spec 014 §4.7).
+    const observations: EvidenceObservation[] = [
+      makeObservation({ kind: 'interaction_start', seq: 0, traceId: record.trace.traceId, payload: null }),
+      makeObservation({
+        kind: 'span_start',
+        seq: 1,
+        traceId: record.trace.traceId,
+        spanId: 'sp-1',
+        payload: { span: { kind: 'model', name: 'model:claude-sonnet-4', parentSpanId: null } },
+      }),
+      makeObservation({ kind, seq: 2, traceId: record.trace.traceId, spanId: null, payload }),
+    ];
+    return rebuildRecord({ ...record, rawObservations: observations });
+  }
+  const observations = [...record.rawObservations];
+  if (kind === 'retry') {
+    // A retry must reference an existing request event; keep the base record's
+    // model_request (evt-model_request-2) and place the retry after it.
+    observations[3] = makeObservation({
+      kind,
+      seq: 3,
+      traceId: record.trace.traceId,
+      spanId: 'span-1',
+      observationRole: 'application_constructed',
+      evidenceStatus: 'captured',
+      payload,
+    });
+  } else if (kind === 'retrieval_request' || kind === 'retrieval_result') {
+    // These payloads carry required content (query); mark the observation
+    // declared so the reference policy admits it.
+    observations[2] = makeObservation({
+      kind,
+      seq: 2,
+      traceId: record.trace.traceId,
+      spanId: 'span-1',
+      observationRole: 'application_constructed',
+      evidenceStatus: 'redacted',
+      payload,
+    });
+  } else {
+    observations[2] = makeObservation({
+      kind,
+      seq: 2,
+      traceId: record.trace.traceId,
+      spanId: 'span-1',
+      observationRole: 'application_constructed',
+      evidenceStatus: 'captured',
+      payload,
+    });
+  }
+  return rebuildRecord({ ...record, rawObservations: observations });
+}
+
+describe('metadata-safe policy matrix', () => {
+  let dir: string;
+  let storage: EvidenceStorage;
+
+  beforeEach(() => {
+    dir = tempDir();
+    storage = new EvidenceStorage(makeConfig(dir));
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each(POLICY_MATRIX)('admits every event kind with a conforming payload: $kind', ({ kind, payload }) => {
+    // The same save exercises both the raw observation path and the derived
+    // projected event path; both must admit the conforming payload.
+    const record = recordWithKind(kind, payload);
+    const outcome = storage.saveEvidenceRecord(record);
+    expect(outcome.status).toBe('stored');
+  });
+
+  it.each(POLICY_MATRIX.filter((row) => row.withoutOptional))(
+    'admits $kind with its schema-optional field absent',
+    ({ kind, payload, withoutOptional }) => {
+      const cloned = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+      withoutOptional?.(cloned);
+      const record = recordWithKind(kind, cloned);
+      const outcome = storage.saveEvidenceRecord(record);
+      expect(outcome.status).toBe('stored');
+    },
+  );
+
+  it.each(POLICY_MATRIX.filter((row) => row.injectUnknown))(
+    'fails closed on an unknown nested field: $kind',
+    ({ kind, payload, injectUnknown }) => {
+      const cloned = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+      injectUnknown?.(cloned);
+      const record = recordWithKind(kind, cloned);
+      const outcome = storage.saveEvidenceRecord(record);
+      expect(outcome.status).toBe('policy-rejected');
+    },
+  );
+
+  it('admits nested response usage only from the numeric allowlist', () => {
+    const ok = recordWithKind('model_response', {
+      responseEnvelope: {
+        providerNativeFidelity: 'structurally_faithful',
+        finishReason: 'end_turn',
+        usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+      },
+    });
+    expect(storage.saveEvidenceRecord(ok).status).toBe('stored');
+
+    const extra = recordWithKind('model_response', {
+      responseEnvelope: {
+        providerNativeFidelity: 'structurally_faithful',
+        finishReason: 'end_turn',
+        usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3, extra: 'x' },
+      },
+    });
+    const rejected = storage.saveEvidenceRecord(extra);
+    expect(rejected.status).toBe('policy-rejected');
+    if (rejected.status !== 'policy-rejected') return;
+    expect(rejected.code).toBe('captured-content');
+  });
+
+  it('classifies analysis and completeness records under the reference policy', () => {
+    const record = makeProofRecord();
+    const outcome = storage.saveEvidenceRecord(record);
+    expect(outcome.status).toBe('stored');
+    if (outcome.status !== 'stored') return;
+
+    // Unknown additive field on the analysis object fails closed.
+    const badAnalysis = rebuildRecord(makeProofRecord());
+    (badAnalysis.analysis as unknown as Record<string, unknown>)['extraField'] = 'x';
+    const rejectedAnalysis = storage.saveEvidenceRecord(badAnalysis);
+    expect(rejectedAnalysis.status).toBe('policy-rejected');
+    if (rejectedAnalysis.status !== 'policy-rejected') return;
+    expect(rejectedAnalysis.code).toBe('unknown-additive-field');
+
+    // Unknown additive field on the completeness object fails closed.
+    const badCompleteness = rebuildRecord(makeProofRecord());
+    (badCompleteness.completeness as unknown as Record<string, unknown>)['extraField'] = 'x';
+    const rejectedCompleteness = storage.saveEvidenceRecord(badCompleteness);
+    expect(rejectedCompleteness.status).toBe('policy-rejected');
+    if (rejectedCompleteness.status !== 'policy-rejected') return;
+    expect(rejectedCompleteness.code).toBe('unknown-additive-field');
+  });
+});
+
 describe('Policy decision runtime validation', () => {
-  it('rejects a policy returning a secret as its code', async () => {
+  it('rejects a policy returning a secret as its code', () => {
     const dir = tempDir();
     const evilPolicy: PersistencePolicy = {
       name: 'test.evil',
@@ -998,7 +1588,7 @@ describe('Policy decision runtime validation', () => {
     };
     const storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: evilPolicy }));
     const record = makeProofRecord();
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-failed');
     if (outcome.status !== 'policy-failed') return;
     expect(outcome.reason).toBe('malformed-decision');
@@ -1006,7 +1596,7 @@ describe('Policy decision runtime validation', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('rejects a thenable policy decision', async () => {
+  it('rejects a thenable policy decision', () => {
     const dir = tempDir();
     const thenablePolicy: PersistencePolicy = {
       name: 'test.thenable',
@@ -1015,13 +1605,13 @@ describe('Policy decision runtime validation', () => {
     };
     const storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: thenablePolicy }));
     const record = makeProofRecord();
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-failed');
     storage.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('rejects a policy decision with a symbol own key', async () => {
+  it('rejects a policy decision with a symbol own key', () => {
     const dir = tempDir();
     const symbolPolicy: PersistencePolicy = {
       name: 'test.symbol',
@@ -1034,13 +1624,13 @@ describe('Policy decision runtime validation', () => {
     };
     const storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: symbolPolicy }));
     const record = makeProofRecord();
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-failed');
     storage.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('rejects a policy decision with an accessor descriptor', async () => {
+  it('rejects a policy decision with an accessor descriptor', () => {
     const dir = tempDir();
     const accessorPolicy: PersistencePolicy = {
       name: 'test.accessor',
@@ -1057,13 +1647,13 @@ describe('Policy decision runtime validation', () => {
     };
     const storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: accessorPolicy }));
     const record = makeProofRecord();
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-failed');
     storage.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('rejects a non-boolean accept value', async () => {
+  it('rejects a non-boolean accept value', () => {
     const dir = tempDir();
     const badPolicy: PersistencePolicy = {
       name: 'test.bad',
@@ -1072,13 +1662,13 @@ describe('Policy decision runtime validation', () => {
     };
     const storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: badPolicy }));
     const record = makeProofRecord();
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-failed');
     storage.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('rejects a missing code on rejection', async () => {
+  it('rejects a missing code on rejection', () => {
     const dir = tempDir();
     const missingCodePolicy: PersistencePolicy = {
       name: 'test.missing',
@@ -1087,13 +1677,13 @@ describe('Policy decision runtime validation', () => {
     };
     const storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: missingCodePolicy }));
     const record = makeProofRecord();
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-failed');
     storage.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('rejects a throwing policy without leaking the exception', async () => {
+  it('rejects a throwing policy without leaking the exception', () => {
     const dir = tempDir();
     const throwingPolicy: PersistencePolicy = {
       name: 'test.throwing',
@@ -1104,7 +1694,7 @@ describe('Policy decision runtime validation', () => {
     };
     const storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: throwingPolicy }));
     const record = makeProofRecord();
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-failed');
     if (outcome.status !== 'policy-failed') return;
     expect(outcome.reason).toBe('exception');
@@ -1114,7 +1704,7 @@ describe('Policy decision runtime validation', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('isolates a mutating policy from the stored document', async () => {
+  it('isolates a mutating policy from the stored document', () => {
     const dir = tempDir();
     const record = makeProofRecord();
     const originalTraceId = record.trace.traceId;
@@ -1127,7 +1717,7 @@ describe('Policy decision runtime validation', () => {
       },
     };
     const storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: mutatingPolicy }));
-    const outcome = await storage.saveEvidenceRecord(record);
+    const outcome = storage.saveEvidenceRecord(record);
     expect(outcome.status).toBe('policy-failed');
     if (outcome.status !== 'policy-failed') return;
     expect(outcome.reason).toBe('exception');
@@ -1139,7 +1729,7 @@ describe('Policy decision runtime validation', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('is deterministic: the same malformed decision produces the identical outcome every time', async () => {
+  it('is deterministic: the same malformed decision produces the identical outcome every time', () => {
     const dir = tempDir();
     const malformedPolicy: PersistencePolicy = {
       name: 'test.malformed',
@@ -1148,8 +1738,8 @@ describe('Policy decision runtime validation', () => {
     };
     const storage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: malformedPolicy }));
     const record = makeProofRecord();
-    const first = await storage.saveEvidenceRecord(record);
-    const second = await storage.saveEvidenceRecord(record);
+    const first = storage.saveEvidenceRecord(record);
+    const second = storage.saveEvidenceRecord(record);
     expect(first.status).toBe('policy-failed');
     expect(second.status).toBe('policy-failed');
     // Identical structured outcome, never a throw and never a leaked value.
@@ -1170,11 +1760,11 @@ describe('Read integrity', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('returns corrupt for malformed JSON', async () => {
+  it('returns corrupt for malformed JSON', () => {
     dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     storage.close();
     const db = new Database(join(dir, 'test.db'));
     db.prepare('UPDATE evidence_records SET serialized_record = ?').run('not-json');
@@ -1189,11 +1779,11 @@ describe('Read integrity', () => {
     expect(result.code).toBe('json_parse_failed');
   });
 
-  it('returns corrupt for a digest mismatch', async () => {
+  it('returns corrupt for a digest mismatch', () => {
     dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     storage.close();
     const db = new Database(join(dir, 'test.db'));
     db.prepare('UPDATE evidence_records SET storage_digest = ?').run('0'.repeat(64));
@@ -1208,11 +1798,11 @@ describe('Read integrity', () => {
     expect(result.code).toBe('digest_mismatch');
   });
 
-  it('returns corrupt for tampered policy metadata', async () => {
+  it('returns corrupt for tampered policy metadata', () => {
     dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     storage.close();
     const db = new Database(join(dir, 'test.db'));
     db.prepare('UPDATE evidence_records SET persistence_policy_version = ?').run('1.0.0-beta');
@@ -1227,11 +1817,11 @@ describe('Read integrity', () => {
     expect(result.code).toBe('policy_metadata_malformed');
   });
 
-  it('returns corrupt for mismatched row identity', async () => {
+  it('returns corrupt for mismatched row identity', () => {
     dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     storage.close();
     const db = new Database(join(dir, 'test.db'));
     db.prepare('UPDATE evidence_records SET evidence_identity = ?').run('tampered');
@@ -1246,11 +1836,11 @@ describe('Read integrity', () => {
     expect(result.code).toBe('identity_mismatch');
   });
 
-  it('returns unsupported-version for a byte-intact unsupported-major document', async () => {
+  it('returns unsupported-version for a byte-intact unsupported-major document', () => {
     dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     storage.close();
     const unsupportedDoc = { ...record, evidenceSchemaVersion: '99.0.0' };
     const docText = JSON.stringify(unsupportedDoc);
@@ -1268,11 +1858,11 @@ describe('Read integrity', () => {
     expect(result.version).toBe('99.0.0');
   });
 
-  it('returns corrupt when unsupported-major document has mismatched schema-version column', async () => {
+  it('returns corrupt when unsupported-major document has mismatched schema-version column', () => {
     dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
     storage.close();
     const unsupportedDoc = { ...record, evidenceSchemaVersion: '99.0.0' };
     const docText = JSON.stringify(unsupportedDoc);
@@ -1292,7 +1882,7 @@ describe('Read integrity', () => {
 });
 
 describe('WAL and contention', () => {
-  it('enables WAL journaling', async () => {
+  it('enables WAL journaling', () => {
     const dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const db = new Database(join(dir, 'test.db'));
@@ -1303,135 +1893,108 @@ describe('WAL and contention', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('allows concurrent saves on different identities', async () => {
+  it('handles a concurrent write on a different identity without interference', async () => {
+    // Genuine two-connection contention on one WAL database: the worker's own
+    // connection holds a write lock (barrier: 'locked' received before the
+    // save starts) while the storage saves a different identity. The worker
+    // commits on its own event loop ('committed' is received only after the
+    // save returns, FIFO from the same worker), so the two writers provably
+    // overlapped; both rows must exist and both saves must succeed.
     const dir = tempDir();
-    const storage1 = new EvidenceStorage(makeConfig(dir));
-    const storage2 = new EvidenceStorage({
+    const storage = new EvidenceStorage(makeConfig(dir));
+    const worker = spawnContentionWorker({
       databasePath: join(dir, 'test.db'),
-      persistencePolicy: ALWAYS_ACCEPT,
+      operation: 'hold-then-commit',
+      commitDelayMs: 150,
+      row: contentionRowFor('trace-xyz', serializeEvidenceRecord(makeProofRecord({ traceId: 'trace-xyz' })), '1.0.0'),
     });
-    const r1 = makeProofRecord();
-    const r2 = makeProofRecord({ traceId: 'trace-xyz' });
-    const out1 = await storage1.saveEvidenceRecord(r1);
-    const out2 = await storage2.saveEvidenceRecord(r2);
-    expect(out1.status).toBe('stored');
-    expect(out2.status).toBe('stored');
-    storage1.close();
-    storage2.close();
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      await worker.waitFor('locked');
+      const record = makeProofRecord();
+      const outcome = storage.saveEvidenceRecord(record);
+      await worker.waitFor('committed');
+      expect(outcome.status).toBe('stored');
+      if (outcome.status !== 'stored') return;
+      const a = storage.getEvidenceRecord('trace-abc');
+      const b = storage.getEvidenceRecord('trace-xyz');
+      expect(a.ok).toBe(true);
+      expect(b.ok).toBe(true);
+      expect(worker.phases[0]).toBe('locked');
+      expect(worker.phases[worker.phases.length - 1]).toBe('committed');
+    } finally {
+      await worker.worker.terminate();
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('resolves a same-identity write race with a structured already-present', async () => {
-    // Two connections genuinely contend on one WAL database: a test-controlled
-    // connection holds an uncommitted write lock while the storage under test
-    // appends the same byte-identical record. The storage must wait out the
-    // busy timeout, re-read the persisted row inside a fresh transaction, and
-    // report `already-present` — never a raw constraint error (spec 015:
-    // concurrency/transactional conflicts).
+    // The worker holds a write lock with the EXACT row the save would store
+    // (byte-identical serialized text, same digest). The save blocks on its
+    // BEGIN IMMEDIATE until the worker commits, then re-reads the persisted
+    // row inside its own transaction and classifies `already-present` — never
+    // a raw constraint error (spec 015: concurrency/transactional conflicts).
     const dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const record = makeProofRecord();
     const identity = record.trace.traceId;
     const storedDocument = serializeEvidenceRecord(record);
-    const digest = sha256Hex(utf8Encode(storedDocument));
-
-    const competing = new Database(join(dir, 'test.db'));
-    const formatVersion = (
-      competing
-        .prepare('SELECT value FROM evidence_storage_meta WHERE key = ?')
-        .get('evidence_storage_format_version') as { value: string }
-    ).value;
-    const insert = competing.prepare(
-      `INSERT INTO evidence_records (
-         evidence_identity, evidence_schema_version, storage_format_version,
-         persistence_policy_name, persistence_policy_version, stored_at,
-         storage_digest, serialized_record
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    competing.exec('BEGIN IMMEDIATE');
-    insert.run(
-      identity,
-      record.evidenceSchemaVersion,
-      formatVersion,
-      METADATA_SAFE.name,
-      METADATA_SAFE.version,
-      '2026-08-12T12:00:00.000Z',
-      digest,
-      storedDocument,
-    );
-
-    // The storage's save blocks on the busy handler while `competing` holds the
-    // write lock; once the competing transaction commits, the retry re-reads
-    // the persisted row inside its own transaction and classifies it.
-    const pending = storage.saveEvidenceRecord(record);
-    await sleep(700);
-    competing.exec('COMMIT');
-    competing.close();
-
-    const outcome = await pending;
-    expect(outcome.status).toBe('already-present');
-
+    const worker = spawnContentionWorker({
+      databasePath: join(dir, 'test.db'),
+      operation: 'hold-then-commit',
+      commitDelayMs: 150,
+      row: contentionRowFor(identity, storedDocument, record.evidenceSchemaVersion),
+    });
+    try {
+      await worker.waitFor('locked');
+      const outcome = storage.saveEvidenceRecord(record);
+      await worker.waitFor('committed');
+      expect(outcome.status).toBe('already-present');
+      if (outcome.status !== 'already-present') return;
+      expect(outcome.digest).toBe(sha256Hex(utf8Encode(storedDocument)));
+    } finally {
+      await worker.worker.terminate();
+      storage.close();
+    }
     const db = new Database(join(dir, 'test.db'));
     const count = (db.prepare('SELECT COUNT(*) AS c FROM evidence_records').get() as { c: number }).c;
     db.close();
     expect(count).toBe(1);
-    storage.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('resolves a same-identity write race with a structured conflict', async () => {
-    // Same race as above, but the competing connection commits DIFFERENT text
-    // for the same identity: the loser must observe a structured `conflict`
-    // derived from the persisted row, and the original row must remain
-    // byte-identical.
+    // Same race as above, but the worker commits DIFFERENT text for the same
+    // identity: the loser must observe a structured `conflict` derived from
+    // the persisted row, and the winning row must remain byte-identical.
     const dir = tempDir();
     const storage = new EvidenceStorage(makeConfig(dir));
     const identity = 'trace-race';
-    const winner = makeProofRecord({ traceId: identity });
-    const loser = makeProofRecord({
-      traceId: identity,
-      captureProfile: { name: 'dev-racing', version: '1.2.0' },
-    });
+    const winner = makeProofRecord({ traceId: identity, captureProfile: { name: 'dev-racing', version: '1.2.0' } });
+    const loser = makeProofRecord({ traceId: identity });
     const winningDocument = serializeEvidenceRecord(winner);
     const losingDocument = serializeEvidenceRecord(loser);
     expect(winningDocument).not.toBe(losingDocument);
 
-    const competing = new Database(join(dir, 'test.db'));
-    const formatVersion = (
-      competing
-        .prepare('SELECT value FROM evidence_storage_meta WHERE key = ?')
-        .get('evidence_storage_format_version') as { value: string }
-    ).value;
-    const insert = competing.prepare(
-      `INSERT INTO evidence_records (
-         evidence_identity, evidence_schema_version, storage_format_version,
-         persistence_policy_name, persistence_policy_version, stored_at,
-         storage_digest, serialized_record
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    );
-    competing.exec('BEGIN IMMEDIATE');
-    insert.run(
-      identity,
-      winner.evidenceSchemaVersion,
-      formatVersion,
-      METADATA_SAFE.name,
-      METADATA_SAFE.version,
-      '2026-08-12T12:00:00.000Z',
-      sha256Hex(utf8Encode(winningDocument)),
-      winningDocument,
-    );
-
-    const pending = storage.saveEvidenceRecord(loser);
-    await sleep(700);
-    competing.exec('COMMIT');
-    competing.close();
-
-    const outcome = await pending;
-    expect(outcome.status).toBe('conflict');
-    if (outcome.status !== 'conflict') return;
-    expect(outcome.existingDigest).toBe(sha256Hex(utf8Encode(winningDocument)));
-    expect(outcome.suppliedDigest).toBe(sha256Hex(utf8Encode(losingDocument)));
-
+    const worker = spawnContentionWorker({
+      databasePath: join(dir, 'test.db'),
+      operation: 'hold-then-commit',
+      commitDelayMs: 150,
+      row: contentionRowFor(identity, winningDocument, winner.evidenceSchemaVersion),
+    });
+    try {
+      await worker.waitFor('locked');
+      const outcome = storage.saveEvidenceRecord(loser);
+      await worker.waitFor('committed');
+      expect(outcome.status).toBe('conflict');
+      if (outcome.status !== 'conflict') return;
+      expect(outcome.existingDigest).toBe(sha256Hex(utf8Encode(winningDocument)));
+      expect(outcome.suppliedDigest).toBe(sha256Hex(utf8Encode(losingDocument)));
+      expect(outcome.storedAt).toBe('2026-08-12T12:00:00.000Z');
+    } finally {
+      await worker.worker.terminate();
+      storage.close();
+    }
     // The winning row is preserved byte-identical and only one row exists.
     const db = new Database(join(dir, 'test.db'));
     const row = db
@@ -1441,13 +2004,112 @@ describe('WAL and contention', () => {
     const count = (db.prepare('SELECT COUNT(*) AS c FROM evidence_records').get() as { c: number }).c;
     db.close();
     expect(count).toBe(1);
-    storage.close();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('exhausts the bounded retry policy with a typed environmental error', async () => {
+    // The worker holds the write lock indefinitely. The save must retry a
+    // bounded number of times (each attempt busy-waits up to the internal
+    // busy timeout) and then raise EvidenceContentionError — an environmental
+    // error, NOT a structured outcome, and never a raw unique-constraint
+    // escape. The error carries no record content, identity, digest, or
+    // timestamp, and nothing is persisted.
+    const dir = tempDir();
+    const storage = new EvidenceStorage(makeConfig(dir));
+    const record = makeProofRecord();
+    const identity = record.trace.traceId;
+    const storedDocument = serializeEvidenceRecord(record);
+    const worker = spawnContentionWorker({
+      databasePath: join(dir, 'test.db'),
+      operation: 'hold-indefinitely',
+      row: contentionRowFor(identity, storedDocument, record.evidenceSchemaVersion),
+    });
+    try {
+      await worker.waitFor('locked');
+      const startedAt = Date.now();
+      let outcome: SaveOutcome | undefined;
+      let error: unknown;
+      try {
+        outcome = storage.saveEvidenceRecord(record);
+      } catch (err) {
+        error = err;
+      }
+      const elapsedMs = Date.now() - startedAt;
+      worker.worker.postMessage({ command: 'release' });
+      await worker.waitFor('released');
+
+      // No structured outcome may be fabricated under contention exhaustion.
+      expect(outcome).toBeUndefined();
+      expect(error).toBeInstanceOf(EvidenceContentionError);
+      if (!(error instanceof EvidenceContentionError)) return;
+      expect(error.code).toBe(EVIDENCE_CONTENTION_EXHAUSTED);
+      // Bounded: the loop exhausted its retries instead of spinning forever.
+      expect(elapsedMs).toBeGreaterThan(2000);
+
+      // The fixed message leaks no record content, identity, digest, or timestamp.
+      const message = error.message;
+      expect(message).not.toContain(identity);
+      expect(message).not.toContain(storedDocument);
+      expect(message).not.toContain(sha256Hex(utf8Encode(storedDocument)));
+      expect(message).not.toContain('2026-');
+
+      // Nothing was committed by the failed save (worker rolled back).
+      const read = storage.getEvidenceRecord(identity);
+      expect(read.ok).toBe(false);
+    } finally {
+      try {
+        worker.worker.postMessage({ command: 'release' });
+      } catch {
+        // Worker already released and exited.
+      }
+      await worker.worker.terminate();
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('recovers normally once contention clears', async () => {
+    // After exhaustion the storage connection must remain usable: releasing
+    // the worker's lock lets a subsequent save of the same identity succeed.
+    const dir = tempDir();
+    const storage = new EvidenceStorage(makeConfig(dir));
+    const record = makeProofRecord();
+    const storedDocument = serializeEvidenceRecord(record);
+    const worker = spawnContentionWorker({
+      databasePath: join(dir, 'test.db'),
+      operation: 'hold-indefinitely',
+      row: contentionRowFor(record.trace.traceId, storedDocument, record.evidenceSchemaVersion),
+    });
+    try {
+      await worker.waitFor('locked');
+      let exhausted: unknown;
+      try {
+        storage.saveEvidenceRecord(record);
+      } catch (err) {
+        exhausted = err;
+      }
+      expect(exhausted).toBeInstanceOf(EvidenceContentionError);
+      worker.worker.postMessage({ command: 'release' });
+      await worker.waitFor('released');
+
+      // The worker rolled back its row; a fresh save now succeeds.
+      const retry = storage.saveEvidenceRecord(record);
+      expect(retry.status).toBe('stored');
+    } finally {
+      try {
+        worker.worker.postMessage({ command: 'release' });
+      } catch {
+        // Worker already released and exited.
+      }
+      await worker.worker.terminate();
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
 });
 
 describe('Serialization boundary', () => {
-  it('demonstrates Uint8Array to Base64 conversion at the serializer boundary', async () => {
+  it('demonstrates Uint8Array to Base64 conversion at the serializer boundary', () => {
     const record = makeProofRecord();
     (record.rawObservations as EvidenceObservation[])[2].payload = {
       requestEnvelope: {
@@ -1462,7 +2124,7 @@ describe('Serialization boundary', () => {
     expect(doc).toContain('AQID'); // Base64 of [1,2,3]
   });
 
-  it('explicitly undefined optional properties are absent after round trip', async () => {
+  it('explicitly undefined optional properties are absent after round trip', () => {
     const record = makeProofRecord();
     // Set an optional property to undefined
     (record as any).trace.conditions = undefined;
@@ -1472,6 +2134,88 @@ describe('Serialization boundary', () => {
     if (!parsed.ok) return;
     // undefined becomes absent in JSON
     expect((parsed.record as any).trace.conditions).toBeUndefined();
+  });
+});
+
+describe('Projection parity through persistence', () => {
+  let dir: string;
+  let storage: EvidenceStorage;
+
+  beforeEach(() => {
+    dir = tempDir();
+    storage = new EvidenceStorage(makeConfig(dir));
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('projects the exact same legacy views and full reports before and after persistence', () => {
+    // The storage suite must exercise the compatibility projections on real
+    // persisted data: project the pre-save snapshot, save, retrieve, project
+    // again, and require exact equality of both views and the full
+    // ProjectionReport values (spec 015: persisted parity with the legacy
+    // projections).
+    const record = makeProofRecord();
+    const beforeTrace = evidenceToLegacyTrace(record);
+    const beforeRun = evidenceToAgentRun(record);
+    expect(beforeTrace.ok).toBe(true);
+    expect(beforeRun.ok).toBe(true);
+    if (!beforeTrace.ok || !beforeRun.ok) return;
+
+    const outcome = storage.saveEvidenceRecord(record);
+    expect(outcome.status).toBe('stored');
+    if (outcome.status !== 'stored') return;
+
+    const read = storage.getEvidenceRecord(record.trace.traceId);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+
+    const afterTrace = evidenceToLegacyTrace(read.record);
+    const afterRun = evidenceToAgentRun(read.record);
+    expect(afterTrace.ok).toBe(true);
+    expect(afterRun.ok).toBe(true);
+    if (!afterTrace.ok || !afterRun.ok) return;
+
+    expect(afterTrace.view).toEqual(beforeTrace.view);
+    expect(afterTrace.report).toEqual(beforeTrace.report);
+    expect(afterRun.view).toEqual(beforeRun.view);
+    expect(afterRun.report).toEqual(beforeRun.report);
+  });
+
+  it('preserves projection parity for a record with an explicitly undefined optional property', () => {
+    // Representation-sensitive case through real save/retrieval: an optional
+    // property explicitly set to undefined must project identically after the
+    // JSON round trip removes it.
+    const record = makeProofRecord();
+    (record as { trace: { conditions?: unknown } }).trace.conditions = undefined;
+
+    const beforeTrace = evidenceToLegacyTrace(record);
+    const beforeRun = evidenceToAgentRun(record);
+    expect(beforeTrace.ok).toBe(true);
+    expect(beforeRun.ok).toBe(true);
+    if (!beforeTrace.ok || !beforeRun.ok) return;
+
+    const outcome = storage.saveEvidenceRecord(record);
+    expect(outcome.status).toBe('stored');
+    if (outcome.status !== 'stored') return;
+
+    const read = storage.getEvidenceRecord(record.trace.traceId);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect((read.record as { trace: { conditions?: unknown } }).trace.conditions).toBeUndefined();
+
+    const afterTrace = evidenceToLegacyTrace(read.record);
+    const afterRun = evidenceToAgentRun(read.record);
+    expect(afterTrace.ok).toBe(true);
+    expect(afterRun.ok).toBe(true);
+    if (!afterTrace.ok || !afterRun.ok) return;
+
+    expect(afterTrace.view).toEqual(beforeTrace.view);
+    expect(afterTrace.report).toEqual(beforeTrace.report);
+    expect(afterRun.view).toEqual(beforeRun.view);
+    expect(afterRun.report).toEqual(beforeRun.report);
   });
 });
 
@@ -1489,7 +2233,7 @@ describe('Acceptance criteria coverage', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('persisted unknown-additive-field round-trip under admitting custom policy', async () => {
+  it('persisted unknown-additive-field round-trip under admitting custom policy', () => {
     const admittingPolicy: PersistencePolicy = {
       name: 'test.admitting',
       version: '1.0.0',
@@ -1500,7 +2244,7 @@ describe('Acceptance criteria coverage', () => {
     const record = makeProofRecord();
     (record as any).customField = 'custom-value';
 
-    const saveResult = await admittingStorage.saveEvidenceRecord(record);
+    const saveResult = admittingStorage.saveEvidenceRecord(record);
     expect(saveResult.status).toBe('stored');
 
     const readResult = admittingStorage.getEvidenceRecord(record.trace.traceId);
@@ -1512,64 +2256,10 @@ describe('Acceptance criteria coverage', () => {
     admittingStorage.close();
   });
 
-  it('simulated equal-digest different-text conflict', async () => {
-    const record1 = makeProofRecord();
-    const record2 = makeProofRecord({ captureProfile: { name: 'different-profile', version: '1.0.0' } });
-
-    // Make them have the same trace ID but different text
-    record2.trace.traceId = record1.trace.traceId;
-    record2.trace.interactionId = record1.trace.traceId;
-
-    // Serialize both to compute digests
-    const doc1 = serializeEvidenceRecord(record1);
-    const doc2 = serializeEvidenceRecord(record2);
-
-    // Verify they have different text
-    expect(doc1).not.toBe(doc2);
-
-    // Save first record
-    const save1 = await storage.saveEvidenceRecord(record1);
-    expect(save1.status).toBe('stored');
-
-    // Save second record with same identity but different text
-    const save2 = await storage.saveEvidenceRecord(record2);
-    expect(save2.status).toBe('conflict');
-
-    // Verify first record is unchanged
-    const read1 = storage.getEvidenceRecord(record1.trace.traceId);
-    expect(read1.ok).toBe(true);
-    if (!read1.ok) return;
-    expect(read1.record.trace.captureProfile.name).toBe('dev-basic');
-  });
-
-  it('initialization rollback on schema creation failure', async () => {
-    const rollbackDir = tempDir();
-    const dbPath = join(rollbackDir, 'test.db');
-    const db = new Database(dbPath);
-
-    // Create a table that will conflict with schema creation
-    db.exec('CREATE TABLE evidence_records (wrong_schema TEXT)');
-    db.close();
-
-    // Attempt to open EvidenceStorage should fail
-    expect(() => new EvidenceStorage(makeConfig(rollbackDir))).toThrow(StorageFormatError);
-
-    // Verify the database is still in its original state
-    const verifyDb = new Database(dbPath);
-    const tables = verifyDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as any[];
-    verifyDb.close();
-
-    // Should only have the original table, no new tables
-    expect(tables.length).toBe(1);
-    expect(tables[0].name).toBe('evidence_records');
-
-    rmSync(rollbackDir, { recursive: true, force: true });
-  });
-
-  it('legacy deleteTrace does not touch canonical rows', async () => {
+  it('legacy deleteTrace does not touch canonical rows', () => {
     // Save a canonical record
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
 
     // Open legacy TraceStorage on the same database
     const legacyStorage = new TraceStorage({ databasePath: join(dir, 'test.db') });
@@ -1583,10 +2273,10 @@ describe('Acceptance criteria coverage', () => {
     expect(readResult.ok).toBe(true);
   });
 
-  it('legacy deleteExpiredTraces does not touch canonical rows', async () => {
+  it('legacy deleteExpiredTraces does not touch canonical rows', () => {
     // Save a canonical record
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
 
     // Open legacy TraceStorage on the same database
     const legacyStorage = new TraceStorage({ databasePath: join(dir, 'test.db') });
@@ -1600,9 +2290,9 @@ describe('Acceptance criteria coverage', () => {
     expect(readResult.ok).toBe(true);
   });
 
-  it('corrupt-read: malformed JSON', async () => {
+  it('corrupt-read: malformed JSON', () => {
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
 
     // Corrupt the serialized record
     const db = new Database(join(dir, 'test.db'));
@@ -1617,9 +2307,9 @@ describe('Acceptance criteria coverage', () => {
     expect((readResult as any).code).toBe('json_parse_failed');
   });
 
-  it('corrupt-read: digest mismatch', async () => {
+  it('corrupt-read: digest mismatch', () => {
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
 
     // Corrupt the digest
     const db = new Database(join(dir, 'test.db'));
@@ -1634,9 +2324,9 @@ describe('Acceptance criteria coverage', () => {
     expect((readResult as any).code).toBe('digest_mismatch');
   });
 
-  it('corrupt-read: invalid stored_at timestamp', async () => {
+  it('corrupt-read: invalid stored_at timestamp', () => {
     const record = makeProofRecord();
-    await storage.saveEvidenceRecord(record);
+    storage.saveEvidenceRecord(record);
 
     // Corrupt the stored_at timestamp
     const db = new Database(join(dir, 'test.db'));

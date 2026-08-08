@@ -63,6 +63,11 @@ const EVIDENCE_STORAGE_META_KEY = 'evidence_storage_format_version';
 // deterministic.
 const SQLITE_BUSY_TIMEOUT_MS = 500;
 
+// Bounded, documented retry policy for write contention (spec 015 §5.2): each
+// attempt busy-waits up to SQLITE_BUSY_TIMEOUT_MS, then backs off synchronously
+// before retrying; exhaustion raises EvidenceContentionError.
+const MAX_CONTENTION_RETRIES = 10;
+
 const POLICY_NAME_MAX_LENGTH = 128;
 const POLICY_VERSION_MAX_LENGTH = 64;
 const LABEL_MAX_CODE_POINTS = 128;
@@ -235,12 +240,45 @@ export class StorageConfigError extends Error {
   }
 }
 
+export const EVIDENCE_CONTENTION_EXHAUSTED = 'EVIDENCE_CONTENTION_EXHAUSTED' as const;
+
+/**
+ * Thrown when a competing write could not be resolved within the bounded
+ * retry policy (spec 015 §5.2). This is an environmental error, not a
+ * structured SaveOutcome: the record was neither stored nor observed, and no
+ * placeholder identity, digest, or timestamp is fabricated. The message is
+ * fixed and carries no record content, identity, or secret.
+ */
+export class EvidenceContentionError extends Error {
+  readonly code: typeof EVIDENCE_CONTENTION_EXHAUSTED = EVIDENCE_CONTENTION_EXHAUSTED;
+
+  constructor() {
+    super('SQLITE_CONTENTION_FAILURE: evidence storage write contention exceeded the bounded retry limit');
+    this.name = 'EvidenceContentionError';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function defaultNow(): string {
   return new Date().toISOString();
+}
+
+function isRetryableContentionError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const code = (err as { code?: unknown }).code;
+  return code === 'SQLITE_BUSY' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY';
+}
+
+/**
+ * Synchronous sleep for the bounded contention retry policy. The storage API
+ * is synchronous (spec 015), so the main thread cannot yield; Atomics.wait on
+ * a throwaway buffer blocks without busy-spinning the CPU.
+ */
+function synchronousSleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function isIso8601Utc(value: string): boolean {
@@ -312,6 +350,7 @@ function validatePolicyVersion(version: string): void {
   }
 }
 
+// fallow-ignore-next-line complexity
 function validatePolicyIdentity(policy: PersistencePolicy): void {
   if (!policy || typeof policy !== 'object') {
     throw new StorageConfigError('persistencePolicy is required');
@@ -845,7 +884,7 @@ class PolicyClassifier {
     ];
     const payloadFields = payload ? Object.keys(payload) : [];
     const allowedFields = [...containerFields, ...payloadFields];
-    
+
     // For projected payload-bearing events, the extracted payload fields are at the top level
     // alongside container fields. They have already been classified above.
     this.checkUnknownFields(
@@ -983,7 +1022,10 @@ class PolicyClassifier {
       case 'tool_result': {
         const toolResult = payload['toolResult'];
         if (isRecord(toolResult)) {
-          this.requireMeta(toolResult['exitCode'], `${basePath}.toolResult.exitCode`);
+          // exitCode is optional in the evidence schema; classify only when present.
+          if (toolResult['exitCode'] !== undefined) {
+            this.requireMeta(toolResult['exitCode'], `${basePath}.toolResult.exitCode`);
+          }
           this.requireContent(toolResult['stdout'], `${basePath}.toolResult.stdout`, declared);
           this.requireContent(toolResult['stderr'], `${basePath}.toolResult.stderr`, declared);
           this.checkUnknownFields(toolResult, ['exitCode', 'stdout', 'stderr'], `${basePath}.toolResult`, declared);
@@ -1015,7 +1057,10 @@ class PolicyClassifier {
         const retrieval = payload['retrieval'];
         if (isRecord(retrieval)) {
           this.requireContent(retrieval['query'], `${basePath}.retrieval.query`, declared);
-          this.requireMeta(retrieval['topK'], `${basePath}.retrieval.topK`);
+          // topK is optional in the evidence schema; classify only when present.
+          if (retrieval['topK'] !== undefined) {
+            this.requireMeta(retrieval['topK'], `${basePath}.retrieval.topK`);
+          }
           this.checkUnknownFields(retrieval, ['query', 'topK'], `${basePath}.retrieval`, declared);
         }
         this.checkUnknownFields(payload, ['retrieval'], basePath, false);
@@ -1025,7 +1070,10 @@ class PolicyClassifier {
         const retrievalResult = payload['retrievalResult'];
         if (isRecord(retrievalResult)) {
           this.requireContent(retrievalResult['query'], `${basePath}.retrievalResult.query`, declared);
-          this.requireMeta(retrievalResult['resultCount'], `${basePath}.retrievalResult.resultCount`);
+          // resultCount is optional in the evidence schema; classify only when present.
+          if (retrievalResult['resultCount'] !== undefined) {
+            this.requireMeta(retrievalResult['resultCount'], `${basePath}.retrievalResult.resultCount`);
+          }
           this.checkUnknownFields(retrievalResult, ['query', 'resultCount'], `${basePath}.retrievalResult`, declared);
         }
         this.checkUnknownFields(payload, ['retrievalResult'], basePath, false);
@@ -1307,14 +1355,28 @@ export class EvidenceStorage {
 
     this.ensureDirectoryExists(config.databasePath);
     this.db = new Database(config.databasePath, { timeout: SQLITE_BUSY_TIMEOUT_MS });
+    // Compatibility verification runs before any journal-mode mutation so that a
+    // refusal never alters schema, ledger, or journal mode (spec 015 §4.3). On
+    // any verification failure the dedicated connection is closed before the
+    // error propagates.
+    try {
+      this.verifyOrInitializeSchema();
+    } catch (err) {
+      if (this.db.open) {
+        this.db.close();
+      }
+      throw err;
+    }
+    this.enableWalJournaling();
+  }
+
+  private enableWalJournaling(): void {
     this.db.pragma('journal_mode = WAL');
     const journalMode = this.db.pragma('journal_mode', { simple: true });
     if (journalMode !== 'wal') {
       this.db.close();
       throw new StorageConfigError(`Failed to enable WAL journaling mode (got ${String(journalMode)})`);
     }
-
-    this.verifyOrInitializeSchema();
   }
 
   close(): void {
@@ -1360,6 +1422,19 @@ export class EvidenceStorage {
       throw new StorageFormatError(`Unsupported lower storage format version: ${ledgerValue}; no migration path registered`);
     }
 
+    this.verifyLedgerTableContract();
+
+    // The canonical object set is exact: no unexpected evidence_% tables
+    // (auto-indexes are excluded because they are not tables).
+    const tables = this.db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'evidence_%'`)
+      .all() as { name: string }[];
+    for (const row of tables) {
+      if (row.name !== 'evidence_storage_meta' && row.name !== 'evidence_records') {
+        throw new StorageFormatError(`Unexpected canonical table: ${row.name}`);
+      }
+    }
+
     if (!hasTable || !hasSchemaIndex || !hasStoredAtIndex) {
       throw new StorageFormatError('Canonical storage objects are incomplete');
     }
@@ -1391,7 +1466,7 @@ export class EvidenceStorage {
   private initializeSchema(): void {
     const createLedger = `
       CREATE TABLE IF NOT EXISTS evidence_storage_meta (
-        key   TEXT PRIMARY KEY,
+        key   TEXT NOT NULL PRIMARY KEY,
         value TEXT NOT NULL
       );
     `;
@@ -1421,6 +1496,7 @@ export class EvidenceStorage {
       this.db.prepare(
         `INSERT INTO evidence_storage_meta (key, value) VALUES (?, ?)`
       ).run(EVIDENCE_STORAGE_META_KEY, STORAGE_FORMAT_VERSION);
+      this.verifyLedgerTableContract();
       this.verifyTableContract();
       this.verifyIndexContract();
     });
@@ -1429,7 +1505,9 @@ export class EvidenceStorage {
       init();
     } catch (err) {
       // Rollback happens automatically on throw inside a transaction; close to be safe.
-      this.db.close();
+      if (this.db.open) {
+        this.db.close();
+      }
       throw err;
     }
   }
@@ -1467,38 +1545,106 @@ export class EvidenceStorage {
     }
   }
 
-  private verifyIndexContract(): void {
-    const indexes = this.db.prepare(
-      `SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_evidence_%'`
-    ).all() as { name: string; tbl_name: string; sql: string | null }[];
+  private verifyLedgerTableContract(): void {
+    // Exact ledger cardinality: one row, the format version key. Duplicate or
+    // unexpected rows are refused even if the column contract would pass.
+    const rowCount = this.db.prepare(`SELECT COUNT(*) AS n FROM evidence_storage_meta`).get() as { n: number };
+    if (rowCount.n !== 1) {
+      throw new StorageFormatError(`Storage ledger must contain exactly one row (found ${rowCount.n})`);
+    }
 
-    const requiredIndexes = new Map<string, { tbl_name: string; sql_pattern: RegExp }>([
-      ['idx_evidence_records_schema_version', {
-        tbl_name: 'evidence_records',
-        sql_pattern: /CREATE\s+INDEX\s+["']?idx_evidence_records_schema_version["']?\s+ON\s+["']?evidence_records["']?\s*\(\s*["']?evidence_schema_version["']?\s*\)/i
-      }],
-      ['idx_evidence_records_stored_at', {
-        tbl_name: 'evidence_records',
-        sql_pattern: /CREATE\s+INDEX\s+["']?idx_evidence_records_stored_at["']?\s+ON\s+["']?evidence_records["']?\s*\(\s*["']?stored_at["']?\s*\)/i
-      }],
+    const columns = this.db.pragma(`table_info(evidence_storage_meta)`) as {
+      name: string;
+      type: string;
+      notnull: number;
+      pk: number;
+    }[];
+    if (columns.length !== 2) {
+      throw new StorageFormatError('evidence_storage_meta column count mismatch');
+    }
+    const expected = [
+      { name: 'key', type: 'TEXT', notnull: true, pk: true },
+      { name: 'value', type: 'TEXT', notnull: true, pk: false },
+    ];
+    for (let i = 0; i < expected.length; i++) {
+      const col = columns[i];
+      const req = expected[i];
+      if (
+        !col ||
+        col.name !== req.name ||
+        col.type !== req.type ||
+        !!col.notnull !== req.notnull ||
+        !!col.pk !== req.pk
+      ) {
+        throw new StorageFormatError(`evidence_storage_meta column contract mismatch at column ${i}`);
+      }
+    }
+  }
+
+  private verifyIndexContract(): void {
+    // PRAGMA index_list is scoped to evidence_records, so table ownership is
+    // implicit; index_info exposes exact column order (spec 015 §4.3).
+    const indexes = this.db.pragma(`index_list(evidence_records)`) as {
+      seq: number;
+      name: string;
+      unique: number;
+      origin: string;
+      partial: number;
+    }[];
+
+    const requiredIndexes = new Map<string, { columns: readonly string[]; unique: boolean }>([
+      ['idx_evidence_records_schema_version', { columns: ['evidence_schema_version'], unique: false }],
+      ['idx_evidence_records_stored_at', { columns: ['stored_at'], unique: false }],
     ]);
 
     for (const [name, req] of requiredIndexes) {
-      const idx = indexes.find(i => i.name === name);
-      if (!idx) {
-        throw new StorageFormatError(`Missing required index: ${name}`);
+      this.verifyRequiredIndex(indexes, name, req);
+    }
+
+    // The canonical index set is exact: no unexpected idx_evidence_% indexes.
+    for (const idx of indexes) {
+      if (idx.name.startsWith('idx_evidence_') && !requiredIndexes.has(idx.name)) {
+        throw new StorageFormatError(`Unexpected canonical index: ${idx.name}`);
       }
-      if (idx.tbl_name !== req.tbl_name) {
-        throw new StorageFormatError(`Index ${name} is on wrong table: ${idx.tbl_name}`);
-      }
-      if (!idx.sql || !req.sql_pattern.test(idx.sql)) {
-        throw new StorageFormatError(`Index ${name} has incorrect structure: ${idx.sql}`);
+    }
+  }
+
+  private verifyRequiredIndex(
+    indexes: { name: string; unique: number; origin: string }[],
+    name: string,
+    req: { columns: readonly string[]; unique: boolean },
+  ): void {
+    const idx = indexes.find((i) => i.name === name);
+    if (!idx) {
+      throw new StorageFormatError(`Missing required index: ${name}`);
+    }
+    if (idx.origin !== 'c') {
+      throw new StorageFormatError(`Index ${name} is not a created index`);
+    }
+    if (idx.unique !== (req.unique ? 1 : 0)) {
+      throw new StorageFormatError(`Index ${name} has the wrong uniqueness`);
+    }
+    const info = this.db.pragma(`index_info(${JSON.stringify(name)})`) as {
+      seqno: number;
+      cid: number;
+      name: string;
+    }[];
+    const columns = info
+      .slice()
+      .sort((a, b) => a.seqno - b.seqno)
+      .map((c) => c.name);
+    if (columns.length !== req.columns.length) {
+      throw new StorageFormatError(`Index ${name} has ${columns.length} columns, expected ${req.columns.length}`);
+    }
+    for (let i = 0; i < req.columns.length; i++) {
+      if (columns[i] !== req.columns[i]) {
+        throw new StorageFormatError(`Index ${name} has unexpected column order: ${columns.join(', ')}`);
       }
     }
   }
 
   // fallow-ignore-next-line complexity
-  async saveEvidenceRecord(input: unknown): Promise<SaveOutcome> {
+  saveEvidenceRecord(input: unknown): SaveOutcome {
     // Step 1: shape guard.
     if (!isRecord(input)) {
       return {
@@ -1629,12 +1775,12 @@ export class EvidenceStorage {
     };
   }
 
-  private async appendRecord(
+  private appendRecord(
     identity: string,
     evidenceSchemaVersion: string,
     storedDocument: string,
     storageDigest: string,
-  ): Promise<SaveOutcome> {
+  ): SaveOutcome {
     const selectExisting = this.db.prepare(
       `SELECT serialized_record, storage_digest, stored_at FROM evidence_records WHERE evidence_identity = ?`
     );
@@ -1693,24 +1839,22 @@ export class EvidenceStorage {
 
     // BEGIN IMMEDIATE serializes writers at transaction start, so the
     // in-transaction re-read observes any concurrently committed row and
-    // classification is authoritative (spec 015: contention behavior).
-    // Bounded retries convert residual SQLITE_BUSY / unique-key races into
-    // structured outcomes; a raw constraint error is never surfaced.
-    const MAX_CONTENTION_RETRIES = 10;
+    // classification is authoritative (spec 015: contention behavior). A
+    // bounded synchronous retry policy converts residual SQLITE_BUSY /
+    // unique-key races into structured outcomes; a raw constraint error is
+    // never surfaced, and exhaustion raises the typed EvidenceContentionError
+    // (an environmental error, never a fabricated structured outcome).
     for (let attempt = 0; ; attempt++) {
       try {
         return tx.immediate();
-      } catch (err: any) {
-        const retryable =
-          err?.code === 'SQLITE_BUSY' || err?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY';
+      } catch (err: unknown) {
+        const retryable = isRetryableContentionError(err);
         if (retryable && attempt < MAX_CONTENTION_RETRIES) {
-          await new Promise(resolve => setTimeout(resolve, 10 + attempt * 10));
+          synchronousSleep(10 + attempt * 10);
           continue;
         }
         if (retryable) {
-          throw new Error(
-            'SQLITE_CONTENTION_FAILURE: Unable to resolve competing write after bounded retries'
-          );
+          throw new EvidenceContentionError();
         }
         throw err;
       }

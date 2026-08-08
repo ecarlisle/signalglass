@@ -2182,7 +2182,7 @@ non-Object.prototype prototype, `{ accept: 'yes' }`, `{ accept: true, code: 'x' 
 ## Test mapping
 
 All 70 acceptance criteria are covered by `packages/storage/src/evidenceStorage.test.ts`
-(82 tests) and the existing `@signalglass/evidence` contract tests. Key groupings:
+(131 tests) and the existing `@signalglass/evidence` contract tests. Key groupings:
 
 - Save/retrieve round trip, manifest, close/reopen, coexistence with
   `TraceStorage`, exact digest, and idempotency/conflict behavior are
@@ -2194,16 +2194,25 @@ All 70 acceptance criteria are covered by `packages/storage/src/evidenceStorage.
   behavior are exercised in `Persistence policy validation`.
 - Read-integrity outcomes (`corrupt`, `unsupported-version`, `not-found`) are
   exercised in `Read integrity`.
-- WAL connection and contention behavior (deterministic two-connection races
-  on one WAL database, plus different-identity concurrency) are exercised in
+- WAL connection and contention behavior (independently executing
+  committed worker-thread fixtures holding a real second SQLite connection,
+  with barrier messages proving overlap; bounded-retry exhaustion raising
+  `EvidenceContentionError`; different-identity concurrency) are exercised in
   `WAL and contention`; the equal-digest regression, initialization rollback,
-  the SQLite PRAGMA column/index contract, policy-metadata separation, and
-  legacy delete-trace isolation are exercised in `EvidenceStorage save and
-  retrieve`, `EvidenceStorage schema initialization`, and
-  `Acceptance criteria coverage`.
+  the SQLite PRAGMA column/index/ledger contract, policy-metadata
+  separation, and legacy delete-trace isolation are exercised in
+  `EvidenceStorage schema initialization`, `EvidenceStorage save and
+  retrieve`, and `Acceptance criteria coverage`.
 - The `metadata-safe` field conformance table, the S1–S6 matrix with
   overlap controls, and Phase-A short-circuit are exercised in
   `Storage safety gate` and `metadata-safe reference policy`.
+- A parameterized raw/projected matrix over every event kind (null control
+  payloads, optional `exitCode`/`topK`/`resultCount`, nested response-usage
+  allowlist, analysis/completeness, and unknown nested fields failing closed)
+  is exercised in `metadata-safe policy matrix`; persistence parity through
+  real save/retrieve against `evidenceToLegacyTrace`/`evidenceToAgentRun`
+  (including an explicitly `undefined` optional property) is exercised in
+  `Projection parity through persistence`.
 
 ## Explicit exclusions
 

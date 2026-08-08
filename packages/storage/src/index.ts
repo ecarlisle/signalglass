@@ -6,6 +6,8 @@ export {
   isMetadataSafePolicy,
   StorageFormatError,
   StorageConfigError,
+  EvidenceContentionError,
+  EVIDENCE_CONTENTION_EXHAUSTED,
 } from './evidenceStorage.js';
 export type {
   StorageManifest,
