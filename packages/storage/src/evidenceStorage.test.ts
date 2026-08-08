@@ -1162,7 +1162,7 @@ describe('WAL and contention', () => {
     const dir = tempDir();
     const { Worker } = await import('node:worker_threads');
     const workerPath = join(__dirname, '..', 'dist', 'contentionWorker.js');
-    
+
     const traceId = 'trace-concurrent-same';
     const workers = await Promise.all([
       new Promise<any>((resolve, reject) => {
@@ -1189,7 +1189,7 @@ describe('WAL and contention', () => {
 
     const statuses = workers.map(w => w.status).sort();
     expect(statuses).toEqual(['already-present', 'stored']);
-    
+
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1197,7 +1197,7 @@ describe('WAL and contention', () => {
     const dir = tempDir();
     const { Worker } = await import('node:worker_threads');
     const workerPath = join(__dirname, '..', 'dist', 'contentionWorker.js');
-    
+
     const traceId = 'trace-concurrent-diff';
     const workers = await Promise.all([
       new Promise<any>((resolve, reject) => {
@@ -1224,7 +1224,7 @@ describe('WAL and contention', () => {
 
     const statuses = workers.map(w => w.status).sort();
     expect(statuses).toEqual(['conflict', 'stored']);
-    
+
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -1279,17 +1279,17 @@ describe('Acceptance criteria coverage', () => {
       decide: () => ({ accept: true } as PersistencePolicyDecision),
     };
     const admittingStorage = new EvidenceStorage(makeConfig(dir, { persistencePolicy: admittingPolicy }));
-    
+
     const record = makeProofRecord();
     (record as any).customField = 'custom-value';
-    
+
     const saveResult = admittingStorage.saveEvidenceRecord(record);
     expect(saveResult.status).toBe('stored');
-    
+
     const readResult = admittingStorage.getEvidenceRecord(record.trace.traceId);
     expect(readResult.ok).toBe(true);
     if (!readResult.ok) return;
-    
+
     // Custom field should survive round-trip
     expect((readResult.record as any).customField).toBe('custom-value');
     admittingStorage.close();
@@ -1298,26 +1298,26 @@ describe('Acceptance criteria coverage', () => {
   it('simulated equal-digest different-text conflict', () => {
     const record1 = makeProofRecord();
     const record2 = makeProofRecord({ captureProfile: { name: 'different-profile', version: '1.0.0' } });
-    
+
     // Make them have the same trace ID but different text
     record2.trace.traceId = record1.trace.traceId;
     record2.trace.interactionId = record1.trace.traceId;
-    
+
     // Serialize both to compute digests
     const doc1 = serializeEvidenceRecord(record1);
     const doc2 = serializeEvidenceRecord(record2);
-    
+
     // Verify they have different text
     expect(doc1).not.toBe(doc2);
-    
+
     // Save first record
     const save1 = storage.saveEvidenceRecord(record1);
     expect(save1.status).toBe('stored');
-    
+
     // Save second record with same identity but different text
     const save2 = storage.saveEvidenceRecord(record2);
     expect(save2.status).toBe('conflict');
-    
+
     // Verify first record is unchanged
     const read1 = storage.getEvidenceRecord(record1.trace.traceId);
     expect(read1.ok).toBe(true);
@@ -1329,23 +1329,23 @@ describe('Acceptance criteria coverage', () => {
     const rollbackDir = tempDir();
     const dbPath = join(rollbackDir, 'test.db');
     const db = new Database(dbPath);
-    
+
     // Create a table that will conflict with schema creation
     db.exec('CREATE TABLE evidence_records (wrong_schema TEXT)');
     db.close();
-    
+
     // Attempt to open EvidenceStorage should fail
     expect(() => new EvidenceStorage(makeConfig(rollbackDir))).toThrow(StorageFormatError);
-    
+
     // Verify the database is still in its original state
     const verifyDb = new Database(dbPath);
     const tables = verifyDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as any[];
     verifyDb.close();
-    
+
     // Should only have the original table, no new tables
     expect(tables.length).toBe(1);
     expect(tables[0].name).toBe('evidence_records');
-    
+
     rmSync(rollbackDir, { recursive: true, force: true });
   });
 
@@ -1353,14 +1353,14 @@ describe('Acceptance criteria coverage', () => {
     // Save a canonical record
     const record = makeProofRecord();
     storage.saveEvidenceRecord(record);
-    
+
     // Open legacy TraceStorage on the same database
     const legacyStorage = new TraceStorage({ databasePath: join(dir, 'test.db') });
-    
+
     // Call deleteTrace (should not affect canonical rows)
     legacyStorage.deleteTrace(record.trace.traceId);
     legacyStorage.close();
-    
+
     // Verify canonical record still exists
     const readResult = storage.getEvidenceRecord(record.trace.traceId);
     expect(readResult.ok).toBe(true);
@@ -1370,14 +1370,14 @@ describe('Acceptance criteria coverage', () => {
     // Save a canonical record
     const record = makeProofRecord();
     storage.saveEvidenceRecord(record);
-    
+
     // Open legacy TraceStorage on the same database
     const legacyStorage = new TraceStorage({ databasePath: join(dir, 'test.db') });
-    
+
     // Call deleteExpiredTraces (should not affect canonical rows)
     legacyStorage.deleteExpiredTraces();
     legacyStorage.close();
-    
+
     // Verify canonical record still exists
     const readResult = storage.getEvidenceRecord(record.trace.traceId);
     expect(readResult.ok).toBe(true);
@@ -1386,13 +1386,13 @@ describe('Acceptance criteria coverage', () => {
   it('corrupt-read: malformed JSON', () => {
     const record = makeProofRecord();
     storage.saveEvidenceRecord(record);
-    
+
     // Corrupt the serialized record
     const db = new Database(join(dir, 'test.db'));
     db.prepare('UPDATE evidence_records SET serialized_record = ? WHERE evidence_identity = ?')
       .run('not valid json {', record.trace.traceId);
     db.close();
-    
+
     const readResult = storage.getEvidenceRecord(record.trace.traceId);
     expect(readResult.ok).toBe(false);
     if (readResult.ok) return;
@@ -1403,13 +1403,13 @@ describe('Acceptance criteria coverage', () => {
   it('corrupt-read: digest mismatch', () => {
     const record = makeProofRecord();
     storage.saveEvidenceRecord(record);
-    
+
     // Corrupt the digest
     const db = new Database(join(dir, 'test.db'));
     db.prepare('UPDATE evidence_records SET storage_digest = ? WHERE evidence_identity = ?')
       .run('0'.repeat(64), record.trace.traceId);
     db.close();
-    
+
     const readResult = storage.getEvidenceRecord(record.trace.traceId);
     expect(readResult.ok).toBe(false);
     if (readResult.ok) return;
@@ -1420,13 +1420,13 @@ describe('Acceptance criteria coverage', () => {
   it('corrupt-read: invalid stored_at timestamp', () => {
     const record = makeProofRecord();
     storage.saveEvidenceRecord(record);
-    
+
     // Corrupt the stored_at timestamp
     const db = new Database(join(dir, 'test.db'));
     db.prepare('UPDATE evidence_records SET stored_at = ? WHERE evidence_identity = ?')
       .run('2026-99-99T99:99:99.999Z', record.trace.traceId);
     db.close();
-    
+
     const readResult = storage.getEvidenceRecord(record.trace.traceId);
     expect(readResult.ok).toBe(false);
     if (readResult.ok) return;
