@@ -1700,11 +1700,12 @@ export class EvidenceStorage {
             return tx();
           } catch (retryErr: any) {
             // If we get SQLITE_BUSY again, continue retrying
-            if (retryErr?.code !== 'SQLITE_BUSY') {
-              // Different error, handle it below
-              err = retryErr;
-              break;
+            if (retryErr?.code === 'SQLITE_BUSY') {
+              continue;
             }
+            // Different error, handle it below
+            err = retryErr;
+            break;
           }
         }
       }
@@ -1720,10 +1721,12 @@ export class EvidenceStorage {
             const classified = this.classifyExistingRow(existing, identity, storedDocument, storageDigest);
             if (classified) return classified;
           } catch (readErr: any) {
-            // If we can't read the existing row, continue retrying
-            if (readErr?.code !== 'SQLITE_BUSY') {
-              throw readErr;
+            // If we can't read the existing row due to busy, continue retrying
+            if (readErr?.code === 'SQLITE_BUSY') {
+              continue;
             }
+            // Other errors should be thrown
+            throw readErr;
           }
           // Small delay before retry (synchronous sleep)
           const start = Date.now();
