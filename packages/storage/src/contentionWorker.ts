@@ -120,10 +120,16 @@ async function runWorker(): Promise<void> {
   try {
     const record = makeProofRecord(config.traceId, config.captureProfileName);
     const outcome = storage.saveEvidenceRecord(record);
-
+    
+    // Map the outcome to a string status
+    let status = 'error';
+    if (outcome && typeof outcome === 'object' && 'status' in outcome) {
+      status = outcome.status as string;
+    }
+    
     parentPort?.postMessage({
-      status: outcome.status,
-      identity: (outcome as any).identity,
+      status,
+      identity: (outcome as any)?.identity,
       traceId: config.traceId,
       captureProfileName: config.captureProfileName,
     });
