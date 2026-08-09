@@ -94,6 +94,18 @@ Trace reports and summary views follow the same privacy rules as storage:
 
 See `docs/report-contract.md` for the report privacy and redaction section.
 
+## Canonical evidence storage privacy
+
+Canonical `EvidenceRecord`s ([Spec 015](../specs/015-append-only-evidence-store.md)) pass a **mandatory, non-bypassable storage-safety gate** on every save, before any policy decision:
+
+- **S1** credential-like string values on non-sensitive keys, **S2** sensitive-header keys (any value), **S3** sensitive-key names (including `storagekey` / `storage_key`) with non-credential-like values, **S5** captured full raw/provider-native envelopes, and **S6** any retained `Uint8Array`.
+- Phase A (**S6**) short-circuits: a record carrying retained bytes is rejected with exactly `['S6']` before serialization can turn bytes into Base64; the detector never decodes Base64 to search for credentials.
+- Codes are deduplicated and returned in canonical order `S1 < S2 < S3 < S5 < S6`.
+
+The conservative `signalglass.persistence.metadata-safe` reference policy is a **schema-category policy**, not proof that arbitrary metadata strings contain no sensitive content: it admits structural metadata and rejects captured user/provider content, and the credential detector scans every string recursively regardless of policy.
+
+Policy decisions, policy exceptions, and validation results are **storage-safe (leak-free)**: rejection codes, paths, and structural reason codes only — never rejected values, payload content, credentials, or secret material. Persistence-policy name/version and the storage digest live only in administrative metadata (manifest and columns), never inside the stored document. This slice implements **no canonical hard-delete**: no API deletes or overwrites canonical rows; legacy `deleteTrace()` / `deleteExpiredTraces()` never touch canonical rows.
+
 ## Compliance notes
 
 - Live ingress should be run in environments where the operator has permission to intercept agent/model traffic.

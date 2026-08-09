@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@signalglass/core": "workspace:*",
+    "@signalglass/evidence": "workspace:*",
     "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {

@@ -105,7 +105,12 @@ Rules:
     a record-level override is declared.
   - The **persistence** policy version is recorded on stored-record or
     storage-manifest metadata written by the storage layer at storage time —
-    never on canonical raw evidence.
+    never on canonical raw evidence. In the canonical evidence store
+    ([Spec 015](../specs/015-append-only-evidence-store.md)),
+    `EvidenceStorage` records the persistence-policy name/version and the
+    storage digest in the administrative `evidence_records` columns and in the
+    save manifest returned on a successful `stored` outcome — never inside the
+    serialized document.
   - The **export** policy version is recorded on the export package or export
     manifest — never on canonical raw evidence records; the trace is not an
     export projection.

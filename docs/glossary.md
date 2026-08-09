@@ -67,6 +67,24 @@ A rule-of-thumb detection that is useful but not certain. SignalGlass labels heu
 ## Evidence
 An observed, recorded fact about an AI interaction (a payload, event, or envelope), with an explicit evidence status and observation boundary. Evidence is the unit of truth for the target architecture; see [Spec 013](../specs/013-evidence-model.md).
 
+## Evidence store
+The append-only persistence layer for canonical evidence records ([Spec 015](../specs/015-append-only-evidence-store.md), Implemented): `@signalglass/storage`'s `EvidenceStorage` saves one authoritative `EvidenceRecord` per interaction identity with exact-text idempotency (`already-present`) and structured conflict detection, a mandatory storage-safety gate, the `metadata-safe` reference persistence policy, and a dedicated WAL connection that coexists with the legacy `TraceStorage` on the same database file. Saves are transactional and append-only; a stored document is never updated, overwritten, or deleted, and open-time refusal rolls back every canonical object created during initialization.
+
+## Storage safety gate
+The mandatory, non-bypassable gate every save runs before any persistence-policy decision ([Spec 015](../specs/015-append-only-evidence-store.md)): it returns a closed, deduplicated, canonically ordered set of `StorageSafetyCode`s (`S1` < `S2` < `S3` < `S5` < `S6`). Phase A short-circuits on any retained `Uint8Array` (`S6`) before serialization can turn bytes into Base64; the detector never decodes Base64 to search for credentials.
+
+## StorageSafetyCode
+The closed deterministic union of storage-safety rejection codes: `'S1'` (credential-like value on a non-sensitive key), `'S2'` (sensitive-header key, any value), `'S3'` (sensitive-key name such as `storagekey` / `storage_key` with a non-credential-like value), `'S5'` (captured full raw/provider-native envelope), `'S6'` (any retained `Uint8Array`, Phase A). Every code has a documented reachable positive witness.
+
+## Storage manifest
+The administrative metadata returned on a successful `stored` save outcome ([Spec 015](../specs/015-append-only-evidence-store.md)): storage-format version, evidence-schema version, persistence-policy name/version, `stored_at`, and the storage digest. It is recorded in the administrative `evidence_records` columns, never inside the serialized document.
+
+## Serializer snapshot
+The pre-persistence snapshot a save classifies against: `parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(validatedRecord))).record`. Storage guarantees equality of the retrieved record with this snapshot — not unconditional equality with the caller-owned input, which may have been normalized during validation.
+
+## Authoritative identity
+The identity that owns a stored canonical record: `record.trace.traceId` (equal to `interactionId`), enforced as the primary key. Database row ids, digests, and hashes are never evidence identity; same-key collisions are resolved by exact document comparison and structured conflict.
+
 ## Evidence primitive
 A canonical TypeScript representation of a Spec 013 evidence record (trace envelope, span, event, request/response envelope, context artifact, context contribution, completeness record, or their vocabulary types), as defined by [Spec 014 — Evidence primitives](../specs/014-evidence-primitives.md) (Implemented). The Spec 014 slices are complete: the dependency-free [`@signalglass/evidence`](../packages/evidence/README.md) package of types, validators, and JSON-safe serialization (slice 1); deterministic fixtures and negative controls (slice 2); the compatibility projections beside the legacy v0.x runtime models (`@signalglass/core/src/evidenceProjections/`, slice 3); and projection parity and loss verification with the loss-and-mapping matrix ([`docs/evidence-projection-matrix.md`](../docs/evidence-projection-matrix.md), slice 4). Evidence primitives are added beside the existing v0.x runtime models, are provider-neutral, and carry runtime validation and JSON-safe serialization; they are not measurements or interpretations.
 
@@ -85,11 +103,17 @@ The declared scope of what a capture surface could and could not observe, record
 ## Evidence status
 The state of an evidence payload: `captured`, `redacted`, `truncated`, `missing`, `unknown`, or `not_applicable`. `inferred` appears only on derived records. Statuses are never collapsed into `null` or omitted fields.
 
+## Declared content
+Content the capture surface declares it retained only in a limited representation (`redacted` or `truncated` evidence status). Under the `metadata-safe` reference persistence policy, user/provider content is admitted only under such a declaration; under `missing` / `unknown` / `not_applicable` content must be absent. `captured` content that the policy classifies as user/provider content is rejected (`captured-content`).
+
 ## Content hash
 A SHA-256 digest (`sha256:` + 64 lowercase hex) whose input is the retained payload representation, hashed as bytes. The hashing path is selected from the artifact's own serialized fields — `contentFidelity`, `contentType`, `contentCanonicalizer` — never from an enclosing event or envelope: `byte_faithful` bytes are hashed directly (never treated as UTF-8 text); `structurally_faithful` JSON is canonicalized with RFC 8785 (JCS) and hashed as UTF-8; other structured formats use their declared versioned canonicalizer and its output encoding; when retained content exists but no supported deterministic canonicalizer is available, no hash is emitted and `contentHashUnavailableReason: "unsupported_canonicalizer"` is recorded instead. It hashes only retained payload content, never metadata, and never implies possession of discarded original content.
 
 ## Native content hash
 A SHA-256 digest (`sha256:` + 64 lowercase hex) over the exact native byte sequence observed by a capture surface, before decoding, normalization, envelope construction, or serialization. Recorded on an envelope; required when fidelity is `byte_faithful` and the payload is `captured` (`byte_faithful` itself requires `evidenceStatus: "captured"`), optional on `structurally_faithful` envelopes when a transparent surface observed and retained the exact bytes, and forbidden when the exact bytes were not observed or retained (missing/unknown/not applicable/redacted/truncated). Equal to `contentHash` only when the retained representation is the exact observed byte sequence with no transformation; otherwise the two digests differ.
+
+## Storage digest
+The administrative SHA-256 digest computed by `EvidenceStorage` over the exact UTF-8 bytes of the serializer output (`sha256Hex(utf8Encode(storedDocument))`), stored in the `storage_digest` column. It is administrative metadata used for read-integrity verification, not evidence identity, not indexed, and distinct from the canonical `contentHash` / `nativeContentHash` fields inside the record.
 
 ## Measurement record
 A deterministic derivation over evidence (token counts, latency, duration, cost) with algorithm/version, input references, and configuration versions. Cost is a derivation, not evidence.

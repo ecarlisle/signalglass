@@ -12,6 +12,8 @@ export default defineConfig({
       '@signalglass/providers': path.resolve(__dirname, 'packages/providers/src/index.ts'),
       '@signalglass/reports': path.resolve(__dirname, 'packages/reports/src/index.ts'),
       '@signalglass/evidence': path.resolve(__dirname, 'packages/evidence/src/index.ts'),
+      '@signalglass/storage': path.resolve(__dirname, 'packages/storage/src/index.ts'),
+      '@signalglass/ingress': path.resolve(__dirname, 'apps/ingress/src/index.ts'),
     },
   },
   test: {
