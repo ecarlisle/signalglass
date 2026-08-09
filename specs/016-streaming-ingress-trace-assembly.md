@@ -2,27 +2,48 @@
 
 ## Status
 
-**Draft — revision 3 (second architectural correction pass).** Proposed for
+**Draft — revision 4 (third architectural correction pass).** Proposed for
 acceptance; **implementation is prohibited until this spec is Accepted**. No
 runtime code is produced by this PR. The proposed modules, contracts, and
 constants below are named but **not created** until an accepted
 implementation slice.
 
-Revision 3 resolves the revision-2 review blockers: both lifecycle outcomes
-(observation terminal and transport end) are persisted structurally in the
-canonical record; declared losses move into the canonical 1.1 completeness
-contract; the fabricated post-detachment frame count is removed; response
-metadata gets one universal home (a `model_response` event at response-header
-observation); the implementation-slice order is corrected (1.1 foundation
-first); the persistence policy is versioned to
-`signalglass.persistence.metadata-safe` v1.1.0; persistence observations are
-split into structured `SaveOutcome` observations and leak-free environmental
-failures (contention is never a `SaveOutcome`); the usage contract uses the
-real `UsageRecord`/`UsageValue` shapes; duplicate choice indexes are rejected
-and unmapped delta fields are declared losses; terminal-event sequencing is
-reconciled (`error`/`cancelled`, then exactly one `interaction_end`); the
-versioned identity fields are tightened (literal names, semantic versions,
-bump table); and all claims, counts, and mappings are updated.
+Revision 4 resolves the revision-3 review blockers, which all concerned
+contracts that normalized away missing or unobservable facts:
+
+1. **The EvidenceRecord authority model is preserved**: a new authoritative
+   additive 1.1 source, `captureBoundary.streaming`, carries the minimal
+   recorded streaming boundary facts; `completeness.lifecycle`,
+   `completeness.declaredLosses`, and `boundaryStatement` are deterministic
+   **derivations** recomputed by `deriveCompleteness` and verified at parse —
+   derived completeness is never independently authoritative (§13.4).
+2. **Upstream transport and client-facing response delivery are modeled
+   separately** with closed vocabularies (`UpstreamOutcome`,
+   `ClientResponseOutcome`) and a complete cross-field validity matrix
+   (§2, §12).
+3. **Excerpt statuses are honest**: `truncated` only when characters were
+   actually removed, `redacted` only when content was actually masked,
+   `captured` when the retained representation is complete at the declared
+   boundary — and the `metadata-safe` v1.1.0 policy explicitly admits
+   bounded, detector-scanned captured content (§8, §14).
+4. **Remainder semantics corrected**: a four-value `RemainderKnowledge`,
+   defined trailing-after-`[DONE]` behavior, the loss rename to
+   `remainder-after-observation-detach-not-observed`, a 1-based frame
+   position, and an exact `rawForwardedBytes` basis (§12, §6).
+5. **The implemented Spec 015 persistence contract is matched exactly**:
+   `policy-crash` removed (policy exceptions are `policy-failed` /
+   `reason: 'exception'` `SaveOutcome`s); `PersistenceObservation` retains
+   the full typed `SaveOutcome`; internal results are separated from
+   leak-free log projections (§16).
+6. **Schema-version coupling is tightened** with conditional validation:
+   the presence of `captureBoundary.streaming` identifies a streaming
+   record; 1.1-owned fields on a 1.0.0 record are rejected; required 1.1
+   fields when the streaming identity is present; the field count is
+   corrected to six serialized fields (§13).
+7. **The metadata-only `model_response` envelope is fully specified**
+   (§6.6, §13.3).
+8. **All claims, counts, and mappings are updated** (100 test groups ↔ 44
+   acceptance criteria, many-to-many).
 
 This spec is forecast-only in `docs/roadmap.md` (anticipated PR #23,
 documentation-only; the implementation slices are a later, accepted
@@ -35,10 +56,11 @@ observes a **streaming** chat-completions interaction and assembles **one
 canonical `EvidenceRecord`** ([Spec 013](013-evidence-model.md),
 [Spec 014](014-evidence-primitives.md)) from the observed pipeline — client
 request → upstream dispatch → response headers → ordered SSE chunks → usage →
-finish reason → `[DONE]` → errors/cancellation — with both lifecycle outcomes
-recorded, structured declared losses, and persistence exactly once after the
-client response path finishes, through the append-only evidence store
-([Spec 015](015-append-only-evidence-store.md)).
+finish reason → `[DONE]` → errors/cancellation — with the streaming boundary
+facts recorded **authoritatively** under `captureBoundary.streaming`, their
+lifecycle/loss derivations recomputed into completeness, and persistence
+exactly once after the client response path finishes, through the append-only
+evidence store ([Spec 015](015-append-only-evidence-store.md)).
 
 Spec 006 implemented the non-streaming path only and explicitly declared
 streaming a non-goal. Spec 014 §4.6 deferred streamed-observation ordering to
@@ -55,10 +77,10 @@ internal model.
 |---|---|
 | [Spec 006](006-ingress-openai-compatible.md) | Non-streaming `POST /v1/chat/completions` forwarding, normalized error envelope, env-var API keys. Spec 016 extends the same endpoint for `stream: true` requests. |
 | [Spec 013](013-evidence-model.md) | Canonical evidence contract this spec assembles: `model_response`, `model_response_chunk`, `model_usage`, `error`, `cancelled`, `interaction_start/end`, `span_start/end`, evidence statuses, observation roles, capture boundary. |
-| [Spec 014](014-evidence-primitives.md) | `@signalglass/evidence` types/validators/serialization the assembler's output must satisfy; §4.6 (streamed observations ordered by the single sequencing surface) is implemented by this spec; §4.7 terminal-state rules bind the assembler's status decisions; `TraceCompleteness` (Spec 014 §2.2.9) gains the 1.1 fields (§13); `ResponseEnvelope.chunkIndex` semantics are refined additively (§13). |
-| [Spec 015](015-append-only-evidence-store.md) | `EvidenceStorage.saveEvidenceRecord` — the only persistence path for assembled records; `SaveOutcome` (a closed status union **without** `contention` — exhaustion throws `EvidenceContentionError`); the `metadata-safe` reference policy and its versioning contract (§14); the storage-safety gate is non-bypassable. |
+| [Spec 014](014-evidence-primitives.md) | The authority model this spec must preserve: `rawObservations` and `captureBoundary` authoritative; `trace`, `analysis`, `completeness` deterministic derivations; `deriveCompleteness(trace, analysis, captureBoundary)` the completeness source; parsing compares serialized derivatives against recomputed derivatives (§13.4). `ResponseEnvelope.chunkIndex` semantics are refined additively (§13). |
+| [Spec 015](015-append-only-evidence-store.md) | `EvidenceStorage.saveEvidenceRecord` — the only persistence path; `SaveOutcome` (a closed status union **without** `contention`; `policy-failed` with `reason: 'exception'` for caught policy exceptions); exhaustion throws `EvidenceContentionError`; the `metadata-safe` reference policy and its versioning contract (§14); the storage-safety gate is non-bypassable. |
 | [`docs/ingress.md`](../docs/ingress.md) | Current non-streaming live-mode data flow; Spec 016's implementation updates it. |
-| [`docs/trace-model.md`](../docs/trace-model.md) | "Streaming response event refinement" is listed as future work; the legacy `Trace` path becomes a compatibility projection (Spec 016 §9). |
+| [`docs/trace-model.md`](../docs/trace-model.md) | "Streaming response event refinement" is listed as future work; the legacy `Trace` path becomes a compatibility projection with divergence detection (Spec 016 §19.4, §21.11). |
 | [`docs/privacy.md`](../docs/privacy.md) | Default capture/persistence boundaries the assembler must honor (metadata-safe defaults, env-var-only keys, no raw payloads by default). |
 | [`docs/roadmap.md`](../docs/roadmap.md) | Streaming milestone; slice #23 (this spec); slice #40 (reliability/recovery — crash-recovery journaling is deferred to it). |
 
@@ -69,8 +91,9 @@ Define, for a **streaming** OpenAI-compatible interaction observed by
 
 1. The two lifecycles — client passthrough and evidence observation — and
    their separation (Spec 016 §1).
-2. Both lifecycle outcomes persisted independently in the canonical record
-   (observation terminal + transport end + delivery outcome) (Spec 016 §2).
+2. The upstream transport and the client-facing response delivery modeled
+   as independent outcomes with a complete cross-field validity matrix
+   (Spec 016 §2).
 3. The assembly/persistence boundary: one canonical record, one save, after
    the client response path finishes (Spec 016 §3).
 4. Deterministic identity and `seq` ordering (Spec 016 §4).
@@ -81,27 +104,34 @@ Define, for a **streaming** OpenAI-compatible interaction observed by
    terminalization matrix (Spec 016 §6).
 7. The evidence-status vocabulary and the structured loss mapping for every
    assembled payload (Spec 016 §7).
-8. Collection vs. persistence policy boundaries, including the
-   collection-time privacy process (Spec 016 §8).
-9. Legacy coexistence: canonical-authoritative dual emission with divergence
-   detection (Spec 016 §9).
+8. Collection vs. persistence policy boundaries, including the honest
+   excerpt-status semantics and the collection-time privacy process
+   (Spec 016 §8).
+9. The error taxonomy: closed code vocabularies and the closed
+   `error`/`cancelled` event shapes (actor / lifecycleTarget /
+   lifecycleEffect; `requestedBy`), with one classification per terminal
+   (Spec 016 §9).
 10. The deterministic terminal state machine and the single terminal-event
     sequence (Spec 016 §10).
 11. Package boundaries and the proposed module layout (Spec 016 §11).
 12. Public contracts: provider-boundary output types, closed vocabularies,
     and the completeness summary (Spec 016 §12).
-13. The canonical schema extension: additive `evidenceSchemaVersion` 1.1.0
-    and its exact fields (Spec 016 §13).
+13. The canonical schema extension: additive `evidenceSchemaVersion` 1.1.0,
+    the authoritative `captureBoundary.streaming` source, the derived
+    lifecycle/loss fields, conditional 1.0/1.1 validation, and the exact
+    metadata-only `model_response` envelope (Spec 016 §13).
 14. Persistence-policy versioning: `metadata-safe` v1.1.0 (Spec 016 §14).
 15. The structured assembler-version location (Spec 016 §15).
-16. Persistence outcomes: structured `SaveOutcome` observations vs. leak-free
+16. Persistence outcomes: the exact `SaveOutcome` observation vs. leak-free
     environmental failures (Spec 016 §16).
 
-The spec also defines the data flow (§17), privacy and diagnostic rules
-(§18), declared losses and crash limitations (§19), the phased implementation
-sequence (§20), the testing and conformance requirements (§21), acceptance
-criteria (§22), the criterion-to-test mapping (§23), open questions (§24),
-documentation impact (§25), and references (§26).
+The spec also defines the data flow (§17), observability and reporting
+(§18), documentation and privacy commitments including the honest
+crash/no-record declaration and the preserved legacy coexistence (§19), the
+phased implementation sequence (§20), the testing and conformance
+requirements (§21), acceptance criteria (§22), the criterion-to-test mapping
+(§23), deferred work (§24), open questions (§25 — none), and references
+(§26).
 
 ## Non-goals
 
@@ -144,11 +174,14 @@ interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 | Term | Meaning |
 |---|---|
 | **Streaming interaction** | One observed `POST /v1/chat/completions` request with `stream: true`, its upstream dispatch, and its response stream. Exactly one `EvidenceRecord`. |
-| **Transport lifecycle** | The lifecycle that owns the client socket and the upstream connection: request received → response forwarded → ended. Only client cancellation, ingress shutdown/limit, or upstream transport failure ends it (§1.2). |
+| **Transport lifecycle** | The lifecycle that owns the client socket and the upstream connection: request received → response forwarded → ended; its end is recorded as the two independent upstream and client-response outcomes (§1.2, §2). |
 | **Observation lifecycle** | The evidence-assembly lifecycle: the assembler's state machine (§1.3, §10). Observer failures degrade it; they never end the transport lifecycle. |
 | **Observation terminal** | The terminal state of the observation lifecycle — one of the seven `TerminalReason` values (§10). |
-| **Transport end** | The end reason of the transport lifecycle — one of the four `TransportEndReason` values (§2). |
-| **Delivery outcome** | Whether the response body was fully flushed (`flushed`) or the connection ended before completion was observed (`closed`) (§2). |
+| **Upstream outcome** | The end state of the upstream connection/response — one of the four `UpstreamOutcome` values (§2.1). |
+| **Client-response outcome** | The end state of the client-facing ingress response — one of the four `ClientResponseOutcome` values (§2.2). |
+| **Remainder knowledge** | What the observer knows about the stream tail after the terminal — one of the four `RemainderKnowledge` values (§12.4). |
+| **Authoritative fact** | A recorded input: `rawObservations` and `captureBoundary` (incl. `captureBoundary.streaming`). Trusted after validation; never recomputed (§13.4). |
+| **Derived fact** | A deterministic recomputation: `trace`, `analysis`, `completeness` (incl. `lifecycle`, `declaredLosses`, `boundaryStatement`). Verified at parse against recomputation (§13.4). |
 | **Sequencing surface** | The single capture component that assigns `seq` at observation time (Spec 013 §2.2). In this spec it is the assembler (§4). |
 | **Observer failure** | Any failure of the parsing/decoding/assembly machinery (exception, configured bound exceeded, unsupported encoding, decode failure) — distinguished from malformed provider protocol (§1.4). |
 | **Malformed provider protocol** | The provider's stream violates the observed protocol (invalid JSON/UTF-8 in data, invalid or duplicate choice index, EOF/partial frame without `[DONE]`) — a provider-side observation, not an observer failure (§1.4). |
@@ -157,19 +190,20 @@ interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 | **Transport byte** | The raw upstream response-body bytes observed at the ingress boundary, exactly as read from the socket (no decoding, no decompression). Never mutated by the ingress (§5). |
 | **Parsed stream event** | A provider-neutral normalized event from the decoder's frame result: `chunk` / `usage` / `provider-error` (§6, §12). |
 | **Canonical event** | An `EventRecord` (Spec 013 §3.1) the assembler derives from parsed stream events and lifecycle signals. |
-| **Response-metadata event** | The single canonical `model_response` event emitted when response headers are observed, before any chunk/usage/error, carrying `responseMeta` (§6.6, §13.3). |
-| **Terminal marker** | The `[DONE]` data frame that signals normal stream termination. |
+| **Response-metadata event** | The single canonical `model_response` event emitted when response headers are observed, before any chunk/usage/error, carrying `responseMeta` (§6.7, §13.3). |
+| **Terminal marker** | The `[DONE]` data frame that signals normal protocol termination. |
 | **Terminal reason** | One of the closed `TerminalReason` values (§10, §12). |
 | **Passthrough** | Forwarding the upstream response-body bytes to the client with content and order preserved (§5). |
 | **Backpressure** | Slowing or pausing the upstream read when the client cannot consume (§5). |
 | **Dual emission** | Emitting both the canonical record (Spec 015) and the legacy `Trace` (Spec 007 path) for one interaction (§9). |
 | **Divergence detection** | Comparing the canonical record's legacy projection with the independently emitted legacy trace (§9). |
-| **Completeness summary** | The assembler-level accounting of what was observed, dropped, and declared (§12). |
+| **Completeness summary** | The assembler-level accounting of what was observed, dropped, and declared (§12.5); its persisted projection is the derived `completeness` (§13.4). |
 | **Capture profile** | The named, versioned bundle of collection settings recorded on the trace (`captureProfile`, Spec 013 §9). |
-| **Declared content** | Content admitted only under an owning `redacted`/`truncated` declaration (Spec 015 `metadata-safe`). |
-| **Retained excerpt** | The bounded representation of content the collection process retains: normalized text, an owning `truncated`/`redacted` status, and the owning declarations (§8). |
-| **Save outcome** | The structured `SaveOutcome` status union returned by `saveEvidenceRecord` (Spec 015) — never includes contention (§16). |
-| **Environmental failure** | A persistence failure that is not a `SaveOutcome`: thrown `EvidenceContentionError` or storage/policy exceptions caught by this slice, reduced to a closed leak-free code (§16). |
+| **Declared content** | Content admitted under an owning `redacted`/`truncated` declaration (Spec 015 `metadata-safe`). |
+| **Bounded captured content** | Content admitted as `captured` (complete at the declared boundary) under the explicit `metadata-safe` v1.1.0 rule — bounded by the configured cap and passed through the versioned sensitive detector (§8.5, §14). |
+| **Retained excerpt** | The bounded representation of content the collection process retains: normalized text, an honest owning status, and the owning declarations (§8). |
+| **Save outcome** | The structured `SaveOutcome` returned by `saveEvidenceRecord` (Spec 015) — never includes contention (§16). |
+| **Environmental failure** | A persistence failure that is not a `SaveOutcome`: thrown `EvidenceContentionError` or storage-layer exceptions caught by this slice, reduced to a closed leak-free code (§16). |
 
 ---
 
@@ -199,10 +233,11 @@ independent lifecycles over the same byte stream**:
 The observation layer is a **tee** on the transport byte stream: it consumes
 a copy and feeds nothing back into the forwarded stream.
 
-**Both lifecycle outcomes are observed facts, and both are persisted
-independently in the canonical record** (§2): the observation terminal (from
-the observation lifecycle) and the transport end with its delivery outcome
-(from the transport lifecycle). One is never derived from the other.
+**The transport lifecycle spans two independent systems — the upstream
+connection and the client-facing ingress response.** Their end states are
+observed separately and recorded separately (§2): the upstream outcome and
+the client-response outcome are independent facts with their own closed
+vocabularies, and the cross-field validity matrix forbids impossible pairs.
 
 ### 1.2 Transport lifecycle
 
@@ -212,14 +247,22 @@ States:
 awaiting-response → forwarding → ended
 ```
 
-End reasons (closed set) — **the only reasons forwarding stops**:
-
-| End reason | Trigger | Client impact |
-|---|---|---|
-| `response-complete` | Upstream response body fully read and fully flushed to the client | Normal close |
-| `client-cancelled` | Client socket closes/disconnects mid-stream | Connection closed (client-initiated) |
-| `ingress-shutdown` | Server shutdown or a configured ingress limit forces cancellation | Connection closed by ingress |
-| `upstream-transport-failure` | Upstream connection error, timeout, or premature EOF mid-stream | Connection closed; no further bytes possible |
+The transport lifecycle's end is **not one reason but two independent
+outcomes** (§2): the **upstream outcome** (how the upstream connection/body
+ended: `not-started` / `response-completed` / `connection-failed` /
+`stream-ended-prematurely`) and the **client-response outcome** (how the
+client-facing ingress response ended: `not-started` / `flushed` /
+`closed-before-completion` / `local-error-flushed`). Only four client-impact
+situations can stop forwarding, and each is recorded as the appropriate pair
+(§2.5): the upstream body fully read and flushed (`response-completed` +
+`flushed`); the client socket closes mid-stream (`client-cancelled` +
+`closed-before-completion`); ingress shutdown or a configured ingress limit
+forces cancellation (`ingress-cancelled` + `closed-before-completion`);
+upstream connection error, timeout, or premature EOF (`stream-ended-prematurely`
++ `closed-before-completion`). The four-value end-reason vocabulary of the
+revision-3 draft (`TransportEndReason` / `DeliveryOutcome`) is **removed** —
+it could not represent pre-dispatch paths and conflated two independent
+systems.
 
 No other event may stop forwarding — in particular, **no observer failure
 (parser exception, decoder exception, frame overflow, unsupported encoding,
@@ -237,20 +280,20 @@ these facts are recorded separately, never merged (§2).
 The observation lifecycle is the assembler's state machine (§10). Its
 terminal states are: `completed`, `upstream-failed`, `client-cancelled`,
 `ingress-cancelled`, `malformed-stream`, `request-failed`, and
-`observation-detached`. The observation terminal and the transport end are
-**independent**: either may occur first, and persistence waits for the
-transport end (§3.2).
+`observation-detached`. The observation terminal, the upstream outcome, and
+the client-response outcome are **independent**: any may occur first, none
+rewrites another, and persistence waits for the client-response end (§3.2).
 
 ### 1.4 Malformed provider protocol vs. internal observer failure
 
 Two failure classes are distinguished with different trace statuses, actors,
 roles, and completeness:
 
-| Class | Examples | Trace status | Terminal event | Actor / role | Completeness |
+| Class | Examples | Trace status | Terminal event | Actor / lifecycle targeting | Completeness |
 |---|---|---|---|---|---|
-| **Malformed provider protocol** | `data` value is not valid JSON; invalid UTF-8 in a data value; non-integer/negative/duplicate choice index; EOF or partial frame without `[DONE]` | `failed` | `error` (terminal) | `model` / `provider_reported` (the provider's stream was observed to violate the protocol) | Declares the malformed frame and the unobserved remainder |
+| **Malformed provider protocol** | `data` value is not valid JSON; invalid UTF-8 in a data value; non-integer/negative/duplicate choice index; EOF or partial frame without `[DONE]` | `failed` | `error` — the record's **final** event (Spec 014 §4.7: no `interaction_end` after a terminal declaration) | actor `model`; `lifecycleTarget: "trace"`, `lifecycleEffect: "fail"`; observationRole `provider_reported` (the provider's stream was observed to violate the protocol) | Declares the malformed frame and the unobserved remainder |
 | **Unrecognized provider extension** (valid JSON, unknown shape) | A frame that decodes to no recognized chunk/usage/error/done shape | Unaffected (not terminal) | None | — | Declared loss `unrecognized-extension-frame`; observation **continues** |
-| **Internal observer failure** | Parser/decoder/assembler exception; frame-overflow observation bound; unsupported content-encoding; decoder-tee decode failure | `unknown` | Informational `error` (actor `capture`, `lifecycleTarget: "none"`, `lifecycleEffect: "none"`) — non-terminal | `capture` / `unobservable` | Declares observation detachment and the unknown remainder |
+| **Internal observer failure** | Parser/decoder/assembler exception; frame-overflow observation bound; unsupported content-encoding; decoder-tee decode failure | `unknown` | Informational `error` (actor `capture`, `lifecycleTarget: "none"`, `lifecycleEffect: "none"`) — the record's **final** event; no `interaction_end` | actor `capture`; observationRole `unobservable` | Declares observation detachment and the unknown remainder |
 
 Rules:
 
@@ -262,15 +305,19 @@ Rules:
 - **A malformed provider protocol frame is a provider-side observation**:
   the provider's stream is observed to violate the protocol. The canonical
   record terminalizes `malformed-stream` (trace `failed`, actor `model`,
-  role `provider_reported`). The **client still receives the frame bytes
-  unchanged** — protocol classification is an observation decision, not a
-  transport decision.
+  `lifecycleTarget: "trace"`, `lifecycleEffect: "fail"`, observationRole
+  `provider_reported`); the `error` event is the record's **final** event
+  (no `interaction_end` after it — Spec 014 §4.7). The **client still
+  receives the frame bytes unchanged** — protocol classification is an
+  observation decision, not a transport decision.
 - **An internal observer failure detaches observation** (§1.5): canonical
   extraction stops, the record finalizes with status `unknown` (the
   termination could not be observed — Spec 014 §4.7), and an informational
-  `error` event (actor `capture`, target `none`, effect `none`) makes the
-  failure visible without declaring the interaction failed. The transport
-  passthrough is untouched.
+  `error` event (actor `capture`, `lifecycleTarget: "none"`,
+  `lifecycleEffect: "none"`, observationRole `unobservable`) makes the
+  failure visible without declaring the interaction failed; it is the
+  record's **final** event and no `interaction_end` is fabricated. The
+  transport passthrough is untouched.
 
 ### 1.5 Observation detachment
 
@@ -284,98 +331,128 @@ After an observer failure:
    was detached — the record's status stays `unknown` even if the client
    later receives a complete stream.
 4. The completeness summary declares the observation boundary honestly
-   (§12.3): `observationDetached: true`, the last observed frame position
+   (§12.5): `observationDetached: true`, the last observed frame position
    when known, `remainderObservation: 'unknown'`, and **no inferred frame
    count** for anything the observer could not see.
 5. Persistence occurs only after the client response path has actually
    finished (§3.2, §16) — including after observation degradation.
-
 ---
 
-## 2. Both lifecycle outcomes persisted independently
+## 2. Upstream transport and client-response delivery as independent outcomes
 
-**Decision 2 — the observation terminal and the transport end are separate
-observed facts; both are persisted structurally in the canonical record;
-response delivery is recorded as `flushed` or `closed`; neither lifecycle
-rewrites the other.**
+**Decision 2 — the upstream connection/body and the client-facing ingress
+response are two different systems with two closed outcome vocabularies, a
+complete cross-field validity matrix, and authoritative persistence under
+`captureBoundary.streaming`. No impossible pair is allowed, and no upstream
+failure is fabricated merely because no upstream request existed.**
 
-### 2.1 The two persisted facts
-
-Every streaming record assembled by this spec persists, additively on the
-canonical completeness (Spec 016 §13.2):
+### 2.1 Upstream outcome (the upstream connection/body)
 
 ```ts
-// canonical 1.1 — serialized at EvidenceRecord.completeness.lifecycle
-lifecycle: {
-  observation: { terminal: TerminalReason };           // the observation lifecycle's terminal
-  transport: { end: TransportEndReason; delivery: DeliveryOutcome };
-}
+type UpstreamOutcome =
+  | 'not-started'               // no upstream dispatch occurred:
+                                //   invalid request, missing API key, unroutable model, over-limit body
+  | 'response-completed'        // upstream response body fully read (any status: 2xx SSE, non-SSE 2xx, HTTP error body)
+  | 'connection-failed'         // connect/timeout/TLS failure before response headers were observed
+  | 'stream-ended-prematurely'; // failure after the response started: mid-stream connection loss or premature EOF
 ```
 
-- `TerminalReason` (closed, §12.2): `completed | upstream-failed |
-  client-cancelled | ingress-cancelled | malformed-stream | request-failed |
-  observation-detached` — the observation terminal, from the assembler's
-  state machine.
-- `TransportEndReason` (closed): `response-complete | client-cancelled |
-  ingress-shutdown | upstream-transport-failure` — the transport lifecycle's
-  end reason (§1.2).
-- `DeliveryOutcome` (closed): `flushed | closed`.
-  - `flushed`: the ingress wrote every byte it received and observed response
-    completion (`finish`) — the response was delivered to the OS for the
-    client. (TCP delivery beyond the socket is not observable and is not
-    claimed.)
-  - `closed`: the connection ended before completion was observed — client
-    disconnect, ingress shutdown/limit, or upstream failure mid-delivery —
-    including cases where some bytes had already been written.
-- **Independence rule**: the observation terminal comes only from the
-  observation lifecycle; the transport end/delivery come only from the
-  transport lifecycle. `trace.status` is derived **only** from the
-  observation terminal (§10.3). The transport facts are recorded alongside;
-  they never change the status, and the observation terminal never rewrites
-  the transport facts.
+- **`not-started` covers every pre-dispatch failure** — an invalid request
+  never creates an upstream request, so no upstream failure is fabricated
+  for it. (Revision 3's combined `TransportEndReason` could not represent
+  this; it is now a first-class value.)
+- `connection-failed` means the upstream never delivered response headers.
+- `stream-ended-prematurely` means headers were observed and the body was
+  cut short.
 
-### 2.2 Combinations that must be representable
+### 2.2 Client-response outcome (the client-facing ingress response)
 
-| Observation terminal | Transport end | Meaning (all persisted as-is) |
-|---|---|---|
-| `completed` (`[DONE]` parsed) | `response-complete`, `flushed` | Normal completion |
-| `completed` (`[DONE]` parsed) | `client-cancelled`, `closed` | `[DONE]` parsed, then the client disconnected before the response finished |
-| `completed` (`[DONE]` parsed) | `ingress-shutdown`, `closed` | `[DONE]` parsed, then ingress shutdown interrupted delivery |
-| `observation-detached` | `response-complete`, `flushed` | Observer detached early, but the transport still delivered everything |
-| `observation-detached` | `client-cancelled`, `closed` | Observer detached, then the client cancelled |
-| `malformed-stream` | `response-complete`, `flushed` | Malformed observation terminalized, yet the passthrough completed successfully |
-| `malformed-stream` | `upstream-transport-failure`, `closed` | Both failed (possibly the same underlying event, recorded in each lifecycle's own vocabulary) |
-| `client-cancelled` | `client-cancelled`, `closed` | Both lifecycles observed the same client disconnect |
-| `request-failed` | `response-complete` (no response existed) | Not representable — a request that never dispatched has no transport response; `transport.end` is still recorded with the end reason the transport observed (`client-cancelled`, `ingress-shutdown`, or `upstream-transport-failure` when applicable), or `response-complete` is never asserted for a path with no response |
+```ts
+type ClientResponseOutcome =
+  | 'not-started'               // client disconnected before any response bytes were sent
+  | 'flushed'                   // every forwarded byte was written and the response finished
+  | 'closed-before-completion'  // the connection ended before completion was observed
+  | 'local-error-flushed';      // the ingress flushed its own normalized error envelope (Spec 006)
+```
 
-**Precedence/independence rule**: the first observed terminal wins within
-each lifecycle independently. `[DONE]` before client close ⇒ observation
-`completed` AND transport `client-cancelled` (never "cancelled" as the
-trace status — the observation genuinely completed). A malformed observation
-followed by successful passthrough ⇒ `malformed-stream` AND
-`response-complete`/`flushed` (the trace stays `failed`; the transport fact
-records that the client nevertheless received the bytes).
+- `flushed` means the ingress wrote every byte it received and observed
+  response completion (`finish`). TCP delivery beyond the socket is not
+  observable and is not claimed.
+- `local-error-flushed` is the client-facing outcome for pre-dispatch and
+  connect-failure paths where the ingress returns its own normalized error
+  envelope (Spec 006 behavior): invalid request → 4xx, missing key →
+  error, unroutable → 4xx, connect failure → 502.
+- `not-started` is the outcome when the client disconnected before any
+  response began.
 
-### 2.3 Persistence of the lifecycle facts
+### 2.3 Cross-field validity matrix (upstream × client-response)
 
-- The lifecycle facts are persisted **in the canonical record** (1.1
-  `completeness.lifecycle`), not only in an ephemeral assembler result or
-  logs (§13.2). They round-trip through serializer/parser, survive storage
-  retrieval, and are covered by the `metadata-safe` v1.1.0 policy matrix
-  (§14).
-- The assembler's `CompletenessSummary` carries the same facts pre-save
-  (§12.3); the canonical record is the durable source.
+| upstream \ clientResponse | `not-started` | `flushed` | `closed-before-completion` | `local-error-flushed` |
+|---|---|---|---|---|
+| `not-started` | ✓ client disconnected before any response (pre-dispatch) | ✗ | ✓ client disconnected while the local error was being written | ✓ **invalid request / missing key / unroutable → local 4xx/error flushed** |
+| `response-completed` | ✓ client gone before any byte forwarded | ✓ **normal completion** | ✓ `[DONE]` parsed, then client closed before flush | ✗ |
+| `connection-failed` | ✓ client gone during connect failure | ✗ | ✓ client disconnected while the 502 was being written | ✓ **connect failure → local 502 flushed** |
+| `stream-ended-prematurely` | ✓ failed before any byte forwarded | ✗ | ✓ **mid-stream upstream failure after response bytes started** | ✗ |
 
-### 2.4 Race tests required
+Rules:
 
-- `[DONE]` parsed, then client close before response finish → observation
-  `completed`, transport `client-cancelled`/`closed`, both persisted.
-- Observation detaches, then the transport completes → observation
-  `observation-detached`, transport `response-complete`/`flushed`, both
-  persisted.
-- Malformed observation, then successful passthrough completion → observation
-  `malformed-stream`, transport `response-complete`/`flushed`, both
-  persisted.
+- **Impossible pairs are rejected**: a response marked `flushed` can never
+  pair with `connection-failed`/`stream-ended-prematurely`/`not-started`
+  (a flush that "completes" requires the upstream body to have completed);
+  `local-error-flushed` never pairs with `response-completed` or
+  `stream-ended-prematurely` (a completed/prematurely-ended upstream body is
+  forwarded, never replaced by a local error).
+- **No fabricated upstream failure**: paths that never dispatched
+  (`not-started` upstream) are exactly the pre-dispatch failures; they are
+  never described as upstream failures.
+- The matrix is enforced by validation: a `captureBoundary.streaming` whose
+  pair is invalid fails parse (§13.4). Tests cover every cell (§21 T91).
+
+### 2.4 Authoritative persistence: `captureBoundary.streaming`
+
+Both outcomes, the observation terminal, the remainder knowledge, the loss
+facts, and the assembler identity are recorded **authoritatively** in the
+additive 1.1 field `captureBoundary.streaming` (§13.4):
+
+```ts
+captureBoundary.streaming = {
+  observationTerminal: TerminalReason;
+  upstream: { outcome: UpstreamOutcome };
+  clientResponse: { outcome: ClientResponseOutcome };
+  remainder: {
+    knowledge: RemainderKnowledge;              // §12.4
+    lastObservedFramePosition?: number;         // 1-based (§12.3)
+    rawForwardedBytes?: number;                 // basis defined in §12.3
+  };
+  losses: { /* closed fact set, §7.3/§13.4 */ };
+  assembly: { /* §15 */ };
+};
+```
+
+The derived `completeness.lifecycle` and `completeness.declaredLosses` are
+recomputed from this authoritative source by `deriveCompleteness` and
+verified at parse (§13.4). There is **one authority per fact** — the
+authoritative input is trusted after validation; the derived copies are
+recomputed and compared, never independently authoritative.
+
+### 2.5 Scenarios and required tests
+
+| Scenario | observationTerminal | upstream.outcome | clientResponse.outcome |
+|---|---|---|---|
+| Invalid request, local 4xx flushed | `request-failed` | `not-started` | `local-error-flushed` |
+| Missing API key, local error flushed | `request-failed` | `not-started` | `local-error-flushed` |
+| Connect failure, local 502 flushed | `upstream-failed` | `connection-failed` | `local-error-flushed` |
+| Mid-stream upstream failure after bytes started | `upstream-failed` (or `observation-detached`) | `stream-ended-prematurely` | `closed-before-completion` |
+| Client disconnect before response headers | `client-cancelled` | `connection-failed` | `not-started` |
+| `[DONE]` parsed, then client close before flush | `completed` | `response-completed` | `closed-before-completion` |
+| Normal completion | `completed` | `response-completed` | `flushed` |
+| Malformed observation, passthrough still completes | `malformed-stream` | `response-completed` | `flushed` |
+
+Tests: T49 (invalid 4xx), T50 (missing key), T51 (502), T52 (mid-stream
+failure), T53 (disconnect before headers), T46 (`[DONE]` then close), T91
+(validity matrix). The observation terminal and the two outcomes are
+recorded independently and never rewrite each other.
+
 ---
 
 ## 3. Assembly and persistence boundary
@@ -389,9 +466,9 @@ declared honestly.**
 - Each observed streaming interaction produces **exactly one**
   `EvidenceRecord` (§17 data flow), assembled in memory across the whole
   stream.
-- The record is handed to persistence **exactly once**, after the transport
-  lifecycle has ended (§3.2), through the only permitted persistence path:
-  `EvidenceStorage.saveEvidenceRecord(record)` (Spec 015).
+- The record is handed to persistence **exactly once**, after the
+  client-response path has ended (§3.2), through the only permitted
+  persistence path: `EvidenceStorage.saveEvidenceRecord(record)` (Spec 015).
 - There is **no checkpointing**: no partial records, no in-progress writes,
   no revisions, no upserts, no periodic snapshots. The append-only contract
   of Spec 015 is unchanged; the assembler adds no second write path.
@@ -403,15 +480,15 @@ declared honestly.**
 
 ### 3.2 Persistence timing: after the response path finishes
 
-- **Observation terminal and response-path completion are separate.**
+- **Observation terminal and client-response completion are separate.**
   The assembler reaches its terminal observation state when the terminal
   event is observed (e.g. `[DONE]` may be parsed — and canonical completion
   determined — before the final bytes have flushed to the client).
-- The **save waits until the client response path has finished or closed**
-  (`finish`/`close`), not until the observation terminal:
+- The **save waits until the client-response path has ended** (`finish`/
+  `close`), not until the observation terminal:
   - a synchronous Spec 015 save MUST NOT occur in the forwarding/backpressure
     data path;
-  - the save runs once, after the response path ended, on the
+  - the save runs once, after the client-response end, on the
     terminalization/finalization path outside any data handler;
   - a storage failure is therefore always post-response and can neither
     delay nor mutate client bytes (§16).
@@ -512,7 +589,6 @@ choice identity is honest (rejected duplicates, declared unmapped fields).**
   position was assigned); the loss is disclosed through the evidence status,
   the declared-loss codes, and the completeness summary, never through a
   fabricated gap in the canonical sequence.
-
 ---
 
 ## 5. Streaming transparency
@@ -577,7 +653,7 @@ L4  canonical events    EventRecords assembled by the assembler (Spec 013 shapes
   upstream read (`readable.pause()` / stream flow control).
 - Idle-timeout semantics (30 s default): the client response is closed after
   an idle period with no forward progress. This is a transport decision (an
-  ingress limit), so it ends the transport lifecycle via
+  ingress limit), so it ends the client-response path via
   `ingress-shutdown`-class cancellation (§1.2); the observation lifecycle
   records `ingress-cancelled` (§10) when it is still active.
 - There is **no total-response timeout** that kills long-lived streams; the
@@ -624,9 +700,10 @@ byte-exact:
 
 ### 5.6 Byte-boundary verification
 
-- The implementation must prove byte transparency by test (§21 T55–T56):
+- The implementation must prove byte transparency by test (§21 T60–T61):
   for every encoded/plain scenario, the bytes written to the client are
   exactly the bytes read from the upstream (header construction excepted).
+
 ---
 
 ## 6. SSE parsing, multi-choice normalization, and terminalization
@@ -635,7 +712,8 @@ byte-exact:
 frame-level results; one frame expands to zero or more canonical events in
 deterministic order; choice identity and chunk ordinal are distinct;
 duplicate choice indexes in one frame are rejected; unmapped delta fields are
-declared losses; the terminalization matrix is closed.**
+declared losses; the terminalization matrix is closed; trailing content after
+`[DONE]` is forwarded, never canonicalized, and honestly accounted.**
 
 ### 6.1 The parser (L2)
 
@@ -709,9 +787,8 @@ For a chunk frame with provider `choices` array:
   `null`**: `role`, `tool_calls`, `refusal`, `audio`, multimodal content
   parts, and any future extension field are declared
   `unmapped-delta-fields` (§7.3) unless retained under the `providerNative`
-  contract. The canonical text delta is retained as an excerpt; the
-  structured sub-fields are not mapped into the canonical model by this
-  slice.
+  contract. The canonical text delta is retained; the structured sub-fields
+  are not mapped into the canonical model by this slice.
 - **Raw provider JSON is never emitted by the decoder** into the canonical
   model except under the `providerNative` retention contract (§7.2, §12.1).
 - Retention (excerpting/masking) is applied by the assembler's collection
@@ -733,31 +810,62 @@ For a chunk frame with provider `choices` array:
 
 | Terminal | Trigger (observed) | Trace status | Canonical terminal event |
 |---|---|---|---|
-| `completed` | `[DONE]` frame observed (first observed terminal wins) | `completed` | `interaction_end`; model span `completed` |
-| `upstream-failed` | Upstream HTTP error; connection error/timeout/TLS loss; non-SSE 2xx; provider error frame | `failed` | `error` (terminal) then `interaction_end`; model span `unknown` |
-| `client-cancelled` | Client disconnect mid-stream | `cancelled` | `cancelled` (requestedBy `client`) then `interaction_end`; model span `unknown` |
-| `ingress-cancelled` | Ingress shutdown/limit cancellation (idle timeout included) | `cancelled` | `cancelled` (requestedBy `ingress`) then `interaction_end`; model span `unknown` |
-| `malformed-stream` | `sse-invalid-data-json`, `sse-invalid-utf8`, `sse-invalid-choice-index`, `sse-partial-frame-at-eof`, `sse-eof-without-done` | `failed` | `error` (actor `model`, role `provider_reported`) then `interaction_end`; model span `unknown` |
-| `request-failed` | Request rejected before dispatch (invalid/incomplete/over-limit/unroutable/key-unavailable) | `failed` | `error` (actor per §10.4) then `interaction_end`; no model span |
-| `observation-detached` | Internal observer failure (no terminal event was observable) | `unknown` | Informational `error` (actor `capture`, target `none`, effect `none`); `interaction_end`; model span `unknown` |
+| `completed` | `[DONE]` frame observed (first observed terminal wins) | `completed` | `span_end` (model span) then **`interaction_end`** — the record's final event |
+| `upstream-failed` | Upstream HTTP error; connection error/timeout/TLS loss; non-SSE 2xx; provider error frame | `failed` | **`error`** (actor `model`, `lifecycleTarget: "trace"`, `lifecycleEffect: "fail"`) — the record's final event; no `interaction_end`; model span `unknown` |
+| `client-cancelled` | Client disconnect mid-stream | `cancelled` | **`cancelled`** (requestedBy `client`, `lifecycleTarget: "trace"`, `lifecycleEffect: "cancel"`) — the record's final event; no `interaction_end`; model span `unknown` |
+| `ingress-cancelled` | Ingress shutdown/limit cancellation (idle timeout included) | `cancelled` | **`cancelled`** (requestedBy `ingress`, `lifecycleTarget: "trace"`, `lifecycleEffect: "cancel"`) — the record's final event; no `interaction_end`; model span `unknown` |
+| `malformed-stream` | `sse-invalid-data-json`, `sse-invalid-utf8`, `sse-invalid-choice-index`, `sse-partial-frame-at-eof`, `sse-eof-without-done` | `failed` | **`error`** (actor `model`, `lifecycleTarget: "trace"`, `lifecycleEffect: "fail"`, observationRole `provider_reported`) — the record's final event; no `interaction_end`; model span `unknown` |
+| `request-failed` | Request rejected before dispatch (invalid/incomplete/over-limit/unroutable/key-unavailable) | `failed` | **`error`** (actor `capture`, `lifecycleTarget: "trace"`, `lifecycleEffect: "fail"`) — the record's final event; no `interaction_end`; no model span |
+| `observation-detached` | Internal observer failure (no terminal event was observable) | `unknown` | Informational **`error`** (actor `capture`, `lifecycleTarget: "none"`, `lifecycleEffect: "none"`) — the record's final event; no `interaction_end`; model span `unknown` |
 
 Terminal rules (Spec 014 §4.7):
 
 - **The first observed terminal wins** within the observation lifecycle;
-  the transport lifecycle's end is recorded separately and independently
-  (§2).
-- **Terminal-event sequence** (§10.5): the causal terminal event
-  (`error` or `cancelled`) is emitted first at its `seq`; then
-  **`interaction_end` is emitted exactly once** as the final canonical
-  event; **nothing follows `interaction_end`** — no second `interaction_end`,
-  no later `error`/`cancelled`/chunk/usage, no double emission.
+  the upstream outcome and the client-response outcome are recorded
+  separately and independently (§2).
+- **Terminal-event sequence** (§10.5): each terminal ends with **exactly one
+  final canonical event** — `interaction_end` for `completed` only; the
+  causal `error` (`lifecycleTarget: "trace"`, `lifecycleEffect: "fail"`) as
+  the final event for `upstream-failed` / `malformed-stream` /
+  `request-failed`; the `cancelled` declaration (`lifecycleTarget: "trace"`,
+  `lifecycleEffect: "cancel"`) as the final event for `client-cancelled` /
+  `ingress-cancelled`; the informational `error` (`lifecycleEffect: "none"`)
+  as the final event for `observation-detached`. **Nothing follows the final
+  event** — no `interaction_end` after a terminal declaration (Spec 014 §4.7
+  rejects it as `terminal_declaration_not_final`), no second terminal event,
+  no later chunk/usage, no double emission.
 - On trace-level failure or cancellation the model span ends `unknown` —
   never `completed` by inference. No wall-clock "completion" is synthesized.
 - **No terminalization by wall clock.** The assembler never finalizes
   "completed" because time passed; an undecidable stream ends as one of the
   other terminals or via ingress cancellation at a limit.
 
-### 6.6 Response-metadata event (`model_response`)
+### 6.6 Trailing content after `[DONE]` (and after any terminal)
+
+- **`[DONE]` proves the protocol terminal marker was observed — it does not
+  prove transport EOF or the absence of trailing bytes.** Trailing bytes or
+  frames after `[DONE]`:
+  - **are still forwarded** — the passthrough never stops at `[DONE]`;
+    `[DONE]` is an observation concept, not a transport concept;
+  - **never create canonical events** — after the observation terminal, the
+    assembler accepts no canonical input; nothing is sequenced after the
+    terminal event, and the final canonical event (per §10.5) is emitted at
+    terminalization, never followed by content events;
+  - **are parsed for structural accounting** — the parser MAY continue
+    framing after the terminal so the observer can state honestly whether
+    trailing frames existed (feeding `losses.postTerminalContentNotRetained`
+    and `observedFrames`); canonicalization never resumes. (Where framing is
+    impossible — unsupported encoding, decode failure — the facts are
+    recorded as unobserved, not invented.)
+  - **are declared as not retained** — `post-terminal-content-not-retained`
+    (§7.3) is declared when content after the observation terminal was
+    observed or could not be excluded; trailing bytes are **never called
+    nonexistent merely because `[DONE]` was seen** — the remainder knowledge
+    (§12.4) records exactly what was observed.
+- The same rules apply after any terminal that precedes the transport end
+  (e.g. content after a malformed frame, or after observation detachment).
+
+### 6.7 Response-metadata event (`model_response`)
 
 - When response headers are observed — **any** upstream status — the
   assembler emits exactly **one** canonical `model_response` event as the
@@ -772,45 +880,64 @@ Terminal rules (Spec 014 §4.7):
   `ErrorPayload` carries no status field (§13.3 removes the draft's
   `upstreamStatus`); `responseMeta.statusCode` is the single upstream-status
   home on header-observed paths. Paths that never observe headers
-  (connect/timeout/TLS failures, `request-failed`) have **no** status and
-  **no** `model_response`.
-- A metadata-only `model_response` (no content, no finish reason, no usage)
-  is legal in streaming; the legacy projection maps it with declared loss
-  (§13.5).
-
+  (`upstream.outcome: 'connection-failed'`, `request-failed`) have **no**
+  status and **no** `model_response`.
+- The metadata-only `model_response` envelope's complete canonical shape is
+  specified in §13.3.
 ---
 
 ## 7. Evidence status vocabulary and loss mapping
 
-**Decision 7 — every assembled payload carries a closed-set evidence status;
-declared losses are closed codes persisted structurally in the canonical
-completeness; absence is declared, zeros are never fabricated, and statuses
-never collapse to `null`.**
+**Decision 7 — every assembled payload carries a closed-set evidence status
+that describes the transformation actually applied; declared losses are
+closed codes derived from authoritative boundary facts and persisted through
+the derived `completeness.declaredLosses`; absence is declared, zeros are
+never fabricated, and statuses never collapse to `null`.**
 
-### 7.1 Evidence statuses (Spec 013 §4 / Spec 014 §5)
+### 7.1 Evidence statuses (Spec 013 §4 / Spec 014 §5) — honest assignment
 
-`EvidenceStatus = 'captured' | 'redacted' | 'truncated' | 'missing' | 'unavailable'`
-(closed, from `@signalglass/evidence`). Assembly rules:
+`EvidenceStatus = 'captured' | 'redacted' | 'truncated' | 'missing' | 'unknown' | 'not_applicable'`
+(closed, from `@signalglass/evidence`). Assignment rules — **each status
+describes the transformation actually applied to the retained representation**:
 
-- **Control events** (`interaction_start`, `interaction_end`, `span_start`,
-  `span_end`): status `captured` (metadata only; never content-bearing).
-- **Request messages**: default profile retains bounded excerpts → owning
-  status `truncated` (length boundary only) or `redacted` (a sensitive span
-  was masked); never `captured` for full content by default (§8).
-- **Chunk deltas**: retained excerpt → `truncated` or `redacted` (same
-  rule); the retained representation is the excerpt, with the owning
-  declaration (§8).
-- **Usage**: provider-reported values → field-level `captured` on each
-  `UsageValue` (§13.6); captured zero is a real observation
-  (`inputTokens: { value: 0, evidenceStatus: 'captured' }`), distinct from
-  absence (no usage event, no fields).
-- **Provider error frame / transport errors**: status `captured` (structural
-  text only, §8.4).
-- **Absent usage / absent finish reason / unretained content / unmapped
-  delta fields**: declared via `MissingDeclaration` /
-  `TruncationDeclaration` / `RedactionDeclaration` on the raw observation
-  payload and via the canonical `declaredLosses` (§7.3); never encoded as
-  `null` statuses and never as fabricated zeros.
+| Status | Assigned only when |
+|---|---|
+| `truncated` | The retained representation is **shorter than the post-redaction candidate** — characters were actually removed by the length boundary. |
+| `redacted` | Content was **actually masked or omitted by redaction** (a sensitive span matched the versioned detector). |
+| `captured` | The retained representation is **complete at the declared boundary** — every character of the (post-redaction) content is present. |
+| `missing` | The value is genuinely absent (per Spec 013 §4.1). |
+| `unknown` / `not_applicable` | Not determinable / not applicable at the declared boundary (per Spec 013 §4.1; e.g. the detached stream tail). |
+
+- **Benign content shorter than the cap is `captured`, not `truncated`.**
+  Applying the length boundary to content that fits within it removes
+  nothing; declaring `truncated` would declare a loss that did not occur.
+  The revision-3 rule ("`truncated` whenever the boundary is applied") is
+  revoked.
+- `truncated` and `redacted` carry the owning
+  `TruncationDeclaration`/`RedactionDeclaration` on the raw observation
+  payload (Spec 013 §2.2.12, §5.8; projection rows E2L-078..080). Declaration
+  lengths must agree with the actual transformation (`maxLength` /
+  `originalLength` reflect real character counts).
+- **Loss codes follow the same honesty rule**: `message-content-not-retained`
+  and `delta-content-not-retained` are declared **only when content was
+  actually not retained** (the candidate exceeded the cap, or no excerpt was
+  retained); fully retained benign content produces no such loss.
+- Per-kind rules:
+  - **Control events** (`interaction_start`, `interaction_end`,
+    `span_start`, `span_end`): `captured` (metadata only).
+  - **Request messages**: benign content ≤ cap → `captured`; content > cap →
+    `truncated`; masked spans → `redacted`.
+  - **Chunk deltas**: same rule (benign ≤ cap → `captured`; > cap →
+    `truncated`; masked → `redacted`).
+  - **Usage**: provider-reported values → field-level `captured` on each
+    `UsageValue` (§13.6); captured zero is a real observation
+    (`inputTokens: { value: 0, evidenceStatus: 'captured' }`), distinct from
+    absence (no usage event, no fields).
+  - **Provider error / transport errors**: `captured` (structural text only,
+    §8.4).
+  - **Empty content** (e.g. an empty message string or an empty delta):
+    `captured` — the empty representation is complete at the declared
+    boundary; nothing was removed.
 - Statuses are always present on evidence records (never omitted, never
   `null`).
 
@@ -825,53 +952,58 @@ never collapse to `null`.**
   `metadata-safe` admits it as such). Otherwise it is a declared loss
   `provider-native-not-retained`. The default profile does not request it.
 
-### 7.3 Declared-loss codes (closed; persisted in canonical completeness)
+### 7.3 Declared-loss codes (closed; persisted as the derived completeness field)
 
 `declaredLosses` is a `readonly DeclaredLossCode[]` — a **closed code list**,
-serialized at `EvidenceRecord.completeness.declaredLosses` (§13.2),
-validated (unknown codes are refused), deterministically derived
+**derived** by `deriveCompleteness` from the authoritative
+`captureBoundary.streaming.losses` facts (+ the canonical events/trace),
+serialized at `EvidenceRecord.completeness.declaredLosses` (§13.4),
+validated (unknown codes are refused), deterministically ordered
 (deduplicated, ordered by the table below), and classified by the
-`metadata-safe` v1.1.0 policy (§14). Fixed display sentences are derived
-from the codes for the boundary statement. **`boundaryStatement` is derived
-from these codes and is never the only persisted loss record.**
+`metadata-safe` v1.1.0 policy (§14). **`boundaryStatement` is derived from
+these codes and is never the only persisted loss record.**
 
-| Code | Meaning (derived display sentence) |
-|---|---|
-| `request-body-not-retained` | The full request body was not retained. |
-| `message-content-not-retained` | Request message content beyond the retained excerpt was not retained. |
-| `delta-content-not-retained` | Chunk delta content beyond the retained excerpt was not retained. |
-| `unmapped-delta-fields` | Content-delta sub-fields not represented by the canonical text delta (role, tool_calls, refusal, audio, multimodal, future extensions) were not retained. |
-| `provider-native-not-retained` | The provider-native payload was not retained. |
-| `provider-error-body-not-retained` | The provider error frame's raw body was not retained. |
-| `provider-usage-absent` | The provider reported no usage. |
-| `finish-reason-absent` | The stream ended without a finish reason. |
-| `unrecognized-provider-field` | Provider JSON fields not mapped to the canonical model (including per-choice nested usage) were not retained. |
-| `unrecognized-extension-frame` | A frame that decoded to no recognized shape was not retained. |
-| `frame-after-observation-detach` | Frames observed after observation detached were not retained. |
-| `remainder-after-client-cancellation` | The stream remainder after client cancellation was not retained. |
-| `remainder-after-ingress-cancellation` | The stream remainder after ingress cancellation was not retained. |
-| `response-header-values-not-retained` | Upstream response header values outside the allowlist were not retained. |
-| `content-type-parameters-not-retained` | Media-type parameters were dropped from the retained `content-type`. |
-| `wire-bytes-not-retained` | Transport bytes were not retained (only excerpts and metadata). |
-| `encoded-content-not-observed` | The encoded stream could not be decoded for observation. |
-| `original-content-masked` | Content matching the sensitive detector was masked at collection. |
+| Code | Meaning (derived display sentence) | Derived from |
+|---|---|---|
+| `request-body-not-retained` | The full request body was not retained. | `losses.fullRequestBodyRetained === false` |
+| `message-content-not-retained` | Request message content beyond the retained representation was not retained. | `losses.messagesContentRetained === true && any message truncated` (events) |
+| `delta-content-not-retained` | Chunk delta content beyond the retained representation was not retained. | `losses.deltaContentRetained === true && any delta truncated` (events) |
+| `unmapped-delta-fields` | Content-delta sub-fields not represented by the canonical text delta (role, tool_calls, refusal, audio, multimodal, future extensions) were not retained. | `losses.unmappedDeltaFields.length > 0` |
+| `provider-native-not-retained` | The provider-native payload was not retained. | `losses.providerNativeRetained === false` |
+| `provider-error-body-not-retained` | The provider error frame's raw body was not retained. | `losses.providerErrorBodyRetained === false` |
+| `provider-usage-absent` | The provider reported no usage. | no `model_usage` event observed |
+| `finish-reason-absent` | The stream ended without a finish reason. | no chunk envelope carried `finishReason` |
+| `unrecognized-provider-field` | Provider JSON fields not mapped to the canonical model (including per-choice nested usage) were not retained. | `losses` / decoder facts |
+| `unrecognized-extension-frame` | A frame that decoded to no recognized shape was not retained. | `losses.unrecognizedExtensionFrameObserved === true` |
+| `remainder-after-observation-detach-not-observed` | Content after observation detached was not observed or retained. | `observationTerminal === 'observation-detached'` |
+| `remainder-after-client-cancellation` | The stream remainder after client cancellation was not retained. | `observationTerminal === 'client-cancelled'` (or `clientResponse.outcome === 'closed-before-completion'` with client cancellation) |
+| `remainder-after-ingress-cancellation` | The stream remainder after ingress cancellation was not retained. | `observationTerminal === 'ingress-cancelled'` |
+| `post-terminal-content-not-retained` | Content after the observation terminal was not retained. | `losses.postTerminalContentNotRetained === true` (§6.6) |
+| `response-header-values-not-retained` | Upstream response header values outside the allowlist were not retained. | `losses.headerValuesBeyondAllowlist === true` |
+| `content-type-parameters-not-retained` | Media-type parameters were dropped from the retained `content-type`. | `losses.contentTypeParametersDropped === true` |
+| `wire-bytes-not-retained` | Transport bytes were not retained (only excerpts and metadata). | `losses.wireBytesRetained === false` |
+| `encoded-content-not-observed` | The encoded stream could not be decoded for observation. | `losses.contentEncodingUnsupported === true` |
+| `original-content-masked` | Content matching the sensitive detector was masked at collection. | `losses.maskedContent === true` |
 
-`crash-no-record` is **not** in this list and must never appear on a record:
-it is a system-level declaration for interactions that were never persisted
-(§19.2).
+Notes:
 
-Deterministic derivation rules:
-
-- Order: the table order above (fixed, canonical).
-- Deduplication: each code appears at most once per record; repeated losses
-  of the same kind collapse to one code.
-- Derivation: codes are computed from observed facts at finalization (§17);
-  they are never a static list and never copied from the boundary statement
-  (the reverse: the boundary statement is derived from them).
+- `crash-no-record` is **not** in this list and must never appear on a
+  record: it is a system-level declaration for interactions that were never
+  persisted (§19.2).
+- The previous code `frame-after-observation-detach` is **renamed** to
+  `remainder-after-observation-detach-not-observed`: unsupported encoding or
+  parser detachment may make frame boundaries unknowable, so the code
+  describes content (not frame counts) after detachment and states the
+  honest not-observed status.
+- Deterministic derivation: order = table order above; deduplication = each
+  code at most once; derivation = from `captureBoundary.streaming.losses`
+  facts + canonical events, never a static list and never copied from the
+  boundary statement.
 
 The completeness summary and boundary statement are derived from the
 observed facts + these codes; the boundary statement never invents content,
 statuses, or reasons.
+
 ---
 
 ## 8. Collection vs. persistence policy boundaries
@@ -881,30 +1013,32 @@ statuses, or reasons.
 runs a collection-time privacy pipeline (structural exclusion + versioned
 sensitive detector + masking/excerpting, with owning statuses and declared
 losses) before evidence is formed; the Spec 015 storage-safety gate and the
-persistence policy still run, non-bypassably, on every save. The default
-claim is "expected admissible, rejection still possible", never
-"rejection impossible".**
+persistence policy still run, non-bypassably, on every save. Benign content
+that fits the cap is `captured` under an explicit new `metadata-safe` v1.1.0
+rule. The default claim is "expected admissible, rejection still possible",
+never "rejection impossible".**
 
 ### 8.1 Default capture profile
 
 - Default capture profile: `signalglass.collection.ingress-metadata-safe`,
   version `1.0.0`, recorded on the trace (`captureProfile`, Spec 013 §9).
   Collection policy (what is captured), persistence policy (what is stored —
-  `metadata-safe`, §14), and export policy (out of scope here) are three
-  independent policies.
+  `metadata-safe` v1.1.0, §14), and export policy (out of scope here) are
+  three independent policies.
 - Default retained values per interaction:
   - structural metadata (routing, model, timing, ids, statuses, seq,
-    lifecycle facts, declared losses);
-  - request messages and chunk deltas as **bounded retained excerpts**
-    (default max length 240 characters; §8.3);
+    authoritative streaming boundary facts, declared losses);
+  - request messages and chunk deltas as **bounded retained representations**
+    (default cap 240 characters; §8.3) with honest owning statuses: benign
+    content that fits the cap is `captured`; shortened content is
+    `truncated`; masked content is `redacted`;
   - provider-reported usage values, verbatim (as `UsageValue`s, §13.6);
   - normalized finish reasons;
   - structural error text (§8.4);
   - response metadata: `statusCode` + normalized `content-type`
     (+ `content-encoding` when present) via `responseMeta` on the
     `model_response` event (§13.3);
-  - the completeness summary with structured declared losses and lifecycle
-    facts.
+  - the completeness summary with derived lifecycle/loss fields.
 - **Not retained by default**: raw request bodies, raw provider payloads
   (`provider-native-not-retained`), raw wire bytes, unmapped delta sub-fields
   (`unmapped-delta-fields`), and any header values outside the allowlist
@@ -931,29 +1065,33 @@ pre-filter that the persistence policy can be blamed for bypassing):
    placeholder) or the whole value is omitted, per the profile's
    redaction rule. Masking happens before the length boundary, so a
    credential that straddles the 240-character boundary is masked in full.
-4. **Retain the excerpt** — after masking, the length boundary is applied.
-   The owning status is:
-   - `redacted` — any span was masked (`original-content-masked` loss);
-   - `truncated` — only the length boundary applied;
-   both carry the owning `RedactionDeclaration`/`TruncationDeclaration` on
-   the raw observation payload (Spec 013 §2.2.12, §5.8; projection rows
-   E2L-078..080).
+4. **Retain with an honest status** — after masking, the length boundary is
+   applied, and the owning status describes the transformation actually
+   applied (§7.1):
+   - `redacted` — a span was actually masked (`original-content-masked`);
+   - `truncated` — characters were actually removed (retained length <
+     post-redaction candidate length);
+   - `captured` — the retained representation is complete at the declared
+     boundary (benign content that fits the cap);
+   the owning `RedactionDeclaration`/`TruncationDeclaration` (when present)
+   records real lengths.
 5. **Declare** — the loss codes and declarations are attached; the
-   `metadata-safe` classification then sees **declared** content, never raw
-   secrets.
+   `metadata-safe` v1.1.0 classification then sees either declared content
+   or bounded captured content that passed the detector (§8.5, §14).
 6. **The gate still runs** — the Spec 015 storage-safety gate and the
    persistence policy are **non-bypassable** and run on every save,
    including saves of records produced by the collection pipeline.
 
 ### 8.3 Excerpt bounds (decided, not tuning-only)
 
-- Default excerpt max length: **240 characters** (matches the Spec 015
-  `metadata-safe` expectation of bounded declared content).
+- Default cap: **240 characters**.
 - Valid configured range: **64–4096 characters**.
-- Changing the default excerpt length requires a **capture-profile version
-  bump** (the profile is versioned and recorded per record, §15). The range
-  and the version-bump rule are normative, so this is no longer an open
-  question.
+- The cap is the **maximum retained length**; content shorter than the cap is
+  retained in full (status `captured`). Only content exceeding the cap is
+  shortened (status `truncated`).
+- Changing the default cap requires a **capture-profile version bump** (the
+  profile is versioned and recorded per record, §15). The range and the
+  version-bump rule are normative, so this is no longer an open question.
 
 ### 8.4 Structural error text
 
@@ -965,12 +1103,38 @@ pre-filter that the persistence policy can be blamed for bypassing):
 - The description never embeds: request URLs with query strings, API keys,
   authorization values, cookies, or raw payload excerpts.
 
-### 8.5 The honest admission claim
+### 8.5 Bounded captured content and the v1.1.0 admission rule
+
+- **Decision**: benign content that fits the cap and passed the versioned
+  sensitive detector is retained as `captured` (complete at the declared
+  boundary) and is admitted by an **explicit new `metadata-safe` v1.1.0
+  rule**: *bounded captured content (≤ the configured cap) that passed the
+  versioned sensitive detector is admissible as captured content.*
+- **Why a new rule is required**: the v1.0.0 policy admits content-bearing
+  fields only under an owning `redacted`/`truncated` declaration
+  (`isDeclaredContent`); a `captured` content-bearing field is rejected by
+  v1.0.0. The v1.1.0 rule makes the honest `captured` status admissible.
+- **Privacy and admission consequences (explicit)**: a `captured` value is
+  real content in the store — it is not hidden behind a redaction
+  declaration, so the **versioned sensitive detector is the sole content
+  protection** for the bounded captured text. Consequences:
+  - the detector version is part of the capture profile and is recorded
+    (§15);
+  - the cap bounds the maximum retained text (≤ configured cap, default
+    240);
+  - a detector miss can reach the storage-safety gate; a rejection is
+    surfaced as `safety-rejected` and is never auto-labeled a code defect
+    (§8.6);
+  - the admission is explicit and versioned — **Spec 015 v1.0.0 is not
+    weakened and is never silently reinterpreted**; v1.0.0 remains the
+    declared-only policy, and 1.1 records are rejected by v1.0.0 (§14.3).
+
+### 8.6 The honest admission claim
 
 - **Construction invariant (tested)**: default-profile records are expected
   to be policy-admissible under `metadata-safe` v1.1.0 — the collection
   pipeline is designed and tested so that no default record carries an
-  S1/S2/S3/S5/S6 witness (sentinel tests §21 T62–T67: a credential beginning
+  S1/S2/S3/S5/S6 witness (sentinel tests §21 T65–T70: a credential beginning
   before the excerpt boundary, crossing it, or beginning after it is
   masked/omitted in full).
 - **Honest limit**: a safety **rejection remains a possible outcome** — e.g.
@@ -983,340 +1147,85 @@ pre-filter that the persistence policy can be blamed for bypassing):
 - API keys remain env-var-only (Spec 006): the assembler never reads,
   retains, or records key values; the upstream authorization header is built
   at dispatch from the env var and excluded from evidence structurally.
-
 ---
 
-## 9. Legacy coexistence
+## 9. Error taxonomy
 
-**Decision 9 — the canonical record is authoritative; the legacy `Trace`
-becomes a compatibility projection. Dual emission is allowed from the same
-observed stream; divergence is surfaced, never silently reconciled;
-persistence failures never affect client traffic.**
+**Decision 9 — diagnostics carry only closed codes and bounded structural
+descriptions; every terminal is classified exactly once; the
+`error`/`cancelled` event shapes are closed (actor / lifecycleTarget /
+lifecycleEffect; `requestedBy`); request-key
+failures are classified under `request-failed` (actor `capture`), not under
+upstream failures.**
 
-### 9.1 Canonical-authoritative
+### 9.1 The `error` and `cancelled` event shapes (closed)
 
-- For streaming interactions, the canonical `EvidenceRecord` (Spec 013/015)
-  is the **source of truth**. The legacy `Trace` (Spec 007 path) is a
-  **compatibility projection** for existing consumers (report generation,
-  UI), not a second authority.
-- Projection is `evidenceToLegacyTrace` (`@signalglass/core`,
-  `evidenceProjections`), which already maps canonical events to legacy
-  `Trace`/`TraceEvent` shapes with declared loss (projection matrix,
-  E2L-* rows including E2L-073 for `chunkIndex`; new rows for the additive
-  fields §13.5).
-
-### 9.2 Dual emission
-
-- The ingress MAY emit both the canonical record (Spec 015) and a legacy
-  trace for the same observed stream — **dual emission**, from the same
-  observation, never from two separate observations of the same interaction.
-- In dual-emission mode the canonical record is authoritative; the legacy
-  trace is derived.
-- If a store cannot persist the canonical record (older storage, unsupported
-  version), the ingress MAY persist only the legacy trace as a degraded
-  compatibility path — declared, never silently preferred over the
-  canonical path.
-
-### 9.3 Divergence detection
-
-- **Divergence detection** compares the canonical record's legacy projection
-  (`evidenceToLegacyTrace`) with the independently emitted legacy trace.
-- Divergences (status, event count, identity) are **surfaced** (logs,
-  counters, diagnostics) and **never silently reconciled** — the canonical
-  record is not rewritten to match the legacy trace, and the legacy trace is
-  not rewritten to match the projection.
-- A parity test keeps `evidenceToLegacyTrace(canonical) == legacy` for
-  shared semantics (see §21 T73).
-
-### 9.4 Client traffic isolation
-
-- No persistence outcome — stored, rejected, conflicted, failed, or
-  crash-before-save — ever delays, mutates, retries, or reorders client
-  traffic. The client response is finalized independently of the save
-  (§3.2, §16).
-
----
-
-## 10. Terminal state machine and sequencing
-
-**Decision 10 — a single, closed, deterministic state machine governs the
-observation lifecycle. Its seven terminal states are the only states from
-which a record finalizes. `finalized` is an operation, not a state;
-persistence outcomes are observations, never states, and never rewrite the
-terminal. The terminal-event sequence is fixed: causal event, then exactly
-one `interaction_end`, then nothing.**
-
-### 10.1 State diagram (observation lifecycle)
-
-```text
-                 ┌───────────────┐
-                 │  initialized  │──────────────┐ (assembler destroyed
-                 └──────┬────────┘              │  without observation)
-                        │ request observed      ▼
-                 ┌──────▼────────┐        ┌──────────────┐
-                 │request-observed│       │  aborted     │ (outcome:
-                 └──────┬────────┘       │ (no record)  │  AbortReason)
-                        │ dispatch        └──────────────┘
-        ┌───────────────┼───────────────┐
-        │ invalid body/ │ valid body     │ unroutable/
-        │ over-limit/   ▼                │ key unavailable
-        │ incomplete    │                │ (pre-dispatch)
-        │               ▼                ▼
-   ┌────────────┐       │        ┌──────────────┐
-   │ request-   │       │        │  dispatched  │
-   │ failed     │◄──────┘        └───┬────────┬──┘
-   └─────┬──────┘          HTTP err│  non-SSE│ 2xx text/event-stream
-        │                  /connect│         ▼
-        │                   /timeout│   ┌──────────────┐
-        │                   /TLS    │   │  streaming   │
-        │                           │   └──┬───────┬───┘
-   ┌────▼─────┐                ┌─────▼──┐  │       │
-   │ upstream-│◄───────────────┤ (fail) │  │       │
-   │  failed  │                └────────┘  │       │
-   └──────────┘                            │       │
-        terminals:  completed · upstream-failed · client-cancelled
-                    ingress-cancelled · malformed-stream · request-failed
-                    observation-detached
-        (no transitions out of a terminal; finalized is the operation
-         that produces the outcome; persistence observations are separate)
-```
-
-### 10.2 Transition table
-
-| From | Event | To | Notes |
-|---|---|---|---|
-| `initialized` | Request observed (headers) | `request-observed` | identity assigned |
-| `initialized` | Assembler destroyed without observation | `aborted` | outcome `{ outcome: 'aborted', reason }`; no record |
-| `request-observed` | Body parsed, valid; dispatch begun | `dispatched` | `model_request` + `span_start` |
-| `request-observed` | Body invalid / incomplete / over-limit / unroutable / key unavailable | `request-failed` | no dispatch; closed codes §12.2 |
-| `dispatched` | Upstream HTTP error / non-SSE 2xx / connect / timeout / TLS / connection lost | `upstream-failed` | §6.5; `model_response` emitted first when headers were observed (§6.6) |
-| `dispatched` | 2xx, `content-type: text/event-stream` | `streaming` | headers observed; `model_response` emitted |
-| `streaming` | `[DONE]` observed | `completed` | first observed terminal wins |
-| `streaming` | Malformed protocol (invalid JSON/UTF-8/choice index incl. same-frame duplicates; partial frame or EOF without `[DONE]`) | `malformed-stream` | |
-| `streaming` | Client disconnect | `client-cancelled` | |
-| `streaming` | Ingress shutdown/limit (idle timeout included) | `ingress-cancelled` | |
-| `streaming` | Provider error frame / mid-stream connection loss | `upstream-failed` | |
-| `streaming` | Observer failure (parser/decoder/assembler exception, frame overflow, unsupported encoding, decode failure) | `observation-detached` | transport continues |
-| any terminal | `finalize()` operation | — | produces `AssemblerOutcome`; persistence runs after transport end (§3.2) |
-
-Illegal transitions are rejected (the assembler is a closed machine): e.g.
-`completed → client-cancelled`, `streaming → streaming`, any transition out
-of a terminal, any event after `interaction_end`. **No wall-clock
-transition**: no path from any state to `completed` except the observed
-`[DONE]`.
-
-### 10.3 States, outcomes, and statuses — one vocabulary
-
-`AssemblerState` (public, closed): the seven terminals above plus
-`initialized` / `request-observed` / `dispatched` / `streaming` — **no
-`finalized` state** (finalization is an operation) and **no persistence
-states** (persistence observations are not assembler states and never appear
-as if they rewrite the terminal).
+Terminal error/cancellation events carry the exact canonical shapes (Spec 013
+§3.3, Spec 014 §4.7; `packages/evidence/src/types-event.ts`):
 
 ```ts
-type AssemblerState =
-  | 'initialized' | 'request-observed' | 'dispatched' | 'streaming'
-  | 'completed' | 'upstream-failed' | 'client-cancelled'
-  | 'ingress-cancelled' | 'malformed-stream' | 'request-failed'
-  | 'observation-detached';
+// error event (EventRecord with kind 'error')
+{
+  kind: 'error',
+  actor: ErrorActor,                        // 'agent'|'model'|'tool'|'mcp'|'retrieval'|
+                                            // 'context_provider'|'capture'  (closed)
+  lifecycleTarget: 'trace' | 'span' | 'none',   // closed
+  lifecycleEffect: 'fail' | 'cancel' | 'none',  // closed
+  error: { type: string; message?: string },    // ErrorPayload (Spec 013 §3.3)
+}
 
-type AssemblerOutcome =
-  | { outcome: 'recorded'; terminal: TerminalReason; record: EvidenceRecord;
-      summary: CompletenessSummary }
-  | { outcome: 'aborted'; reason: AbortReason };   // 'no-request-observed' | 'assembler-misuse'
+// cancelled event (EventRecord with kind 'cancelled')
+{
+  kind: 'cancelled',
+  lifecycleTarget: 'trace' | 'span' | 'none',
+  lifecycleEffect: 'cancel',
+  cancellation: { requestedBy: string },        // 'client' | 'ingress'
+}
 ```
 
-- `TerminalReason` (closed) = the seven terminals: `completed |
-  upstream-failed | client-cancelled | ingress-cancelled | malformed-stream |
-  request-failed | observation-detached`. The diagram, the transition table,
-  `AssemblerState`, `AssemblerOutcome`, `TerminalReason`, the event mapping,
-  trace status, acceptance criteria, and test mapping all use exactly this
-  vocabulary.
-- `CompletenessSummary.terminalReason: TerminalReason` (the
-  `AssemblerOutcome['terminal']` self-reference is gone); the outcome's
-  `terminal` and the summary's `terminalReason` are the same closed value
-  when `outcome: 'recorded'`.
-- `aborted` is a **sibling outcome** with its own closed `AbortReason`, not
-  a terminal state and not a terminal reason; there is no `reason: string`
-  for aborts (§12.2).
-- `trace.status` is derived **only** from the observation terminal:
-  `completed → completed`; `upstream-failed | malformed-stream |
-  request-failed → failed`; `client-cancelled | ingress-cancelled →
-  cancelled`; `observation-detached → unknown`. The transport end is
-  recorded (§2) and never changes this derivation.
+- **`error.type` carries the closed error code** (§9.2); `error.message` is
+  bounded structural text ≤ 200 chars (§8.4). The payload never contains:
+  exception messages, stack traces, request URLs, identities, documents,
+  digests, header values, or raw provider bodies (Spec 013 §4.4; §8.4).
+  Diagnostics are leak-free by construction: **internal results may be
+  rich; the persisted/logged projection carries only closed codes and
+  bounded structural text** (§16.3).
+- Error/cancelled events are payload-bearing, so they carry `evidenceStatus`
+  (`captured` — structural metadata only) and an observationRole per the
+  classification source: `provider_reported` for provider-side
+  classifications (`upstream-failed`, `malformed-stream`); `unobservable`
+  for observer failures (`observation-detached`); `application_constructed`
+  for ingress-constructed classifications (`request-failed`).
+- `lifecycleTarget: "trace"` requires `spanId: null`; `lifecycleTarget:
+  "span"` requires the matching `spanId`; `lifecycleTarget: "none"`
+  changes no status (Spec 014 §4.7, `terminal_declaration_not_final`).
 
-### 10.4 Terminal → trace status → actor/role mapping (agreed everywhere)
-
-| Terminal | Trace status | Canonical terminal event | Actor | Role | Target | Effect |
-|---|---|---|---|---|---|---|
-| `completed` | `completed` | `interaction_end` | `model` | `provider_reported` | `trace` | `complete` |
-| `upstream-failed` (HTTP/provider error frame) | `failed` | `error` | `model` | `provider_reported` | `trace` | `fail` |
-| `upstream-failed` (connect/timeout/TLS/lost/non-SSE) | `failed` | `error` | `model` | `unobservable` | `trace` | `fail` |
-| `client-cancelled` | `cancelled` | `cancelled` | `agent` | `client_sent` | `trace` | `cancel` |
-| `ingress-cancelled` | `cancelled` | `cancelled` | `capture` | `unobservable` | `trace` | `cancel` |
-| `malformed-stream` | `failed` | `error` | `model` | `provider_reported` | `trace` | `fail` |
-| `request-failed` | `failed` | `error` | `agent` (invalid/incomplete/over-limit/unroutable) or `capture` (key-unavailable) | `client_sent` / `unobservable` | `trace` | `fail` |
-| `observation-detached` | `unknown` | informational `error` (target `none`, effect `none`) | `capture` | `unobservable` | `none` | `none` |
-
-- **`upstream-key-unavailable` is classified exactly once**: it occurs
-  **before dispatch** (the env-var key is resolved at dispatch time, before
-  any request is sent), so it is a `request-failed` code with actor
-  `capture` / role `unobservable`. It is **not** a member of
-  `UpstreamFailureCode` and appears **only** in the `request-failed` row
-  (§12.2).
-- Trace-level failure/cancellation leaves the model span `unknown` (§6.5);
-  `unknown` is reserved for observations whose termination could not be
-  observed (never for "probably failed").
-
-### 10.5 Terminal-event sequence (single, everywhere)
-
-The final canonical sequence of every recorded interaction is:
-
-```text
-… [events] → causal terminal event (error | cancelled | informational error)
-           → interaction_end            (exactly one, the final event)
-           → nothing
-```
-
-- The causal terminal event is emitted first, at its own `seq` (§4.3).
-- `interaction_end` is emitted **exactly once**, immediately after, as the
-  final canonical event. **Nothing follows `interaction_end`** — no second
-  `interaction_end`, no later events of any kind.
-- `completed` has no causal terminal event other than the observed `[DONE]`
-  itself; its `interaction_end` closes the sequence.
-- This sequence is used identically in the state table (§10.2), the event
-  mapping (§10.4), the terminalization matrix (§6.5), acceptance criterion
-  15 (§22), and the tests (T19, T34, T35, T46–T48).
-
-### 10.6 Persistence observations are not states
-
-After `finalize()`, the save outcome is an observation:
-`PersistenceObservation` (§16) — either a structured `SaveOutcome` status or
-a leak-free environmental-failure code. It is recorded/reported and **never
-rewrites** the terminal state, the trace status, or the assembled record.
----
-
-## 11. Package boundaries
-
-**Decision 11 — a new network-free `@signalglass/streaming` package hosts
-the parser, assembler, and stream contracts; the provider decoder lives in
-`@signalglass/providers`; wiring lives in `apps/ingress`; persistence stays
-in `@signalglass/storage`; projections stay in `@signalglass/core`. The
-packages are named here but not created by this PR.**
-
-### 11.1 Module map (proposed; not created)
-
-| Package | Module | Contents | Depends on |
-|---|---|---|---|
-| `@signalglass/streaming` (new) | `sse.ts` | `createSseParser()`, `SseFrame`, parser-level malformed/overflow signals (§6.1) | `@signalglass/evidence` only (parser math, no provider knowledge) |
-| `@signalglass/streaming` (new) | `assembler.ts` | `createStreamAssembler()`, state machine (§10), sequencing (§4), collection layer (§8.2), completeness summary, `assembleEvidenceRecord()` | `@signalglass/evidence` only |
-| `@signalglass/streaming` (new) | `types.ts` | `SseFrame`, `FrameDecodeResult`, `StreamDecodedEvent`, `AssemblerInput`, `AssemblerState`, `AssemblerOutcome`, `CompletenessSummary`, `TerminalReason`, `TransportEndReason`, `DeliveryOutcome`, `AbortReason`, `DeclaredLossCode`, `ObservationFailureCode`, `PersistenceObservation`, `EnvironmentalFailureCode`, `CancellationSource` (§12) | nothing (types) |
-| `@signalglass/providers` | `openaiAdapter.ts` (+ `sse.ts` decoder) | `decodeSseFrame(frame: SseFrame): FrameDecodeResult` — OpenAI-compatible decode to provider-neutral events; provider-native retention under `providerNative` (§7.2) | `@signalglass/streaming` (types), `@signalglass/evidence` |
-| `apps/ingress` | `streamHandler.ts` | HTTP wiring: raw-Buffer read, passthrough, backpressure, header allowlist, decoder tee, error envelopes, `model_response` response-metadata event, transport-end observation, response completion, delayed save (§3.2) | `@signalglass/streaming`, `@signalglass/providers`, `@signalglass/storage` |
-| `@signalglass/storage` | `evidenceStorage.ts` (unchanged API) | `saveEvidenceRecord` — the only persistence path; `SaveOutcome` (no contention); `EvidenceContentionError` | unchanged |
-| `@signalglass/core` | `evidenceProjections/` (unchanged) | `evidenceToLegacyTrace` — legacy projection + divergence detection (§9) | unchanged |
-
-### 11.2 Boundary rules
-
-- `@signalglass/streaming` is **network-free**: no sockets, no HTTP, no
-  buffering of unbounded streams, and **zero provider knowledge** — it never
-  parses provider JSON. Provider decoding is `@signalglass/providers`'s
-  job; the assembler consumes only `StreamDecodedEvent`s.
-- Provider-native JSON stays in `@signalglass/providers` unless retained
-  under the canonical `providerNative` contract (§7.2) — and that contract's
-  value is a canonical envelope field, not an import of provider shapes into
-  `@signalglass/streaming`.
-- `apps/ingress` is the only place that touches sockets; persistence calls
-  go through `@signalglass/storage`; projections through `@signalglass/core`.
-- The additive schema support (§13) and policy rows (§14) live in
-  `@signalglass/evidence` and `@signalglass/storage` as the 1.1 foundation
-  (slice S1/S2, §20) — before any slice that emits 1.1 records.
-
----
-
-## 12. Public contracts: provider-boundary types and closed vocabularies
-
-**Decision 12 — every public vocabulary is a closed discriminated union; no
-`reason: string` for aborts; `declaredLosses` is a closed code list
-persisted in the canonical record; the completeness summary reports only
-observable facts; internal helpers stay internal.**
-
-### 12.1 Provider-boundary output (L3, provider-neutral)
+### 9.2 Closed error-code vocabularies
 
 ```ts
-/** Normalized, provider-neutral output of the decoder. */
-type StreamDecodedEvent =
-  | {
-      kind: 'chunk';
-      choiceIndex: number;          // normalized choice identity (§6.3)
-      delta: string | null;         // normalized content delta text; null when the chunk carries no content
-      finishReason?: string;        // bounded label (≤128 cp), when the choice reported one
-      // NOTE: no usage field. Per-choice nested usage is discarded and
-      // declared `unrecognized-provider-field` (§6.3); frame-level usage is
-      // the canonical usage source.
-    }
-  | { kind: 'usage'; usage: NormalizedUsage }
-  | { kind: 'provider-error'; code: ProviderErrorFrameCode; type?: string };
-```
-
-- `ProviderErrorFrameCode = 'provider-error-frame'` (closed, single member):
-  a structural code, never the provider's own error type as an open string —
-  the provider error `type` (when reported) is a bounded label (≤128 cp);
-  the provider's raw error body is a declared loss
-  (`provider-error-body-not-retained`).
-- `NormalizedUsage` uses the existing `UsageRecord`/`UsageValue` shapes
-  exactly (§13.6): `{ evidenceStatus: 'captured'; inputTokens?: UsageValue;
-  outputTokens?: UsageValue; totalTokens?: UsageValue }` with
-  `UsageValue = { value?: number; evidenceStatus?: EvidenceStatus; reason?:
-  string }`. Captured `0` (`{ value: 0, evidenceStatus: 'captured' }`) is
-  distinct from absence (field omitted); the record-level
-  `evidenceStatus: 'captured'` applies to the usage as a whole.
-- **The decoder never emits raw provider JSON.** Provider-native content is
-  retained only via the `providerNative` envelope contract (§7.2) in
-  `@signalglass/providers` itself.
-- **Unmapped delta sub-fields** (role, tool_calls, refusal, audio,
-  multimodal, future extensions) are declared losses
-  (`unmapped-delta-fields`), never silently reduced to `null` (§6.3).
-
-### 12.2 Closed vocabularies
-
-```ts
-type MalformedStreamCode =
-  | 'sse-invalid-data-json'      // data value not valid JSON
-  | 'sse-invalid-utf8'           // invalid UTF-8 in a frame
-  | 'sse-invalid-choice-index'   // non-integer, negative, or same-frame-duplicate choice index
-  | 'sse-partial-frame-at-eof'   // partial frame at EOF
-  | 'sse-eof-without-done';      // EOF without [DONE]
-
-type StreamDecodeErrorCode = 'decoder-exception' | 'decoder-invalid-output';
-
-type ObservationFailureCode =
-  | 'parser-exception'
-  | 'decoder-exception'
-  | 'assembler-exception'
-  | 'frame-overflow'             // configured observation bound exceeded
-  | 'encoding-unsupported'       // content-encoding not decodable
-  | 'decode-failure';            // bounded decoder tee failed
-
-type UpstreamFailureCode =
-  | 'upstream-http-error'
-  | 'upstream-connect-failure'
-  | 'upstream-timeout'
-  | 'upstream-tls-failure'
-  | 'upstream-connection-lost'
-  | 'provider-error-frame'
-  | 'non-sse-response';          // 2xx whose content-type is not text/event-stream
-  // NOTE: upstream-key-unavailable is NOT here — it occurs before dispatch
-  // and is classified under request-failed (§10.4).
-
 type ClientRequestFailureCode =
-  | 'client-request-invalid'     // malformed JSON / schema
-  | 'client-request-incomplete'  // connection lost mid-body
-  | 'client-request-over-limit'  // body over the 10 MB readJsonBody cap
-  | 'client-request-unroutable'  // model unknown / provider not configured
-  | 'upstream-key-unavailable';  // env-var API key missing/unresolvable; actor capture
+  | 'invalid-request'          // 400-class: malformed body, invalid fields, unknown model, over-limit
+  | 'missing-api-key'          // no API key env var configured
+  | 'key-unavailable'          // key env var referenced but unset/unresolvable at dispatch
+  | 'unroutable'               // no provider matches the requested model
+  | 'body-read-failure';       // the request body could not be read
 
-type CancellationSource = 'client' | 'ingress';
+type UpstreamFailureCode =      // only when an upstream request was actually dispatched
+  | 'connection-error'          // connect/timeout/TLS failure before headers
+  | 'http-error-status';        // upstream responded with a non-2xx status
+
+type MalformedStreamCode =
+  | 'sse-invalid-data-json'     // data field is not valid JSON
+  | 'sse-invalid-utf8'          // frame bytes are not valid UTF-8
+  | 'sse-invalid-choice-index'  // choice.index negative/non-integer, or duplicated within a frame
+  | 'sse-partial-frame-at-eof'  // stream ended inside a frame
+  | 'sse-eof-without-done';     // stream ended cleanly without a [DONE] marker
+
+type ObservationFailureCode =    // internal observer failures (detach, §1.4)
+  | 'frame-overflow'             // frame exceeded the 16 MiB cap
+  | 'observation-encoding-unsupported'
+  | 'observation-decode-failure'
+  | 'internal-capture-error';
 
 type TerminalReason =
   | 'completed'
@@ -1327,1025 +1236,1227 @@ type TerminalReason =
   | 'request-failed'
   | 'observation-detached';
 
-type TransportEndReason =
-  | 'response-complete'          // upstream body fully read and flushed to the client
-  | 'client-cancelled'           // client socket closed mid-stream
-  | 'ingress-shutdown'           // server shutdown / ingress limit
-  | 'upstream-transport-failure';// upstream error/timeout/premature EOF
-
-type DeliveryOutcome = 'flushed' | 'closed';  // §2.1
-
-type AbortReason = 'no-request-observed' | 'assembler-misuse';  // no string
-
-type DeclaredLossCode = /* closed list, §7.3 */;
-
-type RemainderObservation = 'observed' | 'unknown';  // §12.3
-
-type EnvironmentalFailureCode =
-  | 'contention-exhausted'       // EvidenceContentionError caught (§16)
-  | 'storage-unavailable'        // storage/database-level failure caught (§16)
-  | 'policy-crash';              // persistence policy threw (§16)
-
-type PersistenceObservation =
-  | { kind: 'save-outcome'; status: SaveOutcomeStatus }        // §16
-  | { kind: 'environmental-failure'; code: EnvironmentalFailureCode };
-
-type SaveOutcomeStatus =   // exactly Spec 015's statuses; NO contention
-  | 'stored' | 'already-present' | 'conflict' | 'invalid'
-  | 'unsupported-version' | 'safety-rejected' | 'policy-rejected'
-  | 'policy-failed' | 'clock-failed';
+type AbortReason =
+  | 'client-disconnect'
+  | 'ingress-shutdown'
+  | 'idle-timeout'
+  | 'observation-detached'
+  | 'request-failed';
 ```
 
-Rules:
+- **`key-unavailable` is classified exactly once, under `request-failed`,
+  with actor `capture`** (the key could not be resolved at dispatch time —
+  the request never left the ingress). It is **not** a member of
+  `UpstreamFailureCode`, so it never triggers the `upstream-failed` mapping
+  and never fabricates an upstream outcome. (A key that is present and valid
+  but rejected by the provider is an upstream `http-error-status`.)
+- `invalid-request` covers every 400-class rejection — including an
+  over-limit body — because these are all ingress-side decisions about the
+  request itself; the body is never dispatched upstream, so no upstream
+  failure is fabricated for them (§2.1).
+- `AbortReason` feeds the client-response path and the
+  `cancelled`/`client-cancelled`/`ingress-cancelled` terminalization paths:
+  `client-disconnect` → `requestedBy: 'client'`;
+  `ingress-shutdown` / `idle-timeout` → `requestedBy: 'ingress'`;
+  `observation-detached` / `request-failed` produce no `cancelled` event.
+  It is a **derivation aid, not a persisted field** — the persisted facts
+  are the upstream/client-response outcomes and the observation terminal
+  (§2.4); the abort reason is never fabricated.
 
-- **No `reason: string`** on aborted outcomes, errors, or terminal events —
-  every reason/code is a closed union member. Display text is derived.
-- **`declaredLosses: readonly DeclaredLossCode[]`** — closed codes, not free
-  strings; serialized into the canonical record (`completeness.declaredLosses`,
-  §13.2); the boundary statement is the derived, fixed display text and is
-  **not** an equivalent substitute for the structured codes.
-- **`seqGaps` is removed from `CompletenessSummary`** — it was always empty
-  by the assembly contract (dropped frames leave no canonical gap, §4.3);
-  canonical completeness owns gap semantics. Unparseable or unobserved
-  frames are disclosed via statuses, loss codes, and the summary's honest
-  remainder fields (§12.3), never via a gap array or an invented count.
-- The old `terminalReason: AssemblerOutcome['terminal']` self-reference is
-  gone; `CompletenessSummary.terminalReason: TerminalReason` is the closed
-  type (§10.3).
-- `TransportEndReason` and `DeliveryOutcome` are the transport-lifecycle
-  facts persisted in `completeness.lifecycle` (§2, §13.2).
-- `PersistenceObservation` never contains `contention` as a `save-outcome`
-  status: contention exhaustion is `EnvironmentalFailureCode
-  'contention-exhausted'` (§16).
+### 9.3 Classification matrix (one terminal, one classification)
 
-### 12.3 Completeness summary (assembler-level, honest facts only)
-
-```ts
-type CompletenessSummary = {
-  terminalReason: TerminalReason;
-  observedFrames: number;                    // frames the parser actually delivered (§6.1)
-  retainedEvents: number;                    // canonical events retained
-  observationDetached: boolean;              // true iff observation detached (§1.5)
-  lastObservedFramePosition?: number;        // ordinal of the last parsed frame, when frames were parsed;
-                                             // ABSENT when no frame was ever parsed (e.g. unsupported encoding)
-  remainderObservation: RemainderObservation; // 'observed' | 'unknown' (§12.4)
-  rawForwardedBytes?: number;                // OPTIONAL: transport-measured bytes written to the client socket,
-                                             // counted without parsing; absent when the transport cannot measure
-  eventsByStatus: Readonly<Record<EvidenceStatus, number>>;
-  declaredLosses: readonly DeclaredLossCode[];
-  boundaryStatement: string;                 // derived fixed display sentences (§7.3); never invented content
-};
-```
-
-- **No fabricated post-detachment frame counts.** The count of frames after
-  detachment is not observable when the content encoding is unsupported,
-  decoder output is unavailable, the parser has detached, or frame
-  boundaries cannot be recovered — SignalGlass does not report a number it
-  cannot know. The honest facts are `observationDetached`, the last
-  observed position (when known), `remainderObservation: 'unknown'`, and —
-  only if the transport can measure it without parsing — `rawForwardedBytes`
-  (a byte count, never a frame count).
-- `observedFrames` counts only frames the parser actually delivered; after
-  detachment the parser may still frame bytes (it is a pure function of the
-  stream), but those frames are **not** counted as observed canonical
-  content and never receive `seq`; the loss is declared
-  (`frame-after-observation-detach`).
-
-### 12.4 Remainder observation
-
-| Situation | `remainderObservation` |
-|---|---|
-| `completed` (observed `[DONE]`) | `observed` (the stream's end was observed) |
-| `malformed-stream` at EOF (`sse-eof-without-done` / partial frame) | `observed` (the stream's end was observed) |
-| `observation-detached` | `unknown` |
-| `client-cancelled` / `ingress-cancelled` with unread remainder | `unknown` |
-| `upstream-failed` mid-stream (connection lost) | `unknown` |
-| `request-failed` (no response existed) | `unknown` (nothing was observed; recorded with the loss codes for the request) |
-
-### 12.5 Assembler entry points
-
-```ts
-createSseParser(): SseParser;                  // @signalglass/streaming (L2)
-createStreamAssembler(opts): StreamAssembler;  // @signalglass/streaming (L4, state machine)
-```
-
-- `AssemblerInput` (closed): `{ kind: 'request-observed'; ... } |
-  { kind: 'response-headers'; ... } | { kind: 'frame'; frame: SseFrame } |
-  { kind: 'done'; ... } | { kind: 'client-cancelled' } |
-  { kind: 'ingress-cancelled' } | { kind: 'observer-failure';
-  code: ObservationFailureCode } | { kind: 'transport-failure';
-  code: UpstreamFailureCode } | { kind: 'transport-end';
-  end: TransportEndReason; delivery: DeliveryOutcome } | { kind: 'finalize' }`.
-- Internal helpers (frame splitting internals, status derivation, excerpt
-  application) are **not exported**; only the public contracts in this
-  section are public.
-
----
-
-## 13. Canonical schema extension (additive 1.1.0)
-
-**Decision 13 — the canonical schema advances additively:
-`evidenceSchemaVersion` 1.1.0. Six additive fields enter the canonical
-types — `responseMeta`, `choiceIndex`, `completeness.declaredLosses`,
-`completeness.lifecycle`, `trace.assembly`, and the refined
-`completeness`/usage semantics — with exact shapes, validation,
-policy-classification, projection-loss, and fixture consequences. MAJOR-1
-compatibility is preserved: 1.0.0 validators already accept 1.1.0 records.**
-
-### 13.1 Version mechanics
-
-- `SUPPORTED_EVIDENCE_SCHEMA_VERSION` stays `1.0.0`;
-  `isSupportedEvidenceSchemaVersion` and `checkEvidenceSchemaVersion` already
-  accept any additive MAJOR-1 version (additive-by-default evolution,
-  `docs/model-versioning.md`).
-- **`evidenceSchemaVersion` recorded on 1.1.0 records is `1.1.0`** — the
-  explicit additive minor, not the supported constant. This makes the minor
-  self-describing while preserving MAJOR-1 compatibility.
-- 1.0.0 validators: unknown additive fields are preserved and round-trip
-  (Spec 014 §5.3 `validate-fields.ts`) — a 1.0.0 validator accepts a 1.1.0
-  record and preserves the new fields. **This is a compatibility property,
-  not a substitute for owned validation**: 1.1.0 validators validate the
-  owned semantics of every 1.1 field, and no slice relies on
-  unknown-additive-field preservation to ship unvalidated fields (§20).
-- 1.1.0 validators accept 1.0.0 records (all new fields optional).
-
-### 13.2 The additive fields (owner/path/serialized names)
-
-| Field | Owner | Path (serialized) | Type |
+| Observed situation | Terminal | Error/cancelled event (when emitted) | actor / lifecycleTarget / lifecycleEffect |
 |---|---|---|---|
-| `choiceIndex` | `ResponseEnvelope` (additive optional; present on every chunk assembled by this spec) | `payload.responseEnvelope.choiceIndex` | non-negative integer |
-| `responseMeta` | `ResponseEnvelope` (additive optional; present on the single response-metadata `model_response` event, §6.6) | `payload.responseEnvelope.responseMeta` | `{ statusCode: number; contentType?: string; contentEncoding?: string }` |
-| `declaredLosses` | `TraceCompleteness` (additive optional; present on every record assembled by this spec) | `completeness.declaredLosses` | `readonly DeclaredLossCode[]` (closed, ordered, deduplicated; §7.3) |
-| `lifecycle` | `TraceCompleteness` (additive optional; present on every record assembled by this spec) | `completeness.lifecycle` | `{ observation: { terminal: TerminalReason }; transport: { end: TransportEndReason; delivery: DeliveryOutcome } }` |
-| `assembly` | `EvidenceTrace` (additive optional; present on every record assembled by this spec) | `trace.assembly` | `{ name: 'signalglass.streaming.assembler'; version: string; decoderContract?: { name: 'signalglass.providers.openai-sse'; version: string } }` |
+| `[DONE]` observed | `completed` | — (no error/cancelled event; `span_end` + `interaction_end` final) | — |
+| Invalid request body, missing key, key-unavailable, unroutable, over-limit | `request-failed` | `error` (final) | `capture` / `trace` / `fail` |
+| Upstream connect/timeout/TLS failure | `upstream-failed` | `error` (final) | `model` / `trace` / `fail` |
+| Upstream non-2xx status | `upstream-failed` | `error` (final) | `model` / `trace` / `fail` |
+| Non-SSE 2xx response | `upstream-failed` | `error` (final) | `model` / `trace` / `fail` |
+| Provider error frame | `upstream-failed` | `error` (final) | `model` / `trace` / `fail` |
+| Malformed stream (5 codes) | `malformed-stream` | `error` (final) | `model` / `trace` / `fail` |
+| Client disconnect mid-stream | `client-cancelled` | `cancelled` (final; requestedBy `client`) | — / `trace` / `cancel` |
+| Ingress shutdown / idle timeout | `ingress-cancelled` | `cancelled` (final; requestedBy `ingress`) | — / `trace` / `cancel` |
+| Internal observer failure | `observation-detached` | informational `error` (final) | `capture` / `none` / `none` |
 
-- **No `upstreamStatus` field.** The revision-2 draft added
-  `ErrorPayload.upstreamStatus`; revision 3 removes it. The upstream status
-  is a header-observation fact and lives in `responseMeta.statusCode` on the
-  `model_response` event (§6.6); `ErrorPayload` carries only its structural
-  code and bounded description. This eliminates status duplication and gives
-  response metadata one universal home.
-- The fields are on the existing canonical owners (`ResponseEnvelope`,
-  `TraceCompleteness`, `EvidenceTrace`) — **not** on a new
-  transport-observation structure — so there is no new envelope type in 1.1.0.
-- `chunkIndex` semantics are refined additively: **per-choice content-chunk
-  ordinal** (§4.2), fixture-compatible with the existing single-choice
-  fixtures.
+Every terminal appears in exactly one row; every classification maps to
+exactly one terminal. The upstream outcome and client-response outcome are
+then recorded independently per §2 and never rewritten by this matrix. Each
+`error`/`cancelled` row is the record's **final canonical event** (Spec 014
+§4.7: no `interaction_end` after a terminal declaration); `completed` is the
+only terminal whose final event is `interaction_end`.
 
-### 13.3 `responseMeta` exact shape and placement
-
-```ts
-responseMeta?: {
-  statusCode: number;             // integer, 100–599 inclusive
-  contentType?: string;           // RFC 6838 media type, lowercased type/subtype,
-                                  // no parameters (params dropped + declared
-                                  // content-type-parameters-not-retained), ≤128 cp
-  contentEncoding?: string;       // lowercase token, ≤32 cp; ABSENT when identity/none
-};
-```
-
-- **Placement**: exactly one `model_response` event per interaction **iff
-  response headers were observed**, emitted before any chunk/usage/error
-  (§6.6); `responseMeta` is recorded on that event. **No duplication**: it
-  never appears on chunk, usage, or error envelopes.
-- **Absence rules**:
-  - `responseMeta` absent when no response headers were observed
-    (connect/timeout/TLS failure, `request-failed`, `client-cancelled`
-    before the response);
-  - `contentType` absent when the upstream sent none;
-  - `contentEncoding` absent when identity/none — never an empty string or a
-    fabricated value.
-- **Per-path matrix**:
-
-| Path | `model_response` with `responseMeta` |
-|---|---|
-| Normal stream (chunks → usage → `[DONE]`) | Emitted first (headers observed), before chunks |
-| Usage-first stream (first event is usage) | Emitted first, before the usage event |
-| `[DONE]`-only stream | Emitted first, before the done terminal |
-| Stream with no content chunks | Emitted first (headers observed) |
-| Non-SSE 2xx response | Emitted (headers observed), then the `error` (non-sse-response) |
-| Upstream HTTP error | Emitted (headers observed) with `statusCode`, then the `error` (upstream-http-error) |
-| Connect/timeout/TLS failure | Not emitted (no headers); `error` only; no status anywhere |
-| `request-failed` / pre-dispatch | Not emitted |
-
-- **Raw vs normalized**: `statusCode` is the raw integer; `contentType` is
-  the normalized media type (parameters stripped); `contentEncoding` is the
-  normalized lowercase token. Unknown fields **inside** `responseMeta` fail
-  closed (rejected), while unknown fields elsewhere round-trip per §13.1.
-- **Validation** (in `@signalglass/evidence`, slice S1): integer bounds for
-  `statusCode`; grammar for `contentType` and `contentEncoding`; length
-  bounds; `choiceIndex` non-negative integer.
-- **Policy classification**: the `metadata-safe` v1.1.0 matrix (§14) adds
-  rows: `responseMeta.statusCode` and `choiceIndex` as meta (bounded
-  integers), `responseMeta.contentType`/`contentEncoding` as bounded labels.
-
-### 13.4 Declared losses and lifecycle in canonical completeness
-
-- `completeness.declaredLosses`: closed-code array, deterministic order
-  (§7.3 table order), deduplicated; validated by `parseEvidenceRecord`
-  (1.1) — any unknown code is a parse refusal; serializer/parser round-trip;
-  storage retrieval parity; `metadata-safe` v1.1.0 bounded-label-array row.
-- `completeness.lifecycle`: observation terminal + transport end + delivery
-  (§2); each value validated against its closed union; round-trip and
-  retrieval parity; `metadata-safe` v1.1.0 bounded-label rows.
-- The `boundaryStatement` remains derived from the structured codes (§7.3)
-  and is **not** the persisted loss record.
-
-### 13.5 Projection and fixture consequences
-
-- **Projection matrix**: new loss rows — `responseMeta`, `choiceIndex`
-  (identity), `completeness.declaredLosses`, `completeness.lifecycle`, and
-  `trace.assembly` are `unavailable` in the legacy projection; a
-  metadata-only `model_response` maps to a legacy response with declared
-  content loss; the existing E2L-073 (`chunkIndex` unavailable) is
-  unchanged.
-- **Fixtures** (updated additively, slice S1): a new multi-choice streaming
-  fixture carries `choiceIndex` per chunk and per-choice `chunkIndex`; a
-  streaming fixture carries `responseMeta` on the first `model_response`,
-  `assembly` on the trace, and `declaredLosses`/`lifecycle` on completeness;
-  the existing `trace-3` fixture remains valid (additive fields are
-  optional; its single-choice `chunkIndex` 0/1/2 semantics are unchanged).
-  All 1.1.0 fixture records pass `parseEvidenceRecord` (1.1.0) and the
-  `metadata-safe` v1.1.0 policy.
-
-### 13.6 Usage normalization (exact shapes)
-
-Provider numeric usage becomes `UsageValue`/`UsageRecord` as follows (the
-actual `@signalglass/evidence` shapes, Spec 013 §3.3):
-
-```ts
-UsageValue  = { value?: number; evidenceStatus?: EvidenceStatus; reason?: string };
-UsageRecord = { evidenceStatus: EvidenceStatus; reason?: string;
-                inputTokens?: UsageValue; outputTokens?: UsageValue; totalTokens?: UsageValue };
-```
-
-| Provider report (OpenAI keys) | Canonical usage |
-|---|---|
-| `prompt_tokens: 3`, `completion_tokens: 1`, `total_tokens: 4` | `{ evidenceStatus: 'captured', inputTokens: { value: 3, evidenceStatus: 'captured' }, outputTokens: { value: 1, evidenceStatus: 'captured' }, totalTokens: { value: 4, evidenceStatus: 'captured' } }` |
-| `total_tokens: 4` only (partial) | `{ evidenceStatus: 'captured', totalTokens: { value: 4, evidenceStatus: 'captured' } }` — absent fields are **omitted**, never fabricated |
-| `prompt_tokens: 0`, `total_tokens: 0` | captured zero: `inputTokens: { value: 0, evidenceStatus: 'captured' }`, `totalTokens: { value: 0, evidenceStatus: 'captured' }` — a real observation, distinct from absence |
-| No usage in the stream | no usage event; `provider-usage-absent` declared; never a fabricated zero record |
-| Malformed usage block | no usage event; `unrecognized-provider-field` declared |
-| Per-choice nested usage | discarded; `unrecognized-provider-field` declared; frame-level usage canonical (§6.3) |
-
-- Every provider-supplied number is wrapped as
-  `{ value: n, evidenceStatus: 'captured' }`; field-level status is
-  `captured` for provider-reported values. The record-level
-  `evidenceStatus` is `captured` for any parsed usage block. No plain
-  numbers appear in the canonical usage shape.
-- Exact serialized-shape tests are required (§21 T85).
-
-### 13.7 Compatibility statement
-
-- MAJOR-1 compat: 1.1.0 is a strict additive superset of 1.0.0.
-- Existing 1.0.0 records, fixtures, validators, and stores are unaffected;
-  existing tests remain green (contract changed only by addition).
-- The 1.1.0 minor does not alter any existing field's meaning except the
-  additive refinement of `chunkIndex`'s definition (per-choice ordinal,
-  §4.2), which is consistent with every existing fixture.
-- 1.1.0 records presented to the **v1.0.0 persistence policy** are
-  `policy-rejected` (unknown-additive-field), never silently reinterpreted
-  (§14.3).
 ---
 
-## 14. Persistence-policy versioning: `metadata-safe` v1.1.0
+## 10. The observation state machine
 
-**Decision 14 — the persistence-policy change is versioned.
-`signalglass.persistence.metadata-safe` v1.0.0 (Spec 015) has a closed
-permitted-field matrix; the 1.1 additive fields change admission behavior,
-so the reference policy advances to v1.1.0 with exact added rows, v1.0
-compatibility, defined v1.0-policy behavior for 1.1 records, and stored
-policy metadata. v1.0 is never silently reinterpreted.**
+**Decision 10 — the assembler is a single deterministic state machine over
+the observation lifecycle; every terminal is reachable from defined states;
+each terminal ends with exactly one final canonical event (`interaction_end`
+only on `completed`; the causal `error`/`cancelled` declaration otherwise) —
+nothing follows the final event (Spec 014 §4.7).**
 
-### 14.1 Why a new policy version
+### 10.1 States
 
-Spec 015's `signalglass.persistence.metadata-safe` v1.0.0 classifies every
-canonical field through a closed permitted-field matrix; undeclared present
-fields are rejected (`unknown-additive-field`). The 1.1 additive fields
-(`responseMeta`, `choiceIndex`, `completeness.declaredLosses`,
-`completeness.lifecycle`, `trace.assembly`) are new present fields — v1.0.0
-has no rows for them. Their admission is a policy decision, so the policy
-itself advances to **v1.1.0**.
+```text
+initial ──request accepted──▶ awaiting-response
+                              │  headers observed → model_response event (§6.7)
+                              ▼
+                         observing-stream
+                              │  [DONE] → completed
+                              │  upstream error → upstream-failed
+                              │  provider error frame → upstream-failed
+                              │  malformed frame → malformed-stream
+                              │  client disconnect → client-cancelled
+                              │  ingress limit/shutdown → ingress-cancelled
+                              │  observer failure → observation-detached
+                              ▼
+                       terminal (one of the seven)
+```
 
-### 14.2 v1.1.0 added matrix rows
+States: `initial`, `awaiting-response`, `observing-stream`, and the seven
+terminal states (§9.2). The client-response path and the observation
+lifecycle advance independently; the observation machine never waits on the
+client socket.
 
-| Field path | Classification | Admissible |
+### 10.2 Transitions
+
+| From | Event | To |
 |---|---|---|
-| `payload.responseEnvelope.responseMeta.statusCode` | meta (bounded integer 100–599) | yes |
-| `payload.responseEnvelope.responseMeta.contentType` | bounded label (≤128 cp, RFC 6838 grammar) | yes |
-| `payload.responseEnvelope.responseMeta.contentEncoding` | bounded label (≤32 cp, token grammar) | yes |
-| `payload.responseEnvelope.choiceIndex` | meta (non-negative integer) | yes |
-| `completeness.declaredLosses` | bounded-label array (closed codes only, ≤64 entries) | yes |
-| `completeness.lifecycle.observation.terminal` | bounded label (closed `TerminalReason`) | yes |
-| `completeness.lifecycle.transport.end` | bounded label (closed `TransportEndReason`) | yes |
-| `completeness.lifecycle.transport.delivery` | bounded label (closed `DeliveryOutcome`) | yes |
-| `trace.assembly.name` | literal label (`signalglass.streaming.assembler`) | yes |
-| `trace.assembly.version` | bounded label (semantic version, §15) | yes |
-| `trace.assembly.decoderContract.name` | literal label (`signalglass.providers.openai-sse`) | yes |
-| `trace.assembly.decoderContract.version` | bounded label (semantic version) | yes |
+| `initial` | Request accepted, body read, dispatch begins | `awaiting-response` |
+| `awaiting-response` | Response headers observed | `observing-stream` |
+| `awaiting-response` | Pre-dispatch failure (invalid/missing key/key-unavailable/unroutable/body-read) | `request-failed` |
+| `awaiting-response` | Upstream connection failure | `upstream-failed` |
+| `awaiting-response` | Client disconnect | `client-cancelled` |
+| `awaiting-response` | Ingress shutdown/idle timeout | `ingress-cancelled` |
+| `observing-stream` | `[DONE]` observed | `completed` |
+| `observing-stream` | Upstream HTTP error / non-SSE 2xx / provider error frame | `upstream-failed` |
+| `observing-stream` | Malformed frame (5 codes) | `malformed-stream` |
+| `observing-stream` | Client disconnect | `client-cancelled` |
+| `observing-stream` | Ingress shutdown/idle timeout | `ingress-cancelled` |
+| `observing-stream` | Observer failure (frame-overflow, encoding-unsupported, decode-failure, internal) | `observation-detached` |
 
-All v1.0 rows are unchanged. The v1.1.0 matrix is closed, like v1.0.0's:
-fields outside it are rejected.
+- Every terminal is reachable from defined states; no terminal is reachable
+  from `initial` (a request that is never accepted produces no record —
+  nothing was observed, §3.1).
+- The machine **never transitions out of a terminal state**: the terminal
+event is the record's **final** canonical event (`interaction_end` for
+`completed`; the `error`/`cancelled`/informational `error` declaration for
+the other terminals, §10.4), and no canonical event is emitted after it
+(trailing bytes are accounted structurally, §6.6).
+- `observation-detached` from `observing-stream` means framing of the
+  canonical stream stops; the passthrough continues (§1.4).
 
-### 14.3 Compatibility and non-reinterpretation
+### 10.3 Status derivation (trace.status)
 
-- **v1.0 record → v1.1.0 policy**: accepted (all new fields optional;
-  additive).
-- **v1.1 record → v1.0.0 policy**: **`policy-rejected` with
-  `unknown-additive-field`** for each 1.1 field — the v1.0 matrix is closed
-  and is **never silently reinterpreted** to admit the new fields. Tests
-  prove this behavior (no downgrade, no implicit acceptance).
-- **Stored policy metadata**: the policy `name`/`version` active at save
-  time are recorded with the record per Spec 015's stored-policy-metadata
-  mechanism (bounded policy-version metadata, unspoofable reference-policy
-  identity) — so a record stored under v1.1.0 is distinguishable from one
-  stored under v1.0.0.
-- **Policy identity**: `signalglass.persistence.metadata-safe` v1.1.0 is a
-  new branded reference-policy instance (Spec 015 brand check applies);
-  spoofed plain objects are rejected.
+`trace.status` is **derived** from the observation terminal (§1.2), never
+recorded independently and never invented:
 
-### 14.4 Tests required
+| Terminal | `trace.status` |
+|---|---|
+| `completed` | `completed` |
+| `upstream-failed` / `malformed-stream` / `request-failed` | `failed` |
+| `client-cancelled` / `ingress-cancelled` | `cancelled` |
+| `observation-detached` | `unknown` |
 
-- v1.1.0 accepts every 1.1 fixture record (§13.5).
-- v1.0.0 rejects a 1.1 record (`unknown-additive-field`), never
-  reinterpreted.
-- v1.1.0 accepts a v1.0 record unchanged.
-- Stored policy metadata reflects the version that made the decision.
-- Matrix closures: an unknown field inside a new container is rejected.
+### 10.4 Terminal event emission
+
+- **`completed`**: `span_end` (model span) is emitted when `[DONE]` is
+  observed; `interaction_end` is emitted as the record's **final** event.
+- **`upstream-failed` / `malformed-stream` / `request-failed`**: the causal
+  `error` event (`actor` per §9.3, `lifecycleTarget: "trace"`,
+  `lifecycleEffect: "fail"`) is emitted as the record's **final** event.
+  **No `interaction_end`** — Spec 014 §4.7 requires the terminal
+  declaration to be the record's final applicable event and rejects an
+  `error` followed by `interaction_end` (`terminal_declaration_not_final`).
+- **`client-cancelled` / `ingress-cancelled`**: the `cancelled` event
+  (`lifecycleTarget: "trace"`, `lifecycleEffect: "cancel"`, `requestedBy:
+  'client' | 'ingress'`) is emitted as the record's **final** event. **No
+  `interaction_end`** (same §4.7 rule).
+- **`observation-detached`**: an **informational** `error` event (actor
+  `capture`, `lifecycleTarget: "none"`, `lifecycleEffect: "none"`,
+  observationRole `unobservable`) is emitted — it describes what happened
+  without claiming the provider failed — and is the record's **final**
+  event; the trace derives `unknown`. **No `interaction_end`** is
+  fabricated (a final `interaction_end` without a terminal declaration
+  would derive `completed`, which detachment must never claim).
+- **Nothing follows the final event** — identical in the state table, the
+  event mapping, §6.5, acceptance criterion 15, and the tests.
+
+### 10.5 Terminal-event sequence (tested invariant)
+
+```text
+completed:        ... last content/usage (seq n) → span_end (n+1) → interaction_end (n+2)   [final]
+failed:           ... last content/usage (seq n) → error (n+1, trace/fail)                    [final]
+cancelled:        ... last content/usage (seq n) → cancelled (n+1, trace/cancel)               [final]
+observation-detached: ... last content (seq n) → informational error (n+1, none/none)          [final]
+   ── no canonical events after the final event on any terminal ──
+```
+
+Tests assert: exactly one final event per terminal; `interaction_end` only
+on `completed`; the terminal declaration is always the record's final event;
+nothing follows the final event; no double emission and no fabricated
+`interaction_end` (T27–T35, T44, T99–T100).
 
 ---
 
-## 15. Structured assembler version
+## 11. Proposed packages and module boundaries
 
-**Decision 15 — the assembler identity and versions are recorded
-structurally on the record, with literal names validated exactly, semantic
-versions, defined absence, and a version-bump table. The `boundaryStatement`
-is derived text, never the version source of truth.**
+**Decision 11 — the streaming implementation lands as a new network-free
+`@signalglass/streaming` package plus a provider adapter in
+`@signalglass/providers`; ingress wiring lands in `apps/ingress`; core
+models stay provider-agnostic; no package exists until a later slice.**
+(This is a docs-only spec: the modules are named and specified, **not
+created**.)
 
-### 15.1 `trace.assembly` (additive, §13.2)
+```text
+@signalglass/streaming (new, proposed; network-free)
+  createSseParser()                 L2 SSE framing (incremental, bounded, [DONE]-aware)
+  SseParserOptions / FrameResult
+  assembleTrace()                   L4 canonical event assembly from decoded events (the single
+                                    sequencing surface, Spec 013 §2.2)
+  AssemblerOptions / AssemblyResult
+  captureBoundary builder           authoritative streaming boundary facts (§13.4)
+  remainder/disposition helpers     post-terminal accounting (§6.6, §12.4)
+  evidence-status helpers           §7.1 honest status assignment
+  (pure functions only; no sockets, no streams, no http, no storage)
+
+@signalglass/providers (extended)
+  decodeSseFrame(frame)             L3 provider-neutral normalized events (§6.2, §12.1)
+  openai-sse decoder                the first adapter (contract name literal §15)
+  StreamDecodedEvent                provider-neutral event union (§12.1)
+
+apps/ingress (extended)
+  POST /v1/chat/completions         existing Spec 006 route gains the streaming path
+  streamingForwarder                passthrough pipeline: L1–L4 wiring, backpressure (§5)
+  boundedDecoderTee                 encoded-stream observation tee (§5.5)
+  ingressStreamingController        client-response orchestration (Spec 006 error envelope
+                                    semantics preserved; pre-dispatch paths unchanged)
+
+@signalglass/core (unchanged in this spec)
+  AgentRun / Turn / ContextBlock     provider-agnostic internal model (never extended with
+                                    provider shapes)
+@signalglass/evidence (unchanged)
+  deriveCompleteness, parseEvidenceRecord, vocabulary, serialize  (the parse-time
+  verification surface for the authoritative-vs-derived model, §13.4)
+@signalglass/storage (unchanged)
+  EvidenceStorage.saveEvidenceRecord (Spec 015) — the only persistence path (§3.1, §16)
+```
+
+- **Dependency direction**: `@signalglass/streaming` depends only on
+  `@signalglass/evidence` types and `@signalglass/core` types; it never
+  imports providers, ingress, or storage. The ingress composes
+  `@signalglass/streaming` + `@signalglass/providers` + `@signalglass/evidence`.
+- **Why streaming is network-free**: SSE framing, decoding, assembly,
+  boundary-fact construction, and evidence-status logic are pure functions;
+  keeping them out of the ingress package keeps them unit-testable without
+  sockets and keeps `@signalglass/core` provider-agnostic (AGENTS.md
+  architecture boundaries).
+---
+
+## 12. The assembler and the honest completeness summary
+
+**Decision 12 — the assembler is a pure function from decoded events and
+authoritative boundary facts to canonical events plus the boundary facts;
+frame positions are 1-based and only assigned to actually-observed frames;
+raw-forwarded bytes count exactly what was written to the client socket;
+the completeness summary states observed facts and an honest remainder
+knowledge — never fabricated counts and never implied completion.**
+
+### 12.1 The provider-neutral decoded event union (L3)
 
 ```ts
-assembly: {
-  name: 'signalglass.streaming.assembler';     // LITERAL: validated exactly, not an arbitrary string
-  version: string;                             // semantic version (semver), validated
-  decoderContract?: {
-    name: 'signalglass.providers.openai-sse';  // LITERAL: validated exactly
-    version: string;                           // semantic version, validated
-  };
+type StreamDecodedEvent =
+  | { kind: 'chunk'; choiceIndex: number; chunkIndex: number; delta: string | null; finishReason?: string }
+  | { kind: 'usage'; inputTokens?: number; outputTokens?: number; totalTokens?: number }   // canonical usage (frame-level)
+  | { kind: 'provider-error'; code: string; description: string };                          // structural, §8.4
+
+type FrameDecodeResult = /* §6.2 */;
+```
+
+- `chunk.delta` is the normalized text delta (`string`, or `null` when the
+  chunk carries no content). No `usage` field exists on `chunk` — per-choice
+  nested usage is discarded and declared `unrecognized-provider-field`
+  (§6.3); frame-level usage is canonical.
+- `usage` fields are optional at this layer; provider numbers become
+  `UsageValue { value, evidenceStatus: 'captured', reason? }` at L4 (§13.6).
+- `provider-error` carries only closed codes and bounded structural text
+  (§8.4, §9.1).
+
+### 12.2 Assembler contract
+
+`assembleTrace({ traceId, interactionId, requestMeta, requestMessages,
+decodedEvents, boundaryFacts, captureProfile })` produces:
+
+- the canonical `AgentRun`-shaped trace (Spec 013): events in `seq` order
+  with `interaction_start` at `0`, one `model_request`, one
+  `model_response` (when headers were observed), zero-or-more
+  `chunk`/`model_usage` events, the terminal event per §10.4, and exactly
+  one final `interaction_end`;
+- the authoritative `captureBoundary.streaming` facts (§13.4) — the
+  assembler is the **only** writer of these facts;
+- an `AssemblyResult { trace, boundary, warnings }` where warnings are
+  informational only (they never alter outcomes).
+
+- The assembler assigns `seq` (§4.3), `eventId`, `observationId`, per-choice
+  `chunkIndex`, and the evidence statuses (§7.1). It applies retention
+  (excerpting/masking) per the capture profile (§8.2). It never emits raw
+  provider JSON except under the `providerNative` contract (§7.2).
+- It is deterministic: identical inputs produce identical outputs (including
+  loss codes and boundary statements).
+- Idempotence: assembly is a pure function; re-running it with the same
+  inputs does not duplicate events (the ingress persists once per
+  interaction, §3.1).
+
+### 12.3 Frame and byte accounting (honest numbers)
+
+- `lastObservedFramePosition` — the 1-based position of the **last frame
+  actually observed** by the parser (canonicalized or not). Only observed
+  frames are counted; after observation detachment, positions are not
+  assigned (framing may be impossible), so this number is simply absent
+  (`undefined`) rather than guessed. It is recorded authoritatively in
+  `captureBoundary.streaming.remainder` (§13.4) and surfaced in the
+  completeness summary (§12.4).
+- `rawForwardedBytes` — the number of response-body bytes actually written
+  to the client response socket (excluding headers). Its basis is explicit:
+  it is the count at the moment the client-response path ends; a write that
+  was accepted by the socket but whose completion is unobservable counts
+  only what the socket accepted. It is never derived from parse results and
+  never used to infer frame counts.
+- **No fabricated frame counts**: the spec never claims "the last N frames
+  were lost" — the remainder vocabulary (§12.4) states knowledge honestly,
+  and the loss codes describe content, not counts (§7.3).
+
+### 12.4 Remainder knowledge (closed vocabulary)
+
+```ts
+type RemainderKnowledge =
+  | 'protocol-terminal-observed'   // [DONE] (or terminal error frame) was observed; trailing bytes may still exist (§6.6)
+  | 'transport-eof-observed'       // transport EOF was observed with no terminal marker
+  | 'unknown'                      // transport ended without the observer knowing (detach, encoding, decode failure)
+  | 'not-applicable';              // no upstream response existed (request-failed paths)
+```
+
+- `protocol-terminal-observed` and `transport-eof-observed` are distinct:
+  `[DONE]` does not imply EOF, and EOF does not imply `[DONE]`.
+- When the observer detached, the remainder is `unknown` — the spec does
+  not call unobserved content "absent".
+- The completeness summary (below) carries this knowledge plus the honest
+  observed facts; the loss codes `remainder-after-observation-detach-not-observed`
+  and `post-terminal-content-not-retained` (§7.3) are derived from it.
+
+### 12.5 The completeness summary (derived, representation-honest)
+
+The summary is a derived view — recomputed by `deriveCompleteness` and
+verified at parse (§13.4); it is never an independently-authored document.
+It contains **only facts the observer actually knows**. The summary is
+assembler-level accounting; the **persisted derived projections** are
+`TraceCompleteness`'s existing members (`eventsByStatus`, `seqGaps`,
+`duplicatesDetected`, `boundaryStatement`) plus the additive
+`completeness.lifecycle` and `completeness.declaredLosses` (§13.4) — the
+assembler-internal fields below are never persisted verbatim:
+
+```ts
+CompletenessSummary (canonical 1.1 paths shown in bold):
+  observedFrames: number                    // frames actually observed by the parser (L2), 1-based positions assigned
+  retainedEvents: number                    // canonical events retained (L4) up to and including the terminal event
+  observationDetached: boolean              // observation detached before the observation terminal could be determined
+  lastObservedFramePosition?: number        // §12.3 (absent when detachment made positions unknowable)
+  remainderObservation: RemainderKnowledge  // §12.4
+  rawForwardedBytes?: number                // §12.3 — basis documented; optional (absent when the basis could not be established)
+  boundaryStatement: string                 // derived, human-readable; length-bounded (≤ 200 chars)
+```
+
+- The revision-3 `unobservedFramesAfterDetach` counter is **removed**: it
+  claimed to count what the observer could not see. Post-detachment content
+  is expressed only through `remainderObservation` and the loss codes.
+- `boundaryStatement` is **derived only** — generated from the observed
+  facts and loss codes (e.g. `"Observation detached after frame 12; remainder
+  unknown; 14 declared losses"`), never an independently authored narrative,
+  and never the persisted loss record (§7.3). It stays ≤ 200 chars.
+- `trace.assembly` (§15) records the assembler identity, decoder contract,
+  and versions — the derivation pedigree of this summary.
+---
+
+## 13. The additive 1.1 schema and the authority model
+
+**Decision 13 — the schema advances additively from 1.0.0 to 1.1.0 with six
+new serialized fields; `captureBoundary.streaming` is the single
+authoritative input holding streaming facts; `completeness.lifecycle`,
+`completeness.declaredLosses`, and the summary are derived by
+`deriveCompleteness` and verified at parse; `trace.assembly` records the
+assembly pedigree; `responseMeta` and `choiceIndex` extend the existing
+envelope; no 1.0.0 record is reinterpreted; no field is silently discarded
+on downgrade.**
+
+### 13.1 The six new serialized paths
+
+| # | Serialized path (1.1) | Role | Owned by |
+|---|---|---|---|
+| 1 | `captureBoundary.streaming` | **authoritative input**: observation terminal, upstream/client-response outcomes, remainder knowledge, loss facts, assembly | assembler (the only writer) |
+| 2 | `completeness.lifecycle` | derived view of the two lifecycles (§1.2, §2) | `deriveCompleteness` |
+| 3 | `completeness.declaredLosses` | derived, closed loss-code list (§7.3) | `deriveCompleteness` |
+| 4 | `trace.assembly` | assembly pedigree (literal names + versions, §15) | assembler |
+| 5 | `events[].responseEnvelope.responseMeta` (on the `model_response` event) | upstream status + normalized content metadata (§13.3) | assembler |
+| 6 | `events[].responseEnvelope.choiceIndex` (on chunk events) | normalized choice identity (§4.2, §13.5) | assembler |
+
+Usage normalization (§13.6) is a **clarification** of existing 1.0.0 usage
+shapes, not a new field. `evidenceSchemaVersion` advances 1.0.0 → 1.1.0
+(additive: every 1.0.0 record remains valid and unchanged in meaning; §15).
+
+### 13.2 The authority model (one authority per fact)
+
+```text
+authoritative input (validated at parse):
+  captureBoundary.streaming                 ← assembler-written facts
+  canonical events + trace fields           ← assembled from observed data
+
+derived at parse (recomputed, compared, never trusted blindly):
+  completeness.lifecycle                    ← deriveCompleteness(trace, analysis, captureBoundary)
+  completeness.declaredLosses               ← deriveCompleteness(...)
+  completeness summary + boundaryStatement  ← deriveCompleteness(...)
+
+verification:
+  parseEvidenceRecord recomputes deriveCompleteness and fails with
+  completeness_disagrees_with_derivation if the stored derived fields
+  disagree with the recomputation; captureBoundary is itself validated
+  (closed vocabularies, cross-field matrix §2.3, version rules §15) and
+  accepts only additive unknown keys.
+```
+
+- **Tampering with a derived field** (editing `completeness.declaredLosses`
+  or `completeness.lifecycle` so it disagrees with the boundary facts) →
+  parse fails with `completeness_disagrees_with_derivation`.
+- **Tampering with an authoritative input** (editing
+  `captureBoundary.streaming`) is caught only by the **cross-field
+  validation** of the boundary facts themselves (closed vocabularies,
+  impossible-pair rejection §2.3, version/literal-name rules §15) — it
+  cannot be detected by comparing to a recomputation, because the boundary
+  is the recomputation's input. The spec states this honestly: **one
+  authority per fact**, and authoritative fields are protected by their own
+  validation, not by derivation.
+- No fact is recorded in two authoritative places; there is no "primary"
+  and "mirror" copy of the same fact.
+
+### 13.3 `model_response` and `responseMeta` (universal response-metadata home)
+
+Canonical shape of the metadata-only `model_response` event — the
+`EventRecord` shape of Spec 013/014 with the additive 1.1 field:
+
+```ts
+{
+  eventId, traceId,
+  spanId: <the model span's id>,          // event-level, non-null
+  seq, kind: 'model_response', capturedAt,
+  evidenceStatus: 'captured',             // event-level (metadata only)
+  observationRole: 'provider_reported',   // event-level
+  responseEnvelope: {
+    providerNativeFidelity: 'structurally_faithful',
+    // finishReason, providerNative, usage, chunkIndex, choiceIndex: ALL ABSENT here
+    responseMeta: {                        // additive 1.1
+      statusCode: number,                  // 100–599, required
+      contentType?: string,                // normalized media type; parameters dropped
+      contentEncoding?: string,            // single token when present
+    },
+  },
 }
 ```
 
-- **Literal-name validation**: `assembly.name` must equal
-  `signalglass.streaming.assembler` exactly; `decoderContract.name` must
-  equal `signalglass.providers.openai-sse` exactly. Any other value is a
-  parse refusal (1.1 validation), never a bounded-string free-for-all.
-- **Semantic-version validation**: `assembly.version` and
-  `decoderContract.version` are validated as semantic versions
-  (`major.minor.patch`); invalid versions are parse refusals.
-- **Absence behavior**: `assembly` is present on every record assembled by
-  this spec (required on 1.1 streaming records). `decoderContract` is
-  **absent** when no decoder participated — e.g. a future non-provider
-  stream source, or an assembly path with no provider decoding. Absence is
-  explicit; no placeholder decoder entry is fabricated.
-- **Bump table** — exactly which observable changes require which version
-  bump:
+- `evidenceStatus` and `observationRole` are **event-level** fields
+  (Spec 013/014 `EventCommon`), not envelope fields; the envelope itself
+  carries only `providerNativeFidelity` + the additive `responseMeta`.
+- Emitted **exactly once** when response headers are observed — the first
+  response-derived event, before any chunk/usage/error event (§6.7). No
+  duplication, and `responseMeta` never appears on chunk/usage/error
+  envelopes.
+- `observationRole` is additive: `'provider_reported'` for this
+  metadata-only envelope (and, in later slices, `'ingress_observed'` /
+  `'derived'` are reserved but not emitted by this slice).
+- `statusCode` is validated 100–599; `contentType` is the normalized media
+  type (parameters dropped → `content-type-parameters-not-retained`,
+  §7.3); `contentEncoding` only when the upstream sent a single
+  `content-encoding` token.
+- **Header-less paths** (`request-failed`, `connection-failed`): no
+  `model_response`, no status anywhere — `responseMeta` is not fabricated
+  and the error envelope carries no status field (the draft's
+  `upstreamStatus` is removed).
+- Content-type header values other than `content-type`/`content-encoding`
+  are excluded structurally (§5.1); the allowlist is validated per
+  bounds (§13.4 validation).
 
-| Observable change | Version to bump |
-|---|---|
-| Assembler output change (event set, sequencing, status derivation, completeness fields) | `ASSEMBLER_ALGORITHM_VERSION` (`assembly.version`) |
-| Decoder mapping change (provider shapes → `StreamDecodedEvent`) | `decoderContract.version` |
-| Capture-settings change (excerpt length default, redaction rules, detector version) | capture-profile version (`signalglass.collection.ingress-metadata-safe`) |
-| Additive canonical-shape change | `evidenceSchemaVersion` minor (e.g. 1.1.0 → 1.2.0) |
-| Non-additive semantic change to the canonical model | `evidenceSchemaVersion` major |
-| Persistence-policy admission change | persistence-policy version (`signalglass.persistence.metadata-safe`) |
+### 13.4 `captureBoundary.streaming` — authoritative field (validated shape)
 
-- `ASSEMBLER_ALGORITHM_VERSION` is a semver constant in
-  `@signalglass/streaming` (initial `1.0.0`); the capture profile and policy
-  versions are constants in their packages; all are recorded per record.
-- `boundaryStatement` remains human-facing explanatory text derived from the
-  structured fields and loss codes (§7.3); it is **not** the version source
-  of truth.
+A streaming record also records the existing `captureBoundary` fields
+(`captureSurface: 'ingress_proxy'`, `observationBoundary:
+'provider_reported'` — Spec 013 §9); the streaming facts live under the
+**additive** `captureBoundary.streaming` key, which parse accepts as an
+additive key per Spec 014 §2.2.10.
+
+```ts
+captureBoundary.streaming = {
+  observationTerminal: TerminalReason,                 // closed (§9.2)
+  upstream:        { outcome: UpstreamOutcome },       // closed (§2.1)
+  clientResponse:  { outcome: ClientResponseOutcome }, // closed (§2.2)
+  remainder: {
+    knowledge: RemainderKnowledge,                     // closed (§12.4)
+    lastObservedFramePosition?: number,                // 1-based, only observed frames (§12.3)
+    rawForwardedBytes?: number,                        // bytes accepted by the client socket (§12.3)
+  },
+  losses: {
+    fullRequestBodyRetained: boolean;
+    messagesContentRetained: boolean;
+    deltaContentRetained: boolean;
+    unmappedDeltaFields: readonly string[];            // bounded field-name list (≤ 8 entries, each ≤ 64 chars)
+    providerNativeRetained: boolean;
+    providerErrorBodyRetained: boolean;
+    unrecognizedExtensionFrameObserved: boolean;
+    postTerminalContentNotRetained: boolean;           // §6.6
+    headerValuesBeyondAllowlist: boolean;
+    contentTypeParametersDropped: boolean;
+    wireBytesRetained: boolean;                        // default false (§8.1)
+    contentEncodingUnsupported: boolean;
+    maskedContent: boolean;
+  },
+  assembly: { /* §15.1 */ },
+};
+```
+
+Parse-time validation (in addition to the field itself being additive):
+
+- every vocabulary is closed and membership-checked (unknown value →
+  parse failure);
+- the upstream × clientResponse pair must satisfy the §2.3 matrix
+  (impossible pairs rejected);
+- `lastObservedFramePosition` ≥ 1; `rawForwardedBytes` ≥ 0 when present;
+- `statusCode` 100–599; `contentType`/`contentEncoding` bounded
+  (≤ 255 chars) and pattern-checked;
+- `losses.unmappedDeltaFields` bounded as above;
+- assembly fields validated per §15 (literal names, semver);
+- unknown additive keys inside `captureBoundary.streaming` are accepted
+  (forward compatibility) but never silently reinterpreted.
+
+`deriveCompleteness` consumes these facts and the canonical events and
+produces: `completeness.lifecycle`, `completeness.declaredLosses`, the
+summary, and `boundaryStatement` — all verified at parse per §13.2.
+
+### 13.5 `choiceIndex` on chunk envelopes
+
+- Additive field on `payload.responseEnvelope.choiceIndex` (number ≥ 0) on
+  chunk events only (§4.2). Absent on usage/error/`[DONE]`-derived events.
+- Validated: non-negative integer; duplicate-within-frame is rejected at the
+  decoder (§6.3), so no parse-time duplicate ambiguity remains.
+- The existing `chunkIndex` semantics (per-choice content-chunk ordinal)
+  are preserved; for single-choice streams they coincide (§4.2).
+
+### 13.6 Usage normalization (clarification, not a new field)
+
+- `UsageValue = { value?: number; evidenceStatus?: EvidenceStatus; reason?: string }`
+  and `UsageRecord = { evidenceStatus; reason?; inputTokens?; outputTokens?;
+  totalTokens? }` per Spec 013 §2.2.6/§4.1.
+- Provider-reported numbers → `{ value: n, evidenceStatus: 'captured' }` per
+  field. **Captured zero is a real observation**, distinct from absence
+  (missing fields / no usage event).
+- Partial usage = partial fields (`inputTokens` present, `outputTokens`
+  absent — never zero-filled, never `null`).
+- Per-choice nested usage is discarded and declared
+  `unrecognized-provider-field`; frame-level usage is canonical (§6.3).
+- Exact serialized-shape tests: T85 (§21).
+
+### 13.7 1.0 → 1.1 compatibility
+
+- A **1.0.0 record** (no streaming fields) parses under 1.1 with no change;
+  its semantics are untouched. `SUPPORTED` schema versions for reading stay
+  `1.0.0 | 1.1.0` (§15.3).
+- A **1.1 record carrying a 1.1-owned field must not be silently
+  reinterpreted by a 1.0 consumer**: when the deciding policy is 1.0.0 and
+  a record carries 1.1-owned fields, the outcome is `policy-rejected`
+  `unknown-additive-field` (§14.3) — never silent field-dropping. The
+  parser selects its owned validation by the **declared**
+  `evidenceSchemaVersion` (§15.2).
+- Fixtures: the 1.1 fixture set (§21 T81) covers every 1.1 path in serialized
+  form; round-trip tests cover all six fields.
 
 ---
 
-## 16. Persistence outcomes: `SaveOutcome` vs. environmental failures
+## 14. Persistence policy and storage-safety alignment
 
-**Decision 16 — persistence observations separate the structured
-`SaveOutcome` statuses (Spec 015) from leak-free environmental/configuration
-failures. Contention exhaustion is a thrown `EvidenceContentionError`, never
-a `SaveOutcome`; this slice catches it into a closed leak-free code.**
+**Decision 14 — the persistence policy advances additively to
+`signalglass.persistence.metadata-safe` **v1.1.0** with an explicit rule
+admitting bounded detector-scanned captured content; v1.0.0 stays
+declared-only and unchanged; outcomes match the real Spec 015 API; the
+decision version is recorded; unknown additive fields are refused on
+downgrade, never reinterpreted.**
 
-### 16.1 The Spec 015 API reality
+### 14.1 The v1.1.0 rules (additive over v1.0.0)
 
-- `saveEvidenceRecord` returns `SaveOutcome` — a **closed status union
-  without `contention`**: `stored | already-present | conflict | invalid |
-  unsupported-version | safety-rejected | policy-rejected | policy-failed |
-  clock-failed` (§12.2, verified against `packages/storage/src/evidenceStorage.ts`).
-- **Contention exhaustion throws** `EvidenceContentionError`
-  (`code: 'EVIDENCE_CONTENTION_EXHAUSTED'`) when a competing write could not
-  be resolved within the bounded retry policy (Spec 015 §5.2). Its message
-  is fixed and carries no record content, identity, or secret. It is an
-  **environmental error, not a structured outcome**: the record was neither
-  stored nor observed.
+`signalglass.persistence.metadata-safe` v1.1.0 = v1.0.0 rules **plus**:
 
-### 16.2 The observation contract
+- **Rule 2 (new)**: bounded captured content is admissible — a
+  content-bearing field with `evidenceStatus: 'captured'` is admitted when
+  the retained length ≤ the configured cap (default 240, §8.3) **and** the
+  value passed the versioned sensitive detector (v1.0.0 of
+  `signalglass.collection.sensitive-detector`; version recorded §15.1).
+- All v1.0.0 rules remain verbatim: structural exclusion, secret-scanning
+  (S1/S2/S3 credential patterns), `isDeclaredContent` admission for
+  `redacted`/`truncated` declared content, error/status-code thresholds,
+  and the `metadata-safe` baseline (no raw payloads, no keys — Spec 015
+  §5.3, §6.3).
+
+### 14.2 Explicit added matrix rows (persistence-policy projection)
+
+| Policy version | Record (schema) | Verdict |
+|---|---|---|
+| v1.1.0 | 1.1, bounded captured content, detector-passed | **admitted** (Rule 2) |
+| v1.1.0 | 1.1, captured content ≤ cap, detector-miss | `safety-rejected` (gate) — surfaced, investigated as detector gap (§8.6) |
+| v1.1.0 | 1.1, captured content > cap | `policy-rejected` (`truncated` required) |
+| v1.1.0 | 1.1, declared content (`redacted`/`truncated`) | admitted (v1.0.0 rule) |
+| v1.0.0 | 1.1 record carrying 1.1-owned fields | `policy-rejected` `unknown-additive-field` — never silently reinterpreted (§13.7) |
+| v1.0.0 | 1.0 record | admitted as today (unchanged) |
+
+### 14.3 Downgrade and unknown-additive-field
+
+- A 1.1 record (carrying any of the six §13.1 fields) presented to a v1.0.0
+  policy is refused with `policy-rejected` + `unknown-additive-field`.
+  Reason: v1.0.0's admission set cannot attest the new fields; silently
+  dropping them would change record meaning.
+- The stored policy metadata records the **deciding version** (the policy
+  version that admitted or rejected) alongside the record — so a later
+  re-examination knows which rule set decided (Spec 015 policy metadata
+  fields, extended additively).
+
+### 14.4 Persistence outcomes match the real Spec 015 API
 
 ```ts
 type PersistenceObservation =
-  | { kind: 'save-outcome'; status: SaveOutcomeStatus }
+  | { kind: 'save-outcome'; outcome: SaveOutcome }             // full typed Spec 015 outcome
   | { kind: 'environmental-failure'; code: EnvironmentalFailureCode };
 
-type EnvironmentalFailureCode = 'contention-exhausted' | 'storage-unavailable' | 'policy-crash';
+type EnvironmentalFailureCode = 'contention-exhausted' | 'storage-unavailable';
 ```
 
-- `save-outcome` carries exactly the `SaveOutcome.status` value (plus, when
-  `stored`, the Spec 015 identity/digest/manifest per the API — those are
-  API contract fields, not diagnostics).
-- `environmental-failure` carries only the closed code:
-  - `contention-exhausted` — `EvidenceContentionError` caught;
-  - `storage-unavailable` — storage/database-level failure caught
-    (open/IO/read-path errors that are not `SaveOutcome`s);
-  - `policy-crash` — the persistence policy threw during evaluation.
-- **Leak-free rule**: diagnostics derived from a caught exception carry
-  only the closed code. **Never** copy exception messages, identities,
-  documents, digests, or payload values into diagnostics.
-- **A thrown exception is never claimed to be a `SaveOutcome`.** The two
-  kinds are disjoint; tests assert that an exhausted contention path yields
-  `{ kind: 'environmental-failure', code: 'contention-exhausted' }` and
-  never a `save-outcome` with a contention status.
+- **`SaveOutcome` is the real Spec 015 type** (`stored` / `policy-rejected` /
+  `safety-rejected` / `failed`), not a re-invented shape. `policy-crash` is
+  **removed**: a policy exception is a policy outcome
+  (`policy-failed`, `reason: 'exception' | 'malformed-decision'`), never a
+  distinct environmental code (verified against `packages/storage`).
+- **`EvidenceContentionError` (Spec 015) is never a `SaveOutcome`**: it
+  throws (`code: 'EVIDENCE_CONTENTION_EXHAUSTED'`); the ingress maps it to
+  `{ kind: 'environmental-failure', code: 'contention-exhausted' }`.
+- `storage-unavailable` covers open/path/IO failures surfaced as
+  environmental by the storage layer.
+- **Leak-free projection**: internal results may be rich; the persisted
+  `PersistenceObservation` and any logged line carry **only the closed
+  codes above** — never exception messages, identities, documents, or
+  digests (§9.1).
+- Persistence never rewrites the interaction outcome: `trace.status` and the
+  lifecycles are decided before the save (§3.2) and are unchanged by it.
 
-### 16.3 Timing and isolation (unchanged from §3.2)
+### 14.5 Determinism and ordering of derived loss codes
 
-- The save runs only after the client response path finished/closed; a
-  synchronous save never runs in the forwarding/backpressure data path.
-- Any persistence failure — outcome or environmental — is post-response and
-  can neither delay nor mutate client bytes (§9.4).
-- The observation never rewrites the terminal state, the trace status, or
-  the record (§10.6).
+- Ordering = §7.3 table order; deduplication = at most once per code;
+  derivation = from `captureBoundary.streaming.losses` + canonical events,
+  never from the boundary statement and never a static list. The projection
+  matrix (§21 T82) verifies row-level verdicts for the added rows above.
 ---
 
-## 17. Data flow
+## 15. Versioning and identity
+
+**Decision 15 — every versioned artifact carries a semantic version; literal
+identity fields are validated as literals; version bumps are mandatory for
+the five artifacts listed; the deciding policy version is recorded.**
+
+### 15.1 Versioned artifacts and the version-bump table
+
+| Artifact | Version | Where recorded | Bump required when |
+|---|---|---|---|
+| Evidence schema | `1.0.0` → **`1.1.0`** (additive) | `evidenceSchemaVersion` | any additive field (§13.1) — **this spec** |
+| Capture profile `signalglass.collection.ingress-metadata-safe` | `1.0.0` | `captureProfile` | changing the default cap (§8.3), detector version, redaction rule, or retained-value set |
+| Sensitive detector `signalglass.collection.sensitive-detector` | `1.0.0` | inside the capture profile | changing detector patterns (each new pattern set = new detector version) |
+| Assembler contract `signalglass.streaming.assembler` | semver | `trace.assembly` | changing assembly/sequencing semantics, loss derivation, or terminalization |
+| Decoder contract `signalglass.providers.openai-sse` | semver | `trace.assembly` | changing decode semantics, normalized events, or fidelity rules |
+| Persistence policy `signalglass.persistence.metadata-safe` | `1.0.0` → **`v1.1.0`** (additive) | policy metadata (deciding version, §14.3) | adding/removing admission rules — **this spec** |
+
+### 15.2 `trace.assembly` (pedigree; literal + semver validation)
+
+```ts
+trace.assembly = {
+  name: 'signalglass.streaming.assembler',        // literal, validated as exactly this
+  version: string,                                // semver, validated
+  decoderContract?: {                             // ABSENT when no decoder ran (§13.7)
+    name: 'signalglass.providers.openai-sse',     // literal, validated
+    version: string,                              // semver, validated
+  },
+  captureProfile: {
+    name: 'signalglass.collection.ingress-metadata-safe',  // literal
+    version: string,                              // semver
+  },
+  detector: {
+    name: 'signalglass.collection.sensitive-detector',     // literal
+    version: string,                              // semver
+  },
+};
+```
+
+- `trace.assembly` is **structured** (not a free-text blob): literal-name
+  fields are validated as the exact literals above, version fields as
+  semantic versions (parse-time validation, §13.4). A record with a wrong
+  literal or invalid version fails parse.
+- `decoderContract` is present on SSE/decoded paths and **absent** when no
+  decoder ran (header-less paths, non-SSE). Its absence is a first-class
+  state, not an omitted value.
+
+### 15.3 Schema support matrix
+
+| evidenceSchemaVersion | Reader support | Writer support |
+|---|---|---|
+| 1.0.0 | `SUPPORTED` (read) | 1.1 writer only (assembly is streaming-only) |
+| 1.1.0 | `SUPPORTED` (read) | this spec's assembler (deciding version recorded) |
+
+- `SUPPORTED` stays `1.0.0 | 1.1.0`; nothing is deprecated. `1.1.0` is
+  purely additive; every 1.0.0 record means the same thing under 1.1.0.
+- The parser selects owned validation by the declared
+  `evidenceSchemaVersion` (§13.7) — no guessing from field presence.
+
+---
+
+## 16. End-to-end flows and the persistence observation
+
+**Decision 16 — the ingress runs fixed stage order; the save happens after
+the client-response path ends; save outcomes are observable as closed
+`PersistenceObservation` values on a per-interaction observation surface;
+the interaction outcome is never rewritten by persistence.**
+
+### 16.1 Stage order (fixed, tested)
 
 ```text
-client POST /v1/chat/completions {stream:true}
-   │  identity assigned at header observation (traceId == interactionId)
-   ▼
-readJsonBody (bounded, 10 MB) ──invalid/incomplete/over-limit──► request-failed (§10.2)
-   │ valid
-   ▼
-assemble model_request (bounded excerpt messages) + span_start(model)
-   │
-   ▼
-dispatch to upstream (env-var API key; Accept-Encoding: identity; 30 s establish timeout)
-   │ key unavailable at resolution ──► request-failed (actor capture) — before dispatch
-   │
-   ├── connect/timeout/TLS failure (no headers) ──► upstream-failed; no model_response; no status
-   ├── HTTP error / non-SSE 2xx (headers observed) ──► model_response(responseMeta) → error
-   └── 2xx text/event-stream
-        │
-        ▼
-   response headers: allowlist (content-type, content-encoding) + x-signalglass-trace-id
-   model_response event emitted (responseMeta; first response-derived event)
-   response body: raw Buffers
-        │
-        ├── L1 transport bytes ──► client socket (passthrough, backpressured, byte-exact)
-        │         │
-        │         └── tee: decoder (gzip/deflate) ── unsupported/decode-failure ──► observation-detached
-        │
-        ▼
-   L2 parser (frames) ──parser-level malformed ──► malformed-stream
-        │
-        ▼
-   L3 decoder (FrameDecodeResult; provider-neutral events; multi-choice normalization)
-        │   ├── unrecognized ──► declared loss; continue
-        │   ├── decode-error ──► observation-detached
-        │   └── malformed (incl. same-frame duplicate choice index) ──► malformed-stream
-        ▼
-   L4 assembler: canonical events (seq assigned; choiceIndex/chunkIndex; usage;
-                 finish reasons; evidence statuses; declarations; declared losses)
-        │
-        ▼
-   terminal observed (first wins): completed / upstream-failed / client-cancelled /
-                      ingress-cancelled / malformed-stream / request-failed /
-                      observation-detached
-        │
-        ▼
-   causal terminal event → interaction_end (exactly once; nothing after)   (§10.5)
-        │
-        ▼
-   transport end observed independently: TransportEndReason + DeliveryOutcome (§2)
-        │
-        ▼
-   client response finish/close   (never blocked by storage)
-        │
-        ▼
-   finalize(): CompletenessSummary (honest facts only, §12.3) + 1.1 record
-        │            (completeness.declaredLosses, completeness.lifecycle,
-        │             trace.assembly, responseMeta, choiceIndex)
-        ▼
-   saveEvidenceRecord (exactly once) ──► PersistenceObservation (§16)
-        │       save-outcome status | environmental-failure code (leak-free)
-        │       (never rewrites outcome)
-        ├── legacy projection (dual emission) + divergence detection (§9)
-        └── crash before save ──► system-level declared loss: no record (§3.3, §19.2)
+S0  accept     → assign traceId/interactionId (§4.1)
+S1  request    → read + bound the request body; validate per Spec 006 (synchronous errors
+                 surface as pre-dispatch request-failed; no canonical request events yet)
+S2  dispatch   → build upstream request (env-var API key only); no evidence of key values
+S3  upstream   → await response headers (connection failures → upstream-failed + model_response
+                 absent (§13.3)); on headers: emit model_response with responseMeta
+S4  observe    → L1–L4 pipeline (§5.2): SSE parse + decode + assemble; content/usage events;
+                 terminalization (§10) when the terminal is observed
+S5  forward    → passthrough with backpressure (§5.3); encoded streams forwarded raw (§5.5)
+S6  finalize   → client-response path ends (finish/close); record clientResponse outcome
+S7  save       → single EvidenceStorage.saveEvidenceRecord (§3.2); record PersistenceObservation
+S8  observe    → per-interaction observation surface (§16.2)
 ```
 
-## 18. Privacy and diagnostic rules
+- `S5` and `S7` are strictly ordered: **no save may occur before the
+  client-response path has ended** (S6 before S7). The data path never
+  calls storage.
+- Idle timeout (§5.3) is handled at S5/S6: the client response closes;
+  the observation terminal is `ingress-cancelled` (§10.2) when the
+  observation is still active.
 
-- **API keys**: env-var-only (Spec 006). The assembler never reads, retains,
-  or records key values; the upstream authorization header is built at
-  dispatch and excluded from evidence structurally. No secrets, tokens, or
-  credential material may appear in any record, log, error text, boundary
-  statement, or diagnostic (§8.4).
-- **No raw payloads by default**: no raw request bodies, raw provider JSON,
-  raw wire bytes, or full tool results are retained by the default profile
-  (§8.1, §7.3 codes).
-- **No response header values except the validated bounded allowlist**
-  (§5.1): `content-type` (normalized), `content-encoding` (token), and the
-  `x-signalglass-trace-id` the ingress itself adds. Cookie, auth, and other
-  sensitive header values never enter evidence or logs.
-- **Bounded response metadata**: `responseMeta` holds only `statusCode` plus
-  the two normalized header values, on the single `model_response` event
-  (§13.3).
-- **Structural error text**: closed codes + fixed bounded descriptions,
-  secret-free by construction (§8.4).
-- **Leak-free persistence diagnostics**: environmental failures are reduced
-  to closed codes; exception messages, identities, documents, digests, and
-  payload values are never copied into diagnostics (§16.2).
-- **Redaction/truncation**: the collection-time privacy process
-  (detect-then-retain, §8.2) masks credential spans before the length
-  boundary; owning statuses and declarations are recorded; masked content is
-  declared loss `original-content-masked`.
-- **Diagnostics**: logs carry trace ids, state names, and closed codes, not
-  payloads; divergence-detection counters surface projection mismatches
-  without content (§9.3).
-- **Local databases and `.signalglass/` data directories are never
-  committed** (repository rule; unchanged).
+### 16.2 Observable save results
+
+- Each interaction exposes a per-interaction observation surface with
+  `interactionId` + the final `PersistenceObservation` (§14.4):
+  - `{ kind: 'save-outcome', outcome: SaveOutcome }` — the full typed
+    outcome (`stored`, `policy-rejected` + reason, `safety-rejected` +
+    reason, `failed`);
+  - `{ kind: 'environmental-failure', code }` — `contention-exhausted`
+    (from the thrown `EvidenceContentionError`) or `storage-unavailable`.
+- `PersistenceObservation` is never part of the canonical event stream and
+  never alters `trace.status`/lifecycles. A `safety-rejected` record is
+  still a completed observation with a refused persistence — the two are
+  separate outcomes (§8.6, §14.4).
+
+### 16.3 Leak-free projection (internal vs. persisted/logged)
+
+- **Internal** assembly/storage results may be rich (typed outcomes,
+  reasons, codes).
+- **Persisted/logged projections** carry only: the closed
+  `PersistenceObservation` codes, bounded structural descriptions (§8.4),
+  and closed error codes (§9.2). They never carry exception messages,
+  stack traces, identities, documents, digests, header values, or raw
+  bodies (Spec 013 §4.4). This is enforced by the projection tests
+  (§21 T68, T83) and the logging layer of the ingress slice.
+- `EvidenceContentionError`'s message is fixed and leak-free in Spec 015;
+  the ingress still maps it to the closed code rather than propagating the
+  exception text.
+
+### 16.4 Error-envelope parity (Spec 006 preserved)
+
+- Pre-dispatch paths keep Spec 006 behavior exactly: invalid request → 4xx
+  JSON envelope; missing key → error envelope; unroutable → 4xx; over-limit
+  → 4xx; connect failure → 502. These paths produce
+  `clientResponse.outcome: 'local-error-flushed'` (§2.2) and never forward
+  upstream bytes.
+- No response bytes are sent before the upstream headers are known
+  (except the pre-dispatch envelopes above); the client never observes a
+  partial 200 for a failed upstream.
+---
+
+## 17. Data flow and record assembly
+
+```text
+client POST /v1/chat/completions
+   │  traceId/interactionId assigned at accept (§4.1)
+   ▼
+[S1 request] read+bound body ──validation failure──▶ request-failed (no request events)
+   ▼
+[S2 dispatch] env-var API key only; upstream request
+   │
+   ├── connect failure ──▶ upstream-failed (no model_response, §13.3)
+   ├── headers ──▶ model_response (responseMeta)  [S3]
+   ▼
+[S4 observe] L1 raw bytes ─▶ L2 SSE frames ─▶ L3 decoded events ─▶ L4 canonical events
+   │            │              │                     │                │ seq assigned
+   │            ▼              ▼                     ▼                ▼
+[S5 forward]  client socket   (parser continues framing    (no canonical events
+   │          under backpressure  after terminal, §6.6)     after terminal)
+   ▼
+[S6 finalize] client-response path ends → record clientResponse outcome (§2.2)
+   ▼
+[S7 save] EvidenceStorage.saveEvidenceRecord(record) — exactly once (§3.2)
+   ▼
+[S8 observe] PersistenceObservation surfaced per interaction (§16.2)
+```
+
+- The assembler holds the canonical record in memory across the whole
+  stream and finalizes it at terminalization (§10); nothing is written
+  before [S7].
+- The completeness summary, `completeness.lifecycle`,
+  `completeness.declaredLosses`, and `boundaryStatement` are **derived at
+  parse time** by `deriveCompleteness` and verified
+  (§13.2/§13.4) — the stored record carries them as derived views of the
+  authoritative `captureBoundary.streaming`.
 
 ---
 
-## 19. Declared losses and crash limitations
+## 18. Observability and reporting
 
-### 19.1 Per-record declared losses (canonical, structured)
+- Streaming interactions surface through the same evidence →
+  `AgentRun` → report pipeline (Spec 013, Spec 014): `TraceCompleteness`
+  fields are populated from the derived lifecycle/loss/summary values, so
+  reports distinguish `completed` / `failed` / `cancelled` / `unknown`
+  statuses with the honesty of §12.5.
+- **Signalglass reports recommendations; it never claims automatic
+  optimization** (AGENTS.md product stance): a report finding states what
+  happened, why it matters, what evidence supports it, and what to inspect
+  or try next — for streaming it can point at the closed loss codes and
+  the observed remainder knowledge.
+- The `PersistenceObservation` (§16.2) is an operational signal, not a
+  report input: storage contention/refusals are surfaced as infrastructure
+  observations, never conflated with trace status.
+- Every smell/recommendation/finding explains: what happened (evidence),
+  why it matters, evidence cited (event ids, seq ranges, loss codes), and
+  next steps (bounded, concrete).
 
-Every assembled record carries `completeness.declaredLosses` — closed codes,
-deterministic order, deduplicated (§7.3) — computed from what was actually
-observed, never a static list. Examples:
+---
 
-| Situation | Declared losses |
+## 19. Documentation and privacy commitments
+
+### 19.1 Docs to update (this spec's slice)
+
+| Doc | Change |
 |---|---|
-| Default profile, completed single-choice stream with usage | `provider-native-not-retained`, `request-body-not-retained`, `message-content-not-retained` (excerpted), `delta-content-not-retained`, `wire-bytes-not-retained`, `content-type-parameters-not-retained` (when params dropped), possibly `original-content-masked` |
-| Provider reported no usage | + `provider-usage-absent` |
-| No finish reason before `[DONE]` | + `finish-reason-absent` |
-| Delta carries role/tool_calls/refusal/audio sub-fields | + `unmapped-delta-fields` |
-| Per-choice nested usage | + `unrecognized-provider-field` |
-| Unrecognized extension frame | + `unrecognized-extension-frame` (observation continues) |
-| Observation detached mid-stream | + `frame-after-observation-detach`, `encoded-content-not-observed` (when encoding), etc. |
-| Client cancellation mid-stream | + `remainder-after-client-cancellation` |
-| Ingress cancellation | + `remainder-after-ingress-cancellation` |
-| Upstream HTTP error | + `provider-error-body-not-retained` (error body), `request-body-not-retained`, `wire-bytes-not-retained` |
+| `docs/ingress.md` | Streaming path, transparency boundary (§5.1), stages S0–S8, save timing (§3.2), error-envelope parity |
+| `docs/trace-model.md` | `model_response` + `responseMeta`, `choiceIndex`, `trace.assembly`, lifecycle/loss derivation; the legacy `Trace` path becomes a compatibility projection with divergence detection (§19.4) |
+| `docs/evidence-model.md` | Canonical `model_response`/`model_response_chunk`/`model_usage` event shapes and the final-event rule (§10.5) |
+| `docs/evidence-projection-matrix.md` | Added rows: v1.1.0 policy rows (§14.2), projection rows E2L-078..080 remain, new loss codes |
+| `docs/model-versioning.md` | 1.1.0 additive schema; version-bump table (§15.1) |
+| `docs/capture-profiles.md` | Default cap 240 (64–4096), capture-profile v1.0.0, detector v1.0.0, honest statuses |
+| `docs/privacy.md` | Collection-time privacy pipeline (§8.2), bounded captured content, honest admission claim (§8.6) |
+| `docs/architecture.md` | `@signalglass/streaming` proposal, L1–L4 layers |
+| `docs/glossary.md` | remainder knowledge, declared losses, observation detach, transparency boundary |
+| `docs/roadmap.md` | Streaming item moves to implementable; reliability item noted (§19.2) |
 
-### 19.2 Crash limitations (system-level, declared in docs)
+### 19.2 The honest crash/no-record declaration
 
-| Failure | Consequence | Declared where |
+- **If the process dies before [S7], there is no record for that
+  interaction.** This is a declared, system-level limitation — documented
+  in `docs/ingress.md` and `docs/roadmap.md` (the reliability item,
+  "Reliability, recovery, and incomplete-trace handling"): recovery
+  journaling for interrupted streams is **deferred**, not promised.
+- `crash-no-record` is a **system-level declaration**, never a per-record
+  loss code: a persisted record cannot carry it (it was persisted), and a
+  crashed interaction has no record to carry it (§3.3, §7.3).
+- The spec never fabricates a "recovered" record, identity, completion, or
+  placeholder for an unpersisted stream.
+
+### 19.3 Privacy claims (honest wording)
+
+- **Claim**: default-collection records are **expected to be
+  policy-admissible** under `metadata-safe` v1.1.0; the construction
+  invariant (detector + cap + structural exclusion) is tested with
+  sentinels. **Never claimed**: admissibility by construction, or that
+  rejection is impossible (§8.6).
+- **Claim**: full raw payloads, secrets, and API keys are **not stored** by
+  default; bounded captured content (≤ cap, detector-passed) and declared
+  excerpts are the only content retained (§8.1, §8.5).
+- **Claim**: header values outside the allowlist are excluded structurally —
+  precise wording per §5.1 ("no header values except the validated bounded
+  allowlist"), never the over-broad "no header values".
+
+### 19.4 Legacy coexistence (preserved)
+
+- The canonical `EvidenceRecord` is authoritative; the legacy `Trace`
+  continues to be emitted for compatibility, with **divergence detection**
+  comparing the canonical record's legacy projection with the
+  independently emitted legacy trace (Spec 013 §8; `docs/evidence-projection-matrix.md`;
+  the executable claim table in
+  `packages/core/src/evidenceProjections/projectionMappingMatrix.ts`).
+- Streaming adds no second canonical path and no new legacy writer: the
+  canonical record is the source, and the legacy view is projected
+  (Spec 014 §8.3). Legacy coexistence is tested by T80–T82 and is
+  unchanged by this spec's decisions.
+
+---
+
+## 20. Slice plan (proposed; each slice lands a green main)
+
+Slices are additive and independently shippable; each builds and tests
+against the contracts it uses (no casts; no
+unknown-additive-field-preservation as a substitute for owned validation —
+criterion 38, T83).
+
+| Slice | Contents | Tests |
 |---|---|---|
-| Crash/kill/power loss before save | No record for the interaction — `crash-no-record` is a **system-level declaration**, never a per-record code (a record that exists was persisted; a crashed interaction has no record to carry it) | This spec §3.3; `docs/ingress.md`; `docs/roadmap.md` #40 |
-| Crash after `stored` returned | Record durable per Spec 015 | Spec 015 |
-| Crash mid-observation | No partial/checkpointed record; no fabricated recovery | §3.3; roadmap #40 defers recovery journaling |
-| Storage unavailable at save time | `policy-failed`/`clock-failed` `save-outcome`, or `environmental-failure` code; record lost (no queue in this slice) | §16 |
+| **S1 — 1.1 foundation** | 1.1 schema types (six §13.1 fields), owned parse validation, `deriveCompleteness` recomputation + `completeness_disagrees_with_derivation`, serialize round-trips, 1.1 fixtures, version contracts (§13.7, §15) | T80, T81, T83, T85, T89 |
+| **S2 — persistence policy v1.1.0** | `signalglass.persistence.metadata-safe` v1.1.0 rows (§14.2), deciding-version metadata, downgrade `unknown-additive-field`, projection-matrix rows | T82, T96 |
+| **S3 — SSE parser + public contracts** | `@signalglass/streaming` package scaffold, `createSseParser`, `FrameResult`, `[DONE]` awareness, bounded frame cap, public stream contracts | T01–T10, T94 |
+| **S4 — provider decoder + assembler** | `decodeSseFrame`, `openai-sse` decoder, `StreamDecodedEvent`, `assembleTrace`, capture boundary builder, retention/masking, multi-choice, terminalization, model_response | T11–T70, T86–T93, T95, T97–T100 |
+| **S5 — ingress wiring + persistence + legacy + e2e** | apps/ingress stages S0–S8, forwarder, decoder tee, backpressure, `PersistenceObservation`, legacy coexistence, end-to-end tests | T71–T79, T63, T60–T62, T54–T59, T99–T100 |
 
-The ingress never fabricates a "recovered" identity, a completion, or a
-placeholder record for an unpersisted stream.
+- **Slice order rationale**: S1 establishes the canonical 1.1 types and the
+  authority model before anything derives from them; S2 locks the
+  persistence contract before records exist; S3–S4 build the pure pipeline
+  network-free; S5 wires the network path last.
+- Every slice must leave `pnpm test` and `pnpm build` green and must not
+  modify `@signalglass/core` models.
 ---
 
-## 20. Implementation slices (corrected order)
+## 21. Test groups
 
-The spec is implemented in five ordered slices once Accepted. **The complete
-1.1 canonical foundation precedes any slice that emits or consumes 1.1
-records.** Every slice builds and tests against the contracts it actually
-uses; no slice relies on casts or on unknown-additive-field preservation as a
-substitute for owned validation. Each slice is a separate accepted
-implementation PR with its own acceptance criteria, tests, and review; none
-of the modules exist until its slice.
+**100 named test groups (T01–T100)**, each mapped to at least one
+acceptance criterion (§22) and at least one decision block. Tests use
+Vitest; parser/decoder/assembler tests are pure-function tests; ingress
+tests use an in-process server with a fake upstream.
 
-| # | Slice | Delivers | Depends on |
-|---|---|---|---|
-| S1 | **Canonical 1.1 foundation** (`@signalglass/evidence`): 1.1 types (`responseMeta`, `choiceIndex`, `completeness.declaredLosses`, `completeness.lifecycle`, `trace.assembly`), owned validation (bounds, grammars, closed-code refusal, literal names, semver), serializer/parser round trips, 1.1 fixtures, version contracts (1.0↔1.1 both directions) | The types and validators every later slice emits records against | Evidence (existing) |
-| S2 | **Versioned policy + projections**: `signalglass.persistence.metadata-safe` v1.1.0 matrix rows (§14.2), v1.0/v1.1 interaction tests (§14.4), projection-loss rows (§13.5) | Policy rows classify the 1.1 fields S1 defined | S1 |
-| S3 | **`@signalglass/streaming`: `types.ts` + `sse.ts`** — closed vocabularies (§12.2), `CompletenessSummary` (§12.3), `createSseParser()` and the SSE parser matrix (§6.1) | Parser and contracts; emits no records | S1, S2 |
-| S4 | **`@signalglass/streaming`: `assembler.ts` + `@signalglass/providers` decoder** — `decodeSseFrame` (L3, multi-choice normalization, provider-neutral events), `createStreamAssembler()` (state machine §10, sequencing §4, collection layer §8.2, `model_response` response-metadata event §6.6, `CompletenessSummary`, 1.1 records with `declaredLosses`/`lifecycle`/`assembly`) | The assembler emits 1.1 records against the S1/S2 contracts | S1, S2, S3 |
-| S5 | **`apps/ingress` wiring + persistence + legacy**: `streamHandler.ts` (raw-Buffer read, passthrough, backpressure, header allowlist, decoder tee, transport-end observation, error envelopes), save-after-response-completion (§3.2), `PersistenceObservation` split (§16), dual emission + divergence detection (§9), end-to-end tests | Network slice; persistence integration | S1–S4 |
+### 21.1 SSE parsing (T01–T10)
 
-S1 and S2 are the 1.1 foundation and MUST land before any slice that emits
-or consumes 1.1 records (S4, S5). S3 needs S1/S2 only for the types it
-imports (vocabularies, completeness). No slice emits records with unvalidated
-fields; `parseEvidenceRecord` (1.1) is the gate in every slice that produces
-a record. Tests in §21 map to slices as annotated.
+| ID | Group | Asserts |
+|---|---|---|
+| T01 | basic-frame | a `data:` frame → one chunk event |
+| T02 | comments-and-blanks | `:` comments and blank lines are skipped, not events |
+| T03 | multiline-data | multiline `data:` joined with `\n` (spec-conformant) |
+| T04 | split-frame | a frame split across two chunks accumulates correctly |
+| T05 | utf8-split | multi-byte UTF-8 split across chunks decodes per frame |
+| T06 | line-endings | CRLF / LF / CR accepted per spec |
+| T07 | partial-at-eof | partial frame at EOF → `sse-partial-frame-at-eof` |
+| T08 | eof-without-done | clean EOF without `[DONE]` → `sse-eof-without-done` |
+| T09 | invalid-utf8 | invalid UTF-8 frame → `sse-invalid-utf8` |
+| T10 | frame-cap | 16 MiB cap exceeded → `frame-overflow` detach; parser resets and keeps framing |
 
----
+### 21.2 Multi-choice (T11–T18)
 
-## 21. Testing and conformance requirements
+| ID | Group | Asserts |
+|---|---|---|
+| T11 | expansion-order | choices expanded in array order |
+| T12 | index-derived | `choiceIndex` from `choice.index` |
+| T13 | position-derived | `choiceIndex` = array position when `index` absent |
+| T14 | single-choice | single choice → `choiceIndex` 0 |
+| T15 | invalid-index | negative/non-integer index → `sse-invalid-choice-index` |
+| T16 | cross-frame-continuation | same `choiceIndex` across frames is one choice's continuation; per-choice ordinals continue |
+| T17 | out-of-order-preserved | out-of-order `choice.index` across frames preserved; `seq` = observation order |
+| T18 | duplicate-in-frame | duplicate `choice.index` within one frame → `sse-invalid-choice-index` (ambiguity refused) |
 
-### 21.1 Test groups (85 named groups)
+### 21.3 Assembly (T19–T26)
 
-Groups are named so the acceptance-criteria mapping (§22) can reference them.
-Slice annotations: `S1`…`S5`.
+| ID | Group | Asserts |
+|---|---|---|
+| T19 | seq-contiguity | `seq` starts at 0, strictly increasing, contiguous as assigned; frames that fail to parse leave no gap |
+| T20 | one-frame-many-events | one frame → ordered zero-or-more events at consecutive `seq` |
+| T21 | determinism | identical inputs → identical outputs (events, loss codes, boundary statement) |
+| T22 | idempotence | re-running assembly with same inputs does not duplicate events |
+| T23 | retention-applied | excerpt/mask applied per capture profile with honest statuses |
+| T24 | provider-native-contract | raw provider JSON retained only under explicit `providerNative` contract |
+| T25 | unmapped-delta | role/tool_calls/refusal/audio/multimodal/future delta fields → `unmapped-delta-fields`, never silent `null` |
+| T26 | usage-normalization | provider numbers → `UsageValue { value, evidenceStatus: 'captured' }`; captured zero ≠ absence; partial = omitted fields; per-choice nested usage discarded + declared |
 
-**SSE parsing (10) — S3**
+### 21.4 Terminalization (T27–T35)
 
-- T01 `SSE: frame splitting and reassembly across chunks`
-- T02 `SSE: CRLF/LF/CR line endings`
-- T03 `SSE: comment and blank lines`
-- T04 `SSE: multiline data joined with \n`
-- T05 `SSE: event/id/retry fields parsed, values not retained`
-- T06 `SSE: split multi-byte UTF-8 decoded per frame`
-- T07 `SSE: [DONE] exact-value terminal marker`
-- T08 `SSE: invalid UTF-8 → sse-invalid-utf8`
-- T09 `SSE: partial frame at EOF → sse-partial-frame-at-eof`
-- T10 `SSE: 16 MiB frame cap → overflow signal, parser resets, observation bound declared`
+| ID | Group | Asserts |
+|---|---|---|
+| T27 | completed | `[DONE]` → `completed`; `span_end` then `interaction_end` final; `trace.status completed`; model span `completed` |
+| T28 | upstream-http-error | non-2xx upstream → `upstream-failed`; `error` (actor `model`, `lifecycleTarget: "trace"`, `lifecycleEffect: "fail"`) as the record's final event; no `interaction_end`; span `unknown` |
+| T29 | non-sse-2xx | 2xx non-SSE → `upstream-failed` (same final-event shape as T28) |
+| T30 | provider-error-frame | provider error frame → `upstream-failed` (same final-event shape) |
+| T31 | malformed-terminal | each of the 5 `sse-*` codes → `malformed-stream`; `error` (actor `model`, trace `fail`) final; no `interaction_end` |
+| T32 | client-cancelled | client disconnect → `client-cancelled`; `cancelled` (requestedBy `client`, trace `cancel`) as the record's final event; no `interaction_end` |
+| T33 | ingress-cancelled | shutdown/idle timeout → `ingress-cancelled`; `cancelled` (requestedBy `ingress`, trace `cancel`) final; no `interaction_end` |
+| T34 | observation-detached | observer failure → informational `error` (actor `capture`, `lifecycleTarget: "none"`, `lifecycleEffect: "none"`) as the record's final event; status `unknown`; no `interaction_end` |
+| T35 | first-terminal-wins | multiple terminal triggers in one stream: first observed wins; no rewrite |
 
-**Multi-choice normalization (8) — S3/S4**
+### 21.5 Request failure (T36–T38)
 
-- T11 `MultiChoice: frame with several choices expands in array order`
-- T12 `MultiChoice: choiceIndex normalization (provider index / position / single-choice 0)`
-- T13 `MultiChoice: per-choice chunk ordinals are independent (chunkIndex vs choiceIndex)`
-- T14 `MultiChoice: same choiceIndex across frames is continuation (ordinals continue); out-of-order indexes preserved, never renumbered`
-- T15 `MultiChoice: negative/non-integer choice index → sse-invalid-choice-index`
-- T16 `MultiChoice: frame with several choices AND usage → choices then usage; per-choice finish reasons; one frame → multiple contiguous canonical events`
-- T17 `MultiChoice: fixtures + projection parity (choiceIndex/chunkIndex semantics; E2L rows)`
-- T18 `MultiChoice: adversarial duplicates — same-frame duplicate choice.index → sse-invalid-choice-index (malformed); repeated duplicate across frames → continuation with declared identity; never merged silently`
+| ID | Group | Asserts |
+|---|---|---|
+| T36 | pre-dispatch | invalid/missing-key/unroutable/over-limit → `request-failed`, `local-error-flushed`, no `model_response` |
+| T37 | key-unavailable-once | `key-unavailable` classified **exactly once** under `request-failed` (actor `capture`); never under `upstream-failed`; no fabricated upstream outcome |
+| T38 | body-read-failure | unreadable body → `request-failed` |
 
-**Assembly (8) — S4**
+### 21.6 Lifecycle / upstream-client (T39–T53)
 
-- T19 `Assembler: full-stream canonical sequence and ordering (incl. terminal-event sequence: causal event → interaction_end → nothing)`
-- T20 `Assembler: seq contiguity/uniqueness; no renumbering; no fabricated gaps`
-- T21 `Assembler: identity determinism (traceId/interactionId/eventId/observationId opaque)`
-- T22 `Assembler: usage placement matrix (before/after finish; usage-only terminal chunk; absent)`
-- T23 `Assembler: finish reason on the carrying chunk; never fabricated`
-- T24 `Assembler: captured zero distinct from absent; no fabricated zeros`
-- T25 `Assembler: model span lifecycle (completed; unknown on failure/cancel/detach)`
-- T26 `Assembler: [DONE] without usage/finish completes with declarations`
+| ID | Group | Asserts |
+|---|---|---|
+| T39 | boundary-facts | authoritative `captureBoundary.streaming` recorded with the closed vocabularies |
+| T40 | derived-verified | derived fields recomputed at parse; tampered derived field → `completeness_disagrees_with_derivation` |
+| T41 | one-authority | one authority per fact; no dual-authoritative copies |
+| T42 | independent-lifecycles | upstream outcome never rewritten from clientResponse outcome and vice versa |
+| T43 | status-derivation | `trace.status` derives only from the observation terminal |
+| T44 | terminal-sequence | each terminal ends with exactly one final canonical event per §10.5 — `interaction_end` for `completed` only; `error` (trace `fail`) final for `upstream-failed`/`malformed-stream`/`request-failed`; `cancelled` (trace `cancel`) final for `client-cancelled`/`ingress-cancelled`; informational `error` final for `observation-detached`; nothing follows the final event; no double emission; no fabricated `interaction_end` |
+| T45 | no-fabricated-counts | no `unobservedFramesAfterDetach`; `lastObservedFramePosition` counts only observed frames; remainder knowledge honest |
+| T46 | done-then-close | `[DONE]` parsed, then client closes before flush → `response-completed` + `closed-before-completion` |
+| T47 | disconnect-before-headers | client disconnect before response headers → `connection-failed` + `not-started` |
+| T48 | malformed-but-forwarded | malformed observation, passthrough completes → `malformed-stream` + `response-completed` + `flushed` |
+| T49 | invalid-4xx | invalid request, local 4xx flushed → `request-failed` + `not-started` + `local-error-flushed` |
+| T50 | missing-key-envelope | missing API key, local error flushed → `request-failed` + `not-started` + `local-error-flushed` |
+| T51 | connect-502 | connect failure, local 502 flushed → `upstream-failed` + `connection-failed` + `local-error-flushed` |
+| T52 | mid-stream-failure | failure after response bytes started → `upstream-failed` + `stream-ended-prematurely` + `closed-before-completion` |
+| T53 | disconnect-during-error | client disconnect while the local error is written → `not-started` + `closed-before-completion` |
 
-**Terminalization (9) — S4**
+### 21.7 Encoded stream (T54–T59)
 
-- T27 `Terminal: EOF without [DONE] → malformed-stream`
-- T28 `Terminal: upstream HTTP error → upstream-failed (model_response with responseMeta.statusCode first; error event; no upstreamStatus field)`
-- T29 `Terminal: connect/timeout/TLS → upstream-failed (no headers observed; no model_response; no status anywhere)`
-- T30 `Terminal: non-SSE 2xx → upstream-failed (non-sse-response); model_response emitted; bytes forwarded unchanged`
-- T31 `Terminal: provider error frame → upstream-failed (provider-error-frame)`
-- T32 `Terminal: client disconnect → client-cancelled (stops upstream reading)`
-- T33 `Terminal: ingress cancellation/shutdown → ingress-cancelled`
-- T34 `Terminal: precedence — first observed terminal wins within the observation lifecycle (EOF vs [DONE]; cancel vs failure)`
-- T35 `StateMachine: closed transition table; illegal transitions rejected; no transitions out of terminal; no wall-clock completion; finalized is an operation; persistence outcomes are not states`
+| ID | Group | Asserts |
+|---|---|---|
+| T54 | gzip-tee | gzip body: raw bytes forwarded unchanged; decoder tee decodes a copy for parsing |
+| T55 | deflate-tee | deflate body: same as T54 |
+| T56 | unsupported-encoding | unsupported `content-encoding` → `observation-encoding-unsupported` detach; passthrough untouched |
+| T57 | tee-failure | decoder tee failure mid-stream → `observation-decode-failure` detach; passthrough untouched |
+| T58 | encoded-is-sse | encoded `text/event-stream` takes the SSE observation path and SSE outcomes (never `non-sse-response`) |
+| T59 | encoding-headers | `content-encoding` forwarded via allowlist; `content-length` never forwarded |
 
-**Request failure (3) — S4**
+### 21.8 Transparency (T60–T63)
 
-- T36 `RequestFailure: invalid/incomplete/over-limit/unroutable → request-failed (codes, actor/role, no dispatch, identity recorded, no model span)`
-- T37 `RequestFailure: upstream-key-unavailable → request-failed (actor capture), classified exactly once; absent from UpstreamFailureCode and the upstream-failed mapping`
-- T38 `RequestFailure: no response → no model_response, no status anywhere; request-level declared losses`
+| ID | Group | Asserts |
+|---|---|---|
+| T60 | byte-exact-plain | bytes written to client == bytes read from upstream (plain) |
+| T61 | byte-exact-encoded | bytes written to client == bytes read from upstream (encoded) |
+| T62 | backpressure | slow client pauses upstream read; no unbounded buffering |
+| T63 | header-allowlist | only `content-type` / `content-encoding` / `x-signalglass-trace-id`; secret headers excluded structurally; `content-type` parameters dropped + declared |
 
-**Two lifecycles / transport end (10) — S5**
+### 21.9 Collection privacy (T64–T71)
 
-- T39 `Lifecycle: observer failures never stop forwarding, never destroy the upstream request, never inject or truncate frames`
-- T40 `Lifecycle: malformed provider frame → canonical malformed-stream terminal while passthrough continues byte-unchanged`
-- T41 `Lifecycle: unrecognized extension frame → declared loss, observation continues, no model failure`
-- T42 `Lifecycle: internal parser/decoder exception → observation-detached (status unknown, informational capture error), passthrough continues`
-- T43 `Lifecycle: frame overflow → observation-detached without unbounded buffering, passthrough continues`
-- T44 `Lifecycle: unsupported/undecodable content-encoding → observation-detached, passthrough continues`
-- T45 `Lifecycle: after detach — no seq, no content, no [DONE] inference; remainderObservation unknown; no inferred frame count (honest facts only)`
-- T46 `Race: [DONE] parsed then client close before response finish → observation completed + transport client-cancelled/closed, both persisted`
-- T47 `Race: observation detaches then transport completes → observation-detached + response-complete/flushed, both persisted`
-- T48 `Race: malformed observation + successful passthrough completion → malformed-stream + response-complete/flushed, both persisted; delivery flushed vs closed distinguished`
+| ID | Group | Asserts |
+|---|---|---|
+| T64 | structural-exclusion | authorization/cookie/set-cookie/x-api-key never enter evidence |
+| T65 | sentinel-before | credential beginning before the excerpt boundary masked in full |
+| T66 | sentinel-crossing | credential crossing the boundary masked in full |
+| T67 | sentinel-after | credential beginning after the boundary masked/omitted |
+| T68 | leak-free-projection | persisted/logged projections carry only closed codes; never exception messages, identities, documents, digests, headers, raw bodies |
+| T69 | honest-statuses | benign ≤ cap `captured`; > cap `truncated`; masked `redacted`; declarations agree with real lengths |
+| T70 | empty-content | empty content is `captured`, never `truncated`/`redacted` |
+| T71 | admission-claim | default records expected admissible under v1.1.0 (construction invariant); a detector miss reaches the gate and is surfaced as `safety-rejected`, never auto-labeled a defect |
 
-**Encoded-stream transparency (6) — S5**
+### 21.10 Persistence (T72–T79)
 
-- T49 `Encoded: upstream honors Accept-Encoding: identity → direct parse`
-- T50 `Encoded: gzip despite identity → raw gzip bytes forwarded; observer decodes copy; content-encoding forwarded`
-- T51 `Encoded: unsupported content-encoding → passthrough unchanged, observation-detached`
-- T52 `Encoded: observer decode failure → passthrough unchanged`
-- T53 `Encoded: header consistency (content-encoding forwarded; content-length never)`
-- T54 `Encoded: encoded text/event-stream is SSE, not non-SSE (own capture outcome)`
+| ID | Group | Asserts |
+|---|---|---|
+| T72 | single-save-after-response | exactly one save, after the client-response path ends; the data path never calls storage |
+| T73 | save-outcome | save outcome recorded as the full typed Spec 015 `SaveOutcome` |
+| T74 | contention-exhausted | thrown `EvidenceContentionError` → `{ kind: 'environmental-failure', code: 'contention-exhausted' }` |
+| T75 | storage-unavailable | open/path/IO failure → `{ kind: 'environmental-failure', code: 'storage-unavailable' }` |
+| T76 | policy-crash-removed | policy exception → `policy-failed` (`reason: 'exception' | 'malformed-decision'`), never an environmental code |
+| T77 | persistence-inert | `PersistenceObservation` never alters `trace.status`/lifecycles |
+| T78 | safety-rejected-observation | a `safety-rejected` record is still a completed observation with refused persistence (two separate outcomes) |
+| T79 | deciding-version | deciding policy version recorded in policy metadata |
 
-**Transparency/backpressure (4) — S5**
+### 21.11 Legacy (T80–T82)
 
-- T55 `Transparency: response body bytes identical to upstream (body boundary, not headers)`
-- T56 `Transparency: no silent frame mutation (no synthetic [DONE], no injection/removal/reorder/rewrite)`
-- T57 `Backpressure: slow client pauses upstream read`
-- T58 `Transparency: header allowlist (content-type, content-encoding, trace id); no other upstream header values; content-length never forwarded`
+| ID | Group | Asserts |
+|---|---|---|
+| T80 | v10-record | a 1.0.0 record parses under 1.1 unchanged; `SUPPORTED = 1.0.0 | 1.1.0` |
+| T81 | v11-fixtures | 1.1 fixture set: all six §13.1 serialized paths round-trip |
+| T82 | policy-matrix-rows | v1.1.0 policy admission rows + v1.0.0 `unknown-additive-field` downgrade row, verdict-exact |
 
-**Collection privacy (6) — S4/S5**
+### 21.12 Contracts / versioning / schema (T83–T100)
 
-- T59 `Privacy: detect-then-retain — detector scans full text before excerpting`
-- T60 `Privacy: credential begins before / crosses / begins after the 240-char boundary — masked in full (sentinels)`
-- T61 `Privacy: owning status redacted vs truncated; RedactionDeclaration/TruncationDeclaration recorded; original-content-masked loss`
-- T62 `Privacy: secrets never in outputs (sentinels across records, logs, errors, boundary statements)`
-- T63 `Privacy: no raw payloads by default; provider-native not retained without explicit fidelity/status; unmapped delta fields declared`
-- T64 `Privacy: admission invariant — default records reach the Spec 015 gate with no S1/S2/S3/S5/S6 witness; a rejection is surfaced and never auto-labeled a code defect`
-
-**Persistence (7) — S5**
-
-- T65 `Persistence: exactly one save, after client response finish/close — save-call order asserted vs finish/close`
-- T66 `Persistence: synchronous save never runs in the data/backpressure path`
-- T67 `Persistence: save-outcome observations (kind save-outcome); record not rewritten`
-- T68 `Persistence: environmental failures — EvidenceContentionError → contention-exhausted, leak-free diagnostics, never a save-outcome; storage-unavailable; policy-crash`
-- T69 `Persistence: storage failure post-response never delays or mutates client bytes`
-- T70 `Persistence: crash mid-stream leaves no record (declared); crash-no-record never appears on a record; no fabricated recovery`
-- T71 `Persistence: conflict/idempotency per Spec 015; unsupported-version handling; no down-conversion`
-
-**Legacy coexistence (3) — S5**
-
-- T72 `Legacy: dual emission from one observation`
-- T73 `Legacy: divergence detection surfaced, never silently reconciled; parity`
-- T74 `Legacy: client traffic isolation (no persistence path affects traffic)`
-
-**Contracts/versioning/schema (11) — S1/S2/S3**
-
-- T75 `Contracts: closed unions (incl. TransportEndReason, DeliveryOutcome, RemainderObservation, EnvironmentalFailureCode); no reason: string for aborted; declaredLosses closed; seqGaps removed`
-- T76 `Contracts: internal exports stay internal; public entry points per §12.5`
-- T77 `Versioning: trace.assembly literal names validated exactly; semver versions; decoderContract absence; version-bump table honored`
-- T78 `Schema: completeness.lifecycle — observation terminal + transport end + delivery persisted structurally and independently; round-trip; storage retrieval parity; projection loss; never rewritten from each other`
-- T79 `Schema: completeness.declaredLosses — serialized path; validation (unknown codes refused); deterministic order/dedup; round-trip; retrieval parity; projection loss; boundaryStatement derived, not the persisted record`
-- T80 `Schema: responseMeta placement — usage-only / [DONE]-only / no-content / HTTP-error / non-SSE paths; single model_response; no duplication; absence per path`
-- T81 `Schema: additive 1.1 fields validate and round-trip; 1.0 records read by 1.1 readers and vice versa`
-- T82 `Schema: metadata-safe v1.1.0 matrix rows; v1.0 policy rejects a 1.1 record (never silently reinterpreted); stored policy metadata; closure of new containers`
-- T83 `Schema: usage contract — UsageRecord/UsageValue exact shapes, per-field status, captured zero vs absence, partial usage; per-choice nested usage discarded + declared`
-- T84 `Schema: 1.1 fixtures pass parseEvidenceRecord(1.1) + metadata-safe v1.1.0; projection loss rows; slice-order honesty (each slice builds against contracts it uses; no casts or unknown-field-preservation substitutes)`
-- T85 `Schema: usage serialized-shape tests (exact JSON shapes for the §13.6 matrix)`
-
-### 21.2 Conformance requirements
-
-- Every acceptance criterion (§22) is covered by at least one test group;
-  the mapping is **many-to-many** — a criterion may be covered by several
-  groups and a group may cover several criteria — and is declared as such
-  (§23).
-- Tests run under `pnpm test` (Vitest) with the repository's existing
-  conventions; fixtures live under `@signalglass/evidence/src/fixtures/`
-  and per-package `__tests__`.
-- S1 ships fixture/contract tests for the serialized 1.1 shapes (incl. the
-  usage-shape matrix); S2 ships policy-matrix and non-reinterpretation
-  tests; S5 ships end-to-end and race tests. Regression tests accompany
-  every bug fixed during implementation.
-- No blocking architecture question may be left labeled as an
-  "implementation detail" in review; every point in §24 is normatively
-  resolved.
+| ID | Group | Asserts |
+|---|---|---|
+| T83 | schema-versioning | `evidenceSchemaVersion` 1.1.0 additive; parser selects owned validation by declared version; no guessing from field presence |
+| T84 | assembly-identity | `trace.assembly` literal names + semver validated; `decoderContract` absent when no decoder ran |
+| T85 | exact-shapes | exact serialized shapes: `UsageValue`/`UsageRecord`, `responseMeta`, `choiceIndex`, `completeness.lifecycle`, `completeness.declaredLosses`, `captureBoundary.streaming` |
+| T86 | model-response-once | exactly one `model_response`; first response-derived event; `responseMeta` present on header-observed paths |
+| T87 | model-response-negative | no `responseMeta` on chunk/usage/error envelopes; single occurrence; header-less paths have no `model_response` and no status |
+| T88 | response-meta-validated | `statusCode` 100–599; `contentType` normalized (parameters dropped + declared); `contentEncoding` single token |
+| T89 | closed-vocabularies | unknown `TerminalReason`/`UpstreamOutcome`/`ClientResponseOutcome`/`RemainderKnowledge`/`DeclaredLossCode`/error code → parse failure |
+| T90 | impossible-pairs | impossible upstream × client-response pairs rejected (§2.3) |
+| T91 | validity-matrix | full 4×4 matrix: every valid cell observable; every invalid cell rejected |
+| T92 | accounting-bounds | `lastObservedFramePosition` ≥ 1 (observed frames only); `rawForwardedBytes` ≥ 0; basis documented |
+| T93 | remainder-knowledge | `protocol-terminal-observed` ≠ `transport-eof-observed`; `unknown` on detach; `not-applicable` on request-failed |
+| T94 | post-terminal | trailing content forwarded, never canonicalized; `post-terminal-content-not-retained` declared; never called nonexistent |
+| T95 | version-bumps | default-cap change requires capture-profile bump; detector version bump on pattern change |
+| T96 | downgrade-refusal | 1.1 record to v1.0.0 policy → `policy-rejected` `unknown-additive-field`, never silent reinterpretation; deciding version recorded |
+| T97 | boundaries | `@signalglass/streaming` is network-free (no socket/http/storage imports); `@signalglass/core` models unchanged |
+| T98 | no-fabricated-upstream | pre-dispatch paths (`not-started`) never fabricate an upstream failure |
+| T99 | terminal-sweep | on **every** terminal: exactly one final canonical event per §10.5 (`interaction_end` only on `completed`); nothing follows it; no fabricated `interaction_end` |
+| T100 | matrix-consistency | §9.3 classification, §6.5 matrix, §10 state table, and tests agree cell-for-cell; every terminal appears in exactly one row |
 
 ---
 
 ## 22. Acceptance criteria
 
-A spec implementation is complete only when **all** criteria below are
-satisfied by tests (per the repository's spec workflow):
+**44 acceptance criteria (AC1–AC44).** Each is covered by ≥ 1 test group
+(§23). A criterion is satisfied when its groups pass on a green main.
 
-1. **Two lifecycles separated** — an observer/parser/decoder failure never
-   stops forwarding, never destroys the upstream request, never injects a
-   frame, and never truncates an otherwise forwardable response; only
-   client cancellation, ingress shutdown/limit, or upstream transport
-   failure ends the transport lifecycle. [T39–T45]
-2. **Both lifecycle outcomes persisted independently** — the observation
-   terminal and the transport end with its delivery outcome are recorded
-   structurally in the canonical record; neither rewrites the other; trace
-   status is derived only from the observation terminal. [T46–T48, T78]
-3. **Honest observer-failure semantics** — malformed provider protocol
-   terminalizes `malformed-stream` (trace `failed`, actor `model`, role
-   `provider_reported`); internal observer failure detaches observation
-   (trace `unknown`, informational capture error); an unrecognized
-   extension is a declared loss, never a model failure. [T40–T44]
-4. **Observation detachment discipline** — after detach: no `seq`, no
-   content, no inferred `[DONE]`/completion; `remainderObservation:
-   'unknown'`; no fabricated frame counts. [T45]
-5. **Single canonical save** — exactly one `EvidenceRecord` per observed
-   streaming interaction, saved exactly once via `saveEvidenceRecord`; no
-   checkpointing, revisions, or upserts. [T65]
-6. **Save after response completion** — the save is invoked only after the
-   client response path finished/closed; no synchronous save in the
-   forwarding/backpressure data path; a storage failure is post-response
-   and never delays or mutates client bytes. [T65, T66, T69]
-7. **Deterministic identity** — opaque `traceId == interactionId` assigned
-   at request observation, never content-derived; fresh per observed
-   request; one observed request → one record (including request-failed).
-   [T21, T36]
-8. **Single sequencing surface** — the assembler assigns contiguous `seq`
-   from 0; timestamps and content hashes never order or identify;
-   unparseable frames leave no fabricated gap. [T19, T20]
-9. **Multi-choice normalization** — `choiceIndex` (normalized choice
-   identity) and `chunkIndex` (per-choice ordinal) are distinct and never
-   interchanged; array-order expansion; **duplicate `choice.index` within
-   one frame is rejected as malformed**; the same index across frames is
-   one choice's continuation; out-of-order indexes preserved; per-choice
-   finish reasons; frame-level usage after choice events; one frame →
-   multiple contiguous canonical events. [T11–T18]
-10. **Provider delta-field losses** — valid OpenAI-compatible delta fields
-    not represented by `delta: string | null` (role, tool_calls, refusal,
-    audio, multimodal, future extensions) are declared losses, never
-    silently reduced to `null`. [T63, T83]
-11. **Frame-level decode contract** — `decodeSseFrame` returns an ordered
-    zero-or-more `events` result (or `done`/`malformed`/`unrecognized`/
-    `decode-error`); one frame expands deterministically. [T11, T16, T17]
-12. **Provider-neutral output** — the decoder emits normalized events
-    (string deltas, `UsageRecord`/`UsageValue` usage, bounded finish
-    reasons, structural provider error codes); raw provider JSON stays in
-    `@signalglass/providers` unless retained under the `providerNative`
-    contract with explicit fidelity/status; per-choice nested usage is
-    discarded and declared. [T17, T63, T83]
-13. **Closed vocabularies** — `MalformedStreamCode`, `StreamDecodeErrorCode`,
-    `ObservationFailureCode`, `UpstreamFailureCode`,
-    `ClientRequestFailureCode`, `CancellationSource`, `TerminalReason`,
-    `TransportEndReason`, `DeliveryOutcome`, `RemainderObservation`,
-    `AbortReason`, `DeclaredLossCode`, `EnvironmentalFailureCode`,
-    `PersistenceObservation` are closed unions; no `reason: string` for
-    aborts; `declaredLosses` is a closed code list with derived display
-    sentences; `seqGaps` is removed. [T75, T76]
-14. **Coherent terminal state machine** — the seven terminal states and the
-    diagram, transition table, `AssemblerState`, `AssemblerOutcome`,
-    `TerminalReason`, event mapping, trace status, criteria, and tests
-    agree exactly; `finalized` is an operation, not a state; persistence
-    outcomes are observations, never state rewrites; no wall-clock
-    completion; first observed terminal wins; `upstream-key-unavailable`
-    is classified exactly once under `request-failed` (actor `capture`)
-    and is absent from `UpstreamFailureCode` and the `upstream-failed`
-    mapping. [T27–T38]
-15. **Terminal-event sequence** — the causal terminal event (`error`/
-    `cancelled`) is emitted first at its `seq`; `interaction_end` is
-    emitted exactly once as the final canonical event; nothing follows
-    `interaction_end`. [T19, T34, T35, T46–T48]
-16. **Collection-time privacy process** — versioned sensitive detector
-    scans full text before excerpting; credential spans are masked/omitted
-    before the length boundary; owning `redacted`/`truncated` statuses and
-    declarations are recorded; the Spec 015 gate and persistence policy
-    still run non-bypassably. [T59–T64]
-17. **Sentinel coverage** — credentials beginning before, crossing, and
-    beginning after the excerpt boundary are masked in full. [T60]
-18. **Honest admission claim** — default records are *expected* admissible
-    (tested construction invariant: no S1/S2/S3/S5/S6 witness), while a
-    safety rejection remains an honest possible outcome that is surfaced
-    and never auto-labeled a code defect. [T64]
-19. **Canonical schema extension** — additive 1.1.0 (`responseMeta`,
-    `choiceIndex`, `completeness.declaredLosses`, `completeness.lifecycle`,
-    `trace.assembly`) with exact owner/path/shapes, absence rules, owned
-    validation, round-trip preservation, `metadata-safe` v1.1.0 matrix
-    rows, projection-loss rows, and 1.1 fixtures; MAJOR-1 compat both
-    directions; **no `upstreamStatus` field** (removed in revision 3).
-    [T77–T85]
-20. **responseMeta universal placement** — a single `model_response` event
-    is emitted when response headers are observed, before any chunk/usage/
-    error, on every path (usage-first, `[DONE]`-only, no-content-chunk,
-    non-SSE 2xx, upstream HTTP error); `responseMeta` appears only there;
-    absence is defined for header-less paths; no duplication. [T28–T30,
-    T80]
-21. **Structured declared losses persisted** —
-    `completeness.declaredLosses` is canonical and structural: exact
-    serialized path and type, deterministic derivation and
-    ordering/deduplication, validation and unknown-code refusal,
-    serializer/parser round trips, storage retrieval parity,
-    `metadata-safe` v1.1.0 classification, projection loss, fixtures and
-    tests; `boundaryStatement` is derived from the codes and is not the
-    only persisted loss record; `crash-no-record` never appears on a
-    record. [T79]
-22. **Structured assembler version** — `trace.assembly` with literal name
-    validated exactly, semantic-version validation, `decoderContract`
-    absence behavior, and the version-bump table; `boundaryStatement`
-    derived, not authoritative. [T77]
-23. **Encoded-stream transparency** — raw-Buffer reads; exact encoded wire
-    bytes forwarded; bounded decoder tee for observation; unsupported
-    encoding → detached observation; encoded SSE is an SSE outcome, not
-    non-SSE; header consistency (content-encoding forwarded, content-length
-    never). [T49–T54]
-24. **Body-bytes transparency boundary** — transparency applies to the
-    response body; response headers are the validated bounded allowlist plus
-    `x-signalglass-trace-id`; the "no header values except the allowlist"
-    wording is used consistently. [T55, T56, T58]
-25. **Byte/order-transparent passthrough** — response body bytes reach the
-    client unchanged and in order under backpressure, with zero frame
-    mutation. [T55–T57]
-26. **Complete SSE parser matrix** — comments, blank lines, multiline data,
-    CRLF/LF/CR, split frames, split UTF-8 decoded per frame, `[DONE]`
-    exact-value, malformed JSON/UTF-8, partial frame at EOF, frame cap.
-    [T01–T10]
-27. **Usage/finish honesty** — usage placement matrix honored; usage uses
-    the exact `UsageRecord`/`UsageValue` shapes; absent usage and absent
-    finish reason are declared, never fabricated zeros or invented reasons;
-    captured zero distinct from absent; `completed` requires the observed
-    `[DONE]`. [T22–T26, T83, T85]
-28. **Evidence-status closure** — every payload carries a closed-set status;
-    statuses never omitted or `null`; captured zero distinct from absent;
-    `unknown` reserved for unobservable terminations. [T24, T25, T45]
-29. **Default-privacy guarantees** — env-var-only keys; no raw payloads by
-    default; no response header values beyond the allowlist; structural
-    error text; secrets never reach records/logs/errors. [T58, T62, T63]
-30. **Legacy coexistence** — canonical authoritative; dual emission from one
-    observation; divergence detection surfaced, never silently reconciled;
-    client traffic unaffected by any persistence path. [T72–T74]
-31. **Package boundaries** — `@signalglass/streaming` network-free with zero
-    provider knowledge, depending only on `@signalglass/evidence`; provider
-    decoding in `@signalglass/providers`; wiring in `apps/ingress`;
-    persistence in `@signalglass/storage`; projections in `@signalglass/core`.
-    [T75, T76]
-32. **Contract hygiene** — public entry points are exactly the closed unions
-    and `createSseParser()`/`createStreamAssembler()`; internal helpers are
-    not exported. [T75, T76]
-33. **End-to-end validity** — every assembled record passes
-    `parseEvidenceRecord` (1.1.0) before save; the legacy projection and
-    derived completeness agree with the record's canonical events. [T17,
-    T26, T73, T84]
-34. **Slice-order honesty** — the complete 1.1 foundation precedes any slice
-    that emits 1.1 records; every slice builds and tests against the
-    contracts it actually uses; no casts and no reliance on
-    unknown-additive-field preservation as a substitute for owned
-    validation. [T84]
-35. **Persistence-policy versioning** — `metadata-safe` v1.1.0 with exact
-    added matrix rows; v1.0 records accepted; a 1.1 record presented to the
-    v1.0 policy is `policy-rejected` (never silently reinterpreted); stored
-    policy metadata reflects the deciding version. [T82]
-36. **Save-outcome vs environmental split** — contention exhaustion is an
-    `environmental-failure` (`contention-exhausted`), never a `SaveOutcome`;
-    environmental diagnostics carry only closed codes (leak-free); a thrown
-    exception is never claimed to be a `SaveOutcome`. [T68]
+| ID | Criterion |
+|---|---|
+| AC1 | Two lifecycles (observation, transport) are recorded independently; `trace.status` derives only from the observation terminal. |
+| AC2 | `UpstreamOutcome` and `ClientResponseOutcome` are closed vocabularies; the 4×4 cross-field matrix is enforced; impossible pairs are rejected. |
+| AC3 | Pre-dispatch failures (invalid request, missing key, key-unavailable, unroutable, over-limit, body-read) never fabricate an upstream failure or upstream outcome. |
+| AC4 | Each observed interaction produces exactly one canonical record and exactly one save through `EvidenceStorage.saveEvidenceRecord`. |
+| AC5 | The save happens after the client-response path ends; the data/forwarding path never calls storage. |
+| AC6 | The crash-no-record limitation is declared honestly (docs + roadmap); `crash-no-record` never appears on a record. |
+| AC7 | Identity is opaque, capture-time, immutable, and never derived from content; a retrying client's re-POST is a new interaction. |
+| AC8 | `choiceIndex` (choice identity) and `chunkIndex` (per-choice ordinal) are distinct and never interchangeable. |
+| AC9 | Duplicate `choice.index` within one frame is rejected as malformed (`sse-invalid-choice-index`). |
+| AC10 | `seq` is assigned only by the assembler, starts at 0, and is contiguous as assigned; unparsed frames leave no fabricated gap. |
+| AC11 | Response-body bytes are forwarded with content and order preserved, under backpressure, with zero frame mutation. |
+| AC12 | Response headers are ingress-constructed from the validated bounded allowlist; secrets are excluded structurally; dropped parameters are declared. |
+| AC13 | Encoded streams are forwarded raw and observed through a bounded decoder tee; unsupported encoding / decode failure detach observation only. |
+| AC14 | The parser and decoder produce ordered, provider-neutral, frame-level results; one frame expands to zero-or-more canonical events in order. |
+| AC15 | The terminalization matrix is closed; the first observed terminal wins; every terminal ends with exactly one final canonical event — `interaction_end` for `completed` only, the causal `error` (trace `fail`) / `cancelled` (trace `cancel`) declaration as the final event for failed/cancelled terminals, the informational `error` (effect `none`) as the final event for `observation-detached` — and nothing follows the final event (Spec 014 §4.7 `terminal_declaration_not_final`; no fabricated `interaction_end`). |
+| AC16 | Trailing content after `[DONE]` is forwarded, never canonicalized, and honestly accounted (`post-terminal-content-not-retained`, remainder knowledge). |
+| AC17 | Exactly one `model_response` event with `responseMeta` is emitted when headers are observed; no duplication; header-less paths have none. |
+| AC18 | Evidence statuses are honest: `truncated` only when shortened, `redacted` only when masked, `captured` only when complete at the boundary, empty content `captured`. |
+| AC19 | `completeness.declaredLosses` is closed, deterministically ordered/deduplicated, derived from authoritative facts, and persisted as a derived field; `boundaryStatement` is derived only. |
+| AC20 | Loss codes are declared only when content was actually not retained; absence is declared (`provider-usage-absent`, `finish-reason-absent`); zeros are never fabricated. |
+| AC21 | The detach loss code is `remainder-after-observation-detach-not-observed` (content-level, honest), never a fabricated frame count. |
+| AC22 | Collection runs the privacy pipeline (structural exclusion → versioned detector → mask/omit → bound → honest status → declare); the storage-safety gate is non-bypassable. |
+| AC23 | The default excerpt cap is 240 (valid 64–4096); changing it requires a capture-profile version bump. |
+| AC24 | Benign content ≤ cap is `captured` under the explicit `metadata-safe` v1.1.0 Rule 2; v1.0.0 stays declared-only and is never reinterpreted. |
+| AC25 | The admission claim is honest: expected admissible with a tested construction invariant; rejection remains possible and is surfaced as `safety-rejected`. |
+| AC26 | `ErrorPayload` is closed (actor/role/target/effect + code + bounded description); diagnostics never carry exception messages, identities, documents, digests, headers, or raw bodies. |
+| AC27 | `key-unavailable` is classified exactly once under `request-failed` (actor `capture`), never under `upstream-failed`. |
+| AC28 | The observation state machine has the seven terminals with defined transitions; no terminal is reachable from `initial`. |
+| AC29 | `@signalglass/streaming` is proposed network-free; `@signalglass/core` models remain provider-agnostic and unchanged. |
+| AC30 | The assembler is a pure, deterministic, idempotent single sequencing surface; re-assembly never duplicates. |
+| AC31 | Frame/byte accounting is honest: `lastObservedFramePosition` counts only observed frames; `rawForwardedBytes` has a documented basis; no fabricated counts anywhere. |
+| AC32 | `RemainderKnowledge` is the closed four-value vocabulary with honest `unknown` on detach. |
+| AC33 | The schema advances additively to 1.1.0 with exactly the six new serialized paths; every 1.0.0 record parses unchanged. |
+| AC34 | One authority per fact: `captureBoundary.streaming` is the authoritative input; derived fields are recomputed at parse and tampering fails with `completeness_disagrees_with_derivation`. |
+| AC35 | `responseMeta` and `choiceIndex` validate per §13.3/§13.5 (status 100–599; bounded normalized content type; non-negative integer). |
+| AC36 | Usage normalization: provider numbers → captured `UsageValue`s; captured zero ≠ absence; partial usage = omitted fields; per-choice nested usage discarded + declared `unrecognized-provider-field`. |
+| AC37 | `signalglass.persistence.metadata-safe` advances to v1.1.0 with the exact added matrix rows; the deciding version is recorded; a 1.1 record to v1.0.0 is refused as `unknown-additive-field`. |
+| AC38 | Persistence outcomes match the real Spec 015 API: full typed `SaveOutcome`; `EvidenceContentionError` → `contention-exhausted`; `policy-crash` removed. |
+| AC39 | `trace.assembly` records literal names + semver, validated; `decoderContract` is absent when no decoder ran. |
+| AC40 | The slice plan is additive and contract-true: no casts, no unknown-additive-field preservation as a substitute for owned validation. |
+| AC41 | `PersistenceObservation` is observable per interaction and never alters `trace.status`/lifecycles; a refused save is a separate outcome. |
+| AC42 | Spec 006 error-envelope parity is preserved on pre-dispatch paths; no response bytes precede the upstream outcome. |
+| AC43 | Documentation is updated per §19.1 with the honest privacy/crash wording of §19.2/§19.3. |
+| AC44 | Reports remain recommendation-only; findings state what/why/evidence/next for streaming interactions. |
 
 ---
 
-## 23. Criterion-to-test mapping
+## 23. Coverage mapping
 
-The mapping is **many-to-many**: acceptance criteria (§22) and test groups
-(§21.1) do not align 1:1. Each criterion is covered by at least one group
-and most criteria are covered by several; several groups (e.g. T40–T45,
-T75–T85) cover multiple criteria. The table in §22 lists each criterion's
-covering groups inline; the reverse index is the group list in §21.1 with
-its slice annotation. Completeness of coverage is verified mechanically in
-the implementation review by checking every criterion against its listed
-groups and every listed group against a criterion.
+### 23.1 Acceptance criteria ↔ test groups (many-to-many)
 
----
+| Criteria | Primary groups | Also exercised by |
+|---|---|---|
+| AC1, AC2, AC3 | T39–T43, T91 | T98, T99 |
+| AC4, AC5 | T72 | T77 |
+| AC6 | T89 (vocab closedness) + §19 doc review | — |
+| AC7 | T19, T26 | T80 |
+| AC8, AC9 | T11–T18 | T85 |
+| AC10 | T19, T20 | T45 |
+| AC11, AC12 | T60–T63 | T54–T59 |
+| AC13 | T54–T59 | T60–T61 |
+| AC14 | T01–T10, T20 | T11–T17 |
+| AC15 | T27–T35, T44, T99, T100 | — |
+| AC16 | T94 | T45 |
+| AC17 | T86–T88 | T36–T38 |
+| AC18 | T69, T70 | T23 |
+| AC19, AC20 | T40, T85, T89 | T45, T69 |
+| AC21 | T45, T89 | T93 |
+| AC22 | T64–T68, T71 | T23 |
+| AC23 | T95 | T69 |
+| AC24, AC25 | T71, T82 | T96 |
+| AC26, AC27 | T68, T37 | T36–T38 |
+| AC28 | T27–T35, T99, T100 | — |
+| AC29 | T97 | — |
+| AC30 | T21, T22 | T19 |
+| AC31 | T92, T45 | — |
+| AC32 | T93 | T45 |
+| AC33, AC34 | T80, T81, T83, T40, T41 | T89 |
+| AC35 | T85, T88 | T86–T87 |
+| AC36 | T26, T85 | T25 |
+| AC37 | T82, T96 | T83 |
+| AC38 | T73–T76 | T77–T78 |
+| AC39 | T84 | T85 |
+| AC40 | T83 | T84 |
+| AC41 | T77, T78 | T72–T76 |
+| AC42 | T36–T38, T49–T51 | T63 |
+| AC43 | §19 doc review | — |
+| AC44 | §18 doc review | T68 |
 
-## 24. Open questions
+### 23.2 Decision blocks ↔ sections ↔ slices
 
-**None.** Every item previously open is now resolved normatively:
-
-- `responseMeta` shape, placement (single `model_response` at header
-  observation), and absence per path — resolved (§13.3, §6.6);
-  `upstreamStatus` removed (§13.2).
-- Error-code spellings and vocabularies — resolved, closed (§12.2);
-  `upstream-key-unavailable` classified exactly once (§10.4).
-- Excerpt cap — resolved: default 240, valid range 64–4096, profile-version
-  bump rule (§8.3).
-- Encoded-stream transparency — resolved (§5.5).
-- Persistence timing — resolved (§3.2, §16).
-- Legacy divergence policy — resolved (§9.3).
-- Duplicate choice indexes — resolved: same-frame rejection (§6.3, §4.2).
-- Unmapped delta fields — resolved: declared losses (§6.3, §7.3).
-- Lifecycle facts — resolved: both persisted structurally (§2, §13.2).
-- Post-detachment counts — resolved: honest facts only, no inferred frame
-  counts (§12.3).
-- Persistence-policy version — resolved: v1.1.0 (§14).
-- Contention — resolved: environmental failure, never a `SaveOutcome` (§16).
-
-Deferred work is listed under Non-goals and §20 slices, not as open
-questions. If a reviewer identifies a genuinely undecided point, it must be
-resolved by an amended Accepted spec before implementation.
-
----
-
-## 25. Documentation impact
-
-When the spec is Accepted and implemented, the following docs change (docs
-are **not** changed by this Draft PR beyond the index/roadmap updates
-already made):
-
-- `docs/ingress.md` — streaming data flow, two lifecycles, header allowlist,
-  encoded-stream handling, crash limitation.
-- `docs/trace-model.md` — streaming event refinement, legacy trace as
-  compatibility projection.
-- `docs/evidence-model.md` / `docs/model-versioning.md` — additive 1.1.0
-  fields (`responseMeta`, `choiceIndex`, `completeness.declaredLosses`,
-  `completeness.lifecycle`, `trace.assembly`) and the additive-minor
-  mechanism.
-- `docs/evidence-projection-matrix.md` — new loss rows (responseMeta,
-  choiceIndex, completeness.declaredLosses, completeness.lifecycle,
-  trace.assembly).
-- `docs/privacy.md` — collection-time privacy process, detect-then-retain,
-  excerpt bounds.
-- `docs/capture-profiles.md` — the `signalglass.collection.ingress-metadata-safe`
-  profile v1.0.0.
-- `docs/architecture.md` — package map gains `@signalglass/streaming`.
-- `docs/roadmap.md` — milestone #23 moves from forecast to Accepted when
-  this spec is accepted.
-- `specs/000-index.md` — Spec 016 row status transitions Draft → Accepted →
-  Implemented.
-- `specs/015-append-only-evidence-store.md` — reference to the v1.1.0
-  policy minor and the v1.0 non-reinterpretation contract.
+| Decision | Section | Slice |
+|---|---|---|
+| 1 two lifecycles | §1 | S4 |
+| 2 upstream/client outcomes | §2 | S4 |
+| 3 assembly/persistence boundary | §3 | S3–S5 |
+| 4 identity/ordering | §4 | S4 |
+| 5 transparency | §5 | S5 |
+| 6 SSE/multi-choice/terminalization | §6 | S3–S4 |
+| 7 evidence statuses/losses | §7 | S4 |
+| 8 collection vs persistence | §8 | S4–S5 |
+| 9 error taxonomy | §9 | S4 |
+| 10 state machine | §10 | S4 |
+| 11 packages | §11 | S3–S5 |
+| 12 assembler/remainder | §12 | S4 |
+| 13 1.1 schema/authority | §13 | S1 |
+| 14 persistence policy | §14 | S2 |
+| 15 versioning/identity | §15 | S1–S2 |
+| 16 flows/observability | §16 | S5 |
 
 ---
+
+## 24. Deferred (explicitly out of this spec)
+
+- **Recovery journaling** for interrupted streams (crash no-record is
+  declared, not solved; roadmap reliability item).
+- **Export policies** (collection and persistence are specified; export is
+  out of scope).
+- **Providers beyond `openai-sse`** (the adapter contract is specified; the
+  decoder list is open for later slices; decoder identity is literal and
+  versioned).
+- **Content hashing / integrity fields** beyond the existing
+  `nativeContentHash` semantics (integrity, never identity/order).
+- **Cross-interaction correlation, replay, and multi-tenancy** concerns.
+- **Retry/rate-limit controls** on the ingress side (provider-agnostic,
+  later slice).
+
+## 25. Open questions
+
+**None.** Every decision above is decided with a closed vocabulary, a
+validated shape, or a normative rule. The revision-4 review blockers are
+each resolved by a numbered decision (D1–D8 in §Status).
 
 ## 26. References
 
-- [Spec 006 — Ingress, OpenAI-compatible](006-ingress-openai-compatible.md)
-- [Spec 007 — Storage and privacy](007-storage-and-privacy.md)
-- [Spec 013 — Evidence model](013-evidence-model.md)
-- [Spec 014 — Evidence primitives](014-evidence-primitives.md)
-- [Spec 015 — Append-only evidence store](015-append-only-evidence-store.md)
-- [`docs/ingress.md`](../docs/ingress.md), [`docs/trace-model.md`](../docs/trace-model.md),
-  [`docs/privacy.md`](../docs/privacy.md), [`docs/capture-profiles.md`](../docs/capture-profiles.md),
-  [`docs/model-versioning.md`](../docs/model-versioning.md),
-  [`docs/evidence-projection-matrix.md`](../docs/evidence-projection-matrix.md),
-  [`docs/architecture.md`](../docs/architecture.md), [`docs/roadmap.md`](../docs/roadmap.md)
-- [Server-Sent Events — HTML Standard](https://html.spec.whatwg.org/multipage/server-sent-events.html)
-- [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119)
+- Specs: `006-ingress-openai-compatible.md`, `007-storage-and-privacy.md`,
+  `013-evidence-model.md`, `014-evidence-primitives.md`,
+  `015-append-only-evidence-store.md`.
+- Docs: `docs/evidence-model.md`, `docs/trace-model.md`, `docs/ingress.md`,
+  `docs/privacy.md`, `docs/capture-profiles.md`,
+  `docs/evidence-projection-matrix.md`, `docs/model-versioning.md`,
+  `docs/architecture.md`, `docs/glossary.md`, `docs/roadmap.md`,
+  `docs/architectural-foundation.md`, `docs/decisions/0002-two-modes.md`,
+  `docs/decisions/0004-evidence-first.md`.
+- Code (grounding for the persistence/evidence contracts):
+  `packages/evidence/src/completeness.ts` (`deriveCompleteness`),
+  `packages/evidence/src/validate.ts` (`parseEvidenceRecord`,
+  `completeness_disagrees_with_derivation`),
+  `packages/evidence/src/types-record.ts` (`TraceCompleteness`),
+  `packages/evidence/src/types-envelope.ts` (`ResponseEnvelope`),
+  `packages/evidence/src/vocabulary.ts` (`model_response`),
+  `packages/storage/src/evidenceStorage.ts` (`SaveOutcome`,
+  `EvidenceContentionError`), `packages/storage/src/redaction.ts`
+  (S1/S2/S3 credential patterns), `apps/ingress/src/forward.ts`,
+  `apps/ingress/src/server.ts` (Spec 006 forwarding and envelope paths).
