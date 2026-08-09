@@ -1398,13 +1398,17 @@ export class EvidenceStorage {
     const hasSchemaIndex = existing.has('idx_evidence_records_schema_version');
     const hasStoredAtIndex = existing.has('idx_evidence_records_stored_at');
 
-    if (!hasLedger && !hasTable && !hasSchemaIndex && !hasStoredAtIndex) {
+    // Clean initialization is allowed only for an empty canonical object set.
+    // Any non-empty set — including an isolated unexpected evidence_% table or
+    // idx_evidence_% index that matches none of the four expected names — must
+    // be verified and refused without mutation, never silently initialized.
+    if (existing.size === 0) {
       this.initializeSchema();
       return;
     }
 
     if (!hasLedger) {
-      throw new StorageFormatError('Canonical tables exist without a valid storage ledger');
+      throw new StorageFormatError('Canonical storage objects exist without a valid storage ledger');
     }
 
     const ledgerValue = this.readLedgerValue();
@@ -1602,9 +1606,23 @@ export class EvidenceStorage {
     }
 
     // The canonical index set is exact: no unexpected idx_evidence_% indexes.
-    for (const idx of indexes) {
-      if (idx.name.startsWith('idx_evidence_') && !requiredIndexes.has(idx.name)) {
+    // The scan is global (sqlite_master, any owning table) so a stray canonical
+    // index attached to a noncanonical table cannot evade verification by being
+    // absent from PRAGMA index_list(evidence_records).
+    const allCanonicalIndexes = this.db
+      .prepare(
+        `SELECT name, tbl_name FROM sqlite_master
+         WHERE type = 'index' AND name LIKE 'idx_evidence_%'`
+      )
+      .all() as { name: string; tbl_name: string }[];
+    for (const idx of allCanonicalIndexes) {
+      if (!requiredIndexes.has(idx.name)) {
         throw new StorageFormatError(`Unexpected canonical index: ${idx.name}`);
+      }
+      // Ownership is proven by the scoped index_list check above; assert it
+      // here as well so a required-name index on another table is refused.
+      if (idx.tbl_name !== 'evidence_records') {
+        throw new StorageFormatError(`Index ${idx.name} is attached to the wrong table: ${idx.tbl_name}`);
       }
     }
   }

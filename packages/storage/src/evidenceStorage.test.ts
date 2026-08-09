@@ -6,8 +6,8 @@
  * integrity, WAL connection, and coexistence with legacy TraceStorage.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -182,29 +182,55 @@ interface ContentionRow {
  * are barrier messages from the worker's own event loop, so ordering between
  * 'locked' and 'committed'/'released' is guaranteed FIFO — overlap is proven
  * by the lock + message sequence, never by wall-clock timing.
+ *
+ * Every spawned worker is registered so the enclosing describe can assert in
+ * afterAll that each one exited: a leaked worker thread (whose open message
+ * port would otherwise keep the Vitest tinypool thread alive and hang the
+ * root suite) must fail loudly instead of hanging silently.
  */
+interface SpawnedContentionWorker {
+  worker: Worker;
+  phases: string[];
+  waitFor: (phase: string) => Promise<void>;
+  exited: () => boolean;
+}
+
+const spawnedWorkers: SpawnedContentionWorker[] = [];
+
 function spawnContentionWorker(workerData: {
   databasePath: string;
   operation: 'hold-then-commit' | 'hold-indefinitely';
   commitDelayMs?: number;
   row: ContentionRow;
-}): { worker: Worker; phases: string[]; waitFor: (phase: string) => Promise<void> } {
+}): SpawnedContentionWorker {
   const phases: string[] = [];
   const waiters = new Map<string, Array<() => void>>();
   const worker = new Worker(CONTENTION_WORKER_URL, { workerData });
-  worker.on('message', (m: { phase: string; message?: string }) => {
-    phases.push(m.phase);
-    const pending = waiters.get(m.phase);
+  let didExit = false;
+  worker.on('exit', () => {
+    didExit = true;
+  });
+  const releaseWaiter = (phase: string): void => {
+    const pending = waiters.get(phase);
     if (pending) {
-      waiters.delete(m.phase);
+      waiters.delete(phase);
       for (const resolve of pending) resolve();
     }
+  };
+  // A worker-thread crash surfaces as an 'error' event on the parent's Worker;
+  // route it through the phase system so tests observe the failure instead of
+  // the child process crashing on an unhandled 'error' event. A test that
+  // awaited a phase that never arrives fails loudly on the 10s waitFor
+  // timeout.
+  worker.on('error', () => {
+    phases.push('error');
+    releaseWaiter('error');
+  });
+  worker.on('message', (m: { phase: string; message?: string }) => {
+    phases.push(m.phase);
+    releaseWaiter(m.phase);
     if (m.phase === 'error') {
-      const pending = waiters.get('error');
-      if (pending) {
-        waiters.delete('error');
-        for (const resolve of pending) resolve();
-      }
+      releaseWaiter('error');
     }
   });
   const waitFor = (phase: string): Promise<void> =>
@@ -213,10 +239,12 @@ function spawnContentionWorker(workerData: {
         resolve();
         return;
       }
-      const timer = setTimeout(
-        () => reject(new Error(`Timed out waiting for worker phase '${phase}'`)),
-        10000,
-      );
+      const timer = setTimeout(() => {
+        // Drop the stale waiter so a late phase cannot resolve an already
+        // rejected promise, and the waiter closures cannot be retained.
+        waiters.delete(phase);
+        reject(new Error(`Timed out waiting for worker phase '${phase}'`));
+      }, 10000);
       const pending = waiters.get(phase) ?? [];
       pending.push(() => {
         clearTimeout(timer);
@@ -224,7 +252,9 @@ function spawnContentionWorker(workerData: {
       });
       waiters.set(phase, pending);
     });
-  return { worker, phases, waitFor };
+  const tracked: SpawnedContentionWorker = { worker, phases, waitFor, exited: () => didExit };
+  spawnedWorkers.push(tracked);
+  return tracked;
 }
 
 /** Builds the exact row the storage would store for a serialized document. */
@@ -571,6 +601,139 @@ describe('EvidenceStorage schema initialization', () => {
     expect(afterSchema).toBe(beforeSchema);
     expect(afterLedger).toBe(beforeLedger);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  describe('refusing non-clean canonical object sets without mutation', () => {
+    interface DbStateSnapshot {
+      journalMode: string;
+      master: string;
+      ledger: string;
+      fileDigest: string;
+      sideWalExists: boolean;
+      sideShmExists: boolean;
+    }
+
+    function captureDbState(dbPath: string): DbStateSnapshot {
+      const db = new Database(dbPath);
+      const state: DbStateSnapshot = {
+        journalMode: db.pragma('journal_mode', { simple: true }) as string,
+        master: JSON.stringify(
+          db
+            .prepare('SELECT type, name, tbl_name FROM sqlite_master ORDER BY type, name, tbl_name')
+            .all(),
+        ),
+        ledger: (() => {
+          const hasLedger = db
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'evidence_storage_meta'")
+            .get();
+          if (!hasLedger) {
+            return 'NO_LEDGER_TABLE';
+          }
+          return JSON.stringify(db.prepare('SELECT * FROM evidence_storage_meta').all());
+        })(),
+        fileDigest: '',
+        sideWalExists: false,
+        sideShmExists: false,
+      };
+      db.close();
+      state.fileDigest = sha256Hex(new Uint8Array(readFileSync(dbPath)));
+      state.sideWalExists = existsSync(`${dbPath}-wal`);
+      state.sideShmExists = existsSync(`${dbPath}-shm`);
+      return state;
+    }
+
+    function expectRefusalWithoutMutation(
+      dir: string,
+      dbPath: string,
+      setup: (db: Database.Database) => void,
+    ): void {
+      const db = new Database(dbPath);
+      setup(db);
+      db.close();
+      const before = captureDbState(dbPath);
+
+      expect(() => new EvidenceStorage(makeConfig(dir, { databasePath: dbPath }))).toThrow(
+        StorageFormatError,
+      );
+
+      const after = captureDbState(dbPath);
+      // A refusal must leave the schema, ledger rows, journal mode, the file
+      // bytes, and the absence of WAL side files exactly as they were.
+      expect(after).toEqual(before);
+      expect(after.journalMode).toBe('delete');
+    }
+
+    it('refuses a database containing only an unexpected evidence_% table', () => {
+      // Clean initialization is allowed only for an empty canonical object
+      // set. A DB whose sole object is an unexpected canonical-named table
+      // matches none of the four expected names and must be refused without
+      // mutation — never silently initialized and migrated to WAL.
+      const dir = tempDir();
+      const dbPath = join(dir, 'refusal.db');
+      expectRefusalWithoutMutation(dir, dbPath, (db) => {
+        db.exec('CREATE TABLE evidence_extra (id TEXT PRIMARY KEY)');
+      });
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('refuses a database containing only an unexpected idx_evidence_% index on a legacy table', () => {
+      const dir = tempDir();
+      const dbPath = join(dir, 'refusal.db');
+      expectRefusalWithoutMutation(dir, dbPath, (db) => {
+        db.exec('CREATE TABLE legacy_notes (id TEXT PRIMARY KEY)');
+        db.exec('CREATE INDEX idx_evidence_extra ON legacy_notes (id)');
+      });
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('refuses a database containing only an expected index name without the canonical tables', () => {
+      const dir = tempDir();
+      const dbPath = join(dir, 'refusal.db');
+      expectRefusalWithoutMutation(dir, dbPath, (db) => {
+        db.exec('CREATE TABLE legacy_notes (evidence_schema_version TEXT)');
+        db.exec('CREATE INDEX idx_evidence_records_schema_version ON legacy_notes (evidence_schema_version)');
+      });
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('refuses an unexpected canonical object alongside an otherwise partial layout', () => {
+      const dir = tempDir();
+      const dbPath = join(dir, 'refusal.db');
+      expectRefusalWithoutMutation(dir, dbPath, (db) => {
+        db.exec('CREATE TABLE evidence_storage_meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)');
+        db
+          .prepare('INSERT INTO evidence_storage_meta (key, value) VALUES (?, ?)')
+          .run('evidence_storage_format_version', '1.0.0');
+        db.exec('CREATE TABLE evidence_extra (id TEXT PRIMARY KEY)');
+      });
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('refuses a stray canonical index on a noncanonical table even when the canonical layout is complete', () => {
+      // Ownership-evasion regression: an unexpected idx_evidence_% index on a
+      // NONCANONICAL table never appears in PRAGMA index_list(evidence_records),
+      // so the unexpected-index check must scan sqlite_master globally.
+      const dir = tempDir();
+      createCanonicalBase(dir);
+      const dbPath = join(dir, 'adversarial.db');
+      expectRefusalWithoutMutation(dir, dbPath, (db) => {
+        db.exec('CREATE TABLE legacy_notes (id TEXT PRIMARY KEY)');
+        db.exec('CREATE INDEX idx_evidence_extra ON legacy_notes (id)');
+      });
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('refuses a required index name attached to the wrong table even when the rest is complete', () => {
+      const dir = tempDir();
+      createCanonicalBase(dir);
+      const dbPath = join(dir, 'adversarial.db');
+      expectRefusalWithoutMutation(dir, dbPath, (db) => {
+        db.exec('DROP INDEX idx_evidence_records_stored_at');
+        db.exec('CREATE TABLE legacy_notes (stored_at TEXT)');
+        db.exec('CREATE INDEX idx_evidence_records_stored_at ON legacy_notes (stored_at)');
+      });
+      rmSync(dir, { recursive: true, force: true });
+    });
   });
 
   it('rolls back partially-created canonical objects when initialization fails', () => {
@@ -2106,6 +2269,18 @@ describe('WAL and contention', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30000);
+
+  afterAll(() => {
+    // Leaked-worker guard: every contention worker must have exited by the
+    // time the describe completes. A live nested worker thread with an open
+    // message port would keep the Vitest tinypool thread (and therefore the
+    // whole root suite) alive forever; fail loudly instead of hanging.
+    for (const tracked of spawnedWorkers) {
+      expect(tracked.exited(), `contention worker leaked (never terminated): ${tracked.phases.join(',')}`).toBe(
+        true,
+      );
+    }
+  });
 });
 
 describe('Serialization boundary', () => {
@@ -2151,71 +2326,94 @@ describe('Projection parity through persistence', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('projects the exact same legacy views and full reports before and after persistence', () => {
-    // The storage suite must exercise the compatibility projections on real
-    // persisted data: project the pre-save snapshot, save, retrieve, project
-    // again, and require exact equality of both views and the full
-    // ProjectionReport values (spec 015: persisted parity with the legacy
-    // projections).
-    const record = makeProofRecord();
-    const beforeTrace = evidenceToLegacyTrace(record);
-    const beforeRun = evidenceToAgentRun(record);
-    expect(beforeTrace.ok).toBe(true);
-    expect(beforeRun.ok).toBe(true);
-    if (!beforeTrace.ok || !beforeRun.ok) return;
+  it('projects the serializer-snapshot legacy views and full reports exactly from persisted data', () => {
+    // Spec 015's normative baseline for a persisted record is the serializer
+    // snapshot: parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(caller))).record.
+    // Project that snapshot with the real compatibility projectors, save the
+    // caller input, retrieve, project again, and require exact equality of
+    // both views and the full ProjectionReport values. Caller-input
+    // projection is never called the "pre-persistence snapshot".
+    const caller = makeProofRecord();
+    const snapshotParsed = parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(caller)));
+    expect(snapshotParsed.ok).toBe(true);
+    if (!snapshotParsed.ok) return;
+    const snapshot = snapshotParsed.record;
 
-    const outcome = storage.saveEvidenceRecord(record);
+    const snapshotTrace = evidenceToLegacyTrace(snapshot);
+    const snapshotRun = evidenceToAgentRun(snapshot);
+    expect(snapshotTrace.ok).toBe(true);
+    expect(snapshotRun.ok).toBe(true);
+    if (!snapshotTrace.ok || !snapshotRun.ok) return;
+
+    const outcome = storage.saveEvidenceRecord(caller);
     expect(outcome.status).toBe('stored');
     if (outcome.status !== 'stored') return;
 
-    const read = storage.getEvidenceRecord(record.trace.traceId);
+    const read = storage.getEvidenceRecord(caller.trace.traceId);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
 
-    const afterTrace = evidenceToLegacyTrace(read.record);
-    const afterRun = evidenceToAgentRun(read.record);
-    expect(afterTrace.ok).toBe(true);
-    expect(afterRun.ok).toBe(true);
-    if (!afterTrace.ok || !afterRun.ok) return;
+    const persistedTrace = evidenceToLegacyTrace(read.record);
+    const persistedRun = evidenceToAgentRun(read.record);
+    expect(persistedTrace.ok).toBe(true);
+    expect(persistedRun.ok).toBe(true);
+    if (!persistedTrace.ok || !persistedRun.ok) return;
 
-    expect(afterTrace.view).toEqual(beforeTrace.view);
-    expect(afterTrace.report).toEqual(beforeTrace.report);
-    expect(afterRun.view).toEqual(beforeRun.view);
-    expect(afterRun.report).toEqual(beforeRun.report);
+    expect(persistedTrace.view).toEqual(snapshotTrace.view);
+    expect(persistedTrace.report).toEqual(snapshotTrace.report);
+    expect(persistedRun.view).toEqual(snapshotRun.view);
+    expect(persistedRun.report).toEqual(snapshotRun.report);
   });
 
-  it('preserves projection parity for a record with an explicitly undefined optional property', () => {
-    // Representation-sensitive case through real save/retrieval: an optional
-    // property explicitly set to undefined must project identically after the
-    // JSON round trip removes it.
-    const record = makeProofRecord();
-    (record as { trace: { conditions?: unknown } }).trace.conditions = undefined;
+  it('asserts the explicit-undefined representation loss, then projects the serializer snapshot and persisted record identically', () => {
+    // Representation-sensitive parity through real save/retrieval. The caller
+    // owns an optional property whose value is explicitly undefined; the JSON
+    // round trip cannot represent that ownership, so the serializer snapshot
+    // loses it. The normative baseline is the snapshot, not the caller record:
+    // we first assert the representation loss itself (caller owns the
+    // property, snapshot does not, value-level JSON meaning otherwise
+    // equivalent), then require the snapshot and the persisted record to
+    // project identically with both real projectors.
+    const caller = makeProofRecord();
+    (caller as { trace: { conditions?: unknown } }).trace.conditions = undefined;
+    expect(Object.prototype.hasOwnProperty.call(caller.trace, 'conditions')).toBe(true);
 
-    const beforeTrace = evidenceToLegacyTrace(record);
-    const beforeRun = evidenceToAgentRun(record);
-    expect(beforeTrace.ok).toBe(true);
-    expect(beforeRun.ok).toBe(true);
-    if (!beforeTrace.ok || !beforeRun.ok) return;
+    const snapshotText = serializeEvidenceRecord(caller);
+    const snapshotParsed = parseEvidenceRecord(JSON.parse(snapshotText));
+    expect(snapshotParsed.ok).toBe(true);
+    if (!snapshotParsed.ok) return;
+    const snapshot = snapshotParsed.record;
 
-    const outcome = storage.saveEvidenceRecord(record);
+    // The representation loss: the snapshot no longer owns the property, and
+    // the two representations carry the same value-level JSON meaning.
+    expect(Object.prototype.hasOwnProperty.call(snapshot.trace, 'conditions')).toBe(false);
+    expect(JSON.parse(JSON.stringify(caller))).toEqual(JSON.parse(JSON.stringify(snapshot)));
+
+    const snapshotTrace = evidenceToLegacyTrace(snapshot);
+    const snapshotRun = evidenceToAgentRun(snapshot);
+    expect(snapshotTrace.ok).toBe(true);
+    expect(snapshotRun.ok).toBe(true);
+    if (!snapshotTrace.ok || !snapshotRun.ok) return;
+
+    const outcome = storage.saveEvidenceRecord(caller);
     expect(outcome.status).toBe('stored');
     if (outcome.status !== 'stored') return;
 
-    const read = storage.getEvidenceRecord(record.trace.traceId);
+    const read = storage.getEvidenceRecord(caller.trace.traceId);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
     expect((read.record as { trace: { conditions?: unknown } }).trace.conditions).toBeUndefined();
 
-    const afterTrace = evidenceToLegacyTrace(read.record);
-    const afterRun = evidenceToAgentRun(read.record);
-    expect(afterTrace.ok).toBe(true);
-    expect(afterRun.ok).toBe(true);
-    if (!afterTrace.ok || !afterRun.ok) return;
+    const persistedTrace = evidenceToLegacyTrace(read.record);
+    const persistedRun = evidenceToAgentRun(read.record);
+    expect(persistedTrace.ok).toBe(true);
+    expect(persistedRun.ok).toBe(true);
+    if (!persistedTrace.ok || !persistedRun.ok) return;
 
-    expect(afterTrace.view).toEqual(beforeTrace.view);
-    expect(afterTrace.report).toEqual(beforeTrace.report);
-    expect(afterRun.view).toEqual(beforeRun.view);
-    expect(afterRun.report).toEqual(beforeRun.report);
+    expect(persistedTrace.view).toEqual(snapshotTrace.view);
+    expect(persistedTrace.report).toEqual(snapshotTrace.report);
+    expect(persistedRun.view).toEqual(snapshotRun.view);
+    expect(persistedRun.report).toEqual(snapshotRun.report);
   });
 });
 

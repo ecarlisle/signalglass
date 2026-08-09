@@ -1863,6 +1863,11 @@ non-Object.prototype prototype, `{ accept: 'yes' }`, `{ accept: true, code: 'x' 
 - **contention:** concurrent saves on different identities both succeed;
   concurrent saves on the same identity produce one successful append and
   one structured `already-present`/`conflict` after transaction re-read;
+  bounded-retry exhaustion raises `EvidenceContentionError` without
+  persisting anything; the worker fixture closes its database and message
+  port on every path so the thread exits naturally, and the test suite
+  asserts in `afterAll` that every spawned worker exited (a leaked nested
+  worker thread must fail loudly instead of keeping the Vitest pool alive);
 - **WAL connection:** the storage constructor enables WAL journaling and
   fails if WAL cannot be enabled; the legacy `TraceStorage` connection
   remains usable;
@@ -1878,14 +1883,20 @@ non-Object.prototype prototype, `{ accept: 'yes' }`, `{ accept: true, code: 'x' 
   admitted values;
 - serialized-shape and SQLite-schema contract tests (`PRAGMA table_info`,
   ledger contents), because this spec changes public persistence contracts;
-- open-time verification: clean initialization (only when no canonical
-  objects exist); repeated initialization; existing legacy-only database;
-  compatible canonical database; canonical tables/indices without a valid
-  ledger (partial state) refused without mutation; malformed or incompatible
-  canonical table refused; unsupported higher and lower storage formats
-  refused; **failed initialization rolls back every canonical object created
-  by that attempt — tests compare the complete canonical schema and ledger
-  before and after a failed open**;
+- open-time verification: clean initialization (only when the canonical
+  object set is empty — an isolated unexpected `evidence_%` table or
+  `idx_evidence_%` index, or an expected index name without the canonical
+  tables, is refused without mutation); repeated initialization; existing
+  legacy-only database; compatible canonical database; canonical
+  tables/indices without a valid ledger (partial state) refused without
+  mutation; unexpected canonical object alongside an otherwise partial
+  layout refused; stray `idx_evidence_%` indexes attached to noncanonical
+  tables refused (ownership cannot evade verification); malformed or
+  incompatible canonical table refused; unsupported higher and lower storage
+  formats refused; **failed initialization rolls back every canonical object
+  created by that attempt — tests compare the complete canonical schema and
+  ledger (and the database file bytes and journal mode, with no WAL side
+  files) before and after a failed open**;
 - identity contract: authoritative identity is `traceId` (=== `interactionId`),
   never rowid/digest/observation id;
 - storage digest is administrative, unindexed, and distinct from
@@ -2182,7 +2193,7 @@ non-Object.prototype prototype, `{ accept: 'yes' }`, `{ accept: true, code: 'x' 
 ## Test mapping
 
 All 70 acceptance criteria are covered by `packages/storage/src/evidenceStorage.test.ts`
-(131 tests) and the existing `@signalglass/evidence` contract tests. Key groupings:
+(138 tests) and the existing `@signalglass/evidence` contract tests. Key groupings:
 
 - Save/retrieve round trip, manifest, close/reopen, coexistence with
   `TraceStorage`, exact digest, and idempotency/conflict behavior are
@@ -2210,9 +2221,15 @@ All 70 acceptance criteria are covered by `packages/storage/src/evidenceStorage.
   payloads, optional `exitCode`/`topK`/`resultCount`, nested response-usage
   allowlist, analysis/completeness, and unknown nested fields failing closed)
   is exercised in `metadata-safe policy matrix`; persistence parity through
-  real save/retrieve against `evidenceToLegacyTrace`/`evidenceToAgentRun`
-  (including an explicitly `undefined` optional property) is exercised in
-  `Projection parity through persistence`.
+  real save/retrieve against `evidenceToLegacyTrace`/`evidenceToAgentRun` is
+  exercised in `Projection parity through persistence`, with the serializer
+  snapshot
+  (`parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(caller))).record`)
+  as the normative projection baseline — an explicitly `undefined` optional
+  property asserts the representation loss itself (the caller owns the
+  property, the snapshot does not, and value-level JSON meaning is otherwise
+  equivalent) before requiring snapshot and persisted projections to be
+  exactly equal.
 
 ## Explicit exclusions
 

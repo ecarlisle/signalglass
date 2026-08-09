@@ -40,6 +40,18 @@ if (!port) {
   throw new Error('contention-worker must run as a worker thread');
 }
 
+/** Closes the message port so the thread exits naturally after the final phase. */
+function finish(phase, message) {
+  try {
+    port.postMessage(message ?? { phase });
+  } finally {
+    // Closing the port removes the last active handle: the thread exits on its
+    // own even if the parent never calls terminate(). This guarantees the
+    // nested worker thread cannot keep the Vitest tinypool thread alive.
+    port.close();
+  }
+}
+
 let db;
 try {
   db = new Database(databasePath, { timeout: 0 });
@@ -65,9 +77,14 @@ try {
         try {
           db.exec('ROLLBACK');
           db.close();
-          port.postMessage({ phase: 'released' });
+          finish('released');
         } catch (err) {
-          port.postMessage({ phase: 'error', message: String(err) });
+          try {
+            db.close();
+          } catch {
+            // ignore close failure while reporting the primary error
+          }
+          finish('error', { phase: 'error', message: String(err) });
         }
       }
     });
@@ -76,9 +93,14 @@ try {
       try {
         db.exec('COMMIT');
         db.close();
-        port.postMessage({ phase: 'committed' });
+        finish('committed');
       } catch (err) {
-        port.postMessage({ phase: 'error', message: String(err) });
+        try {
+          db.close();
+        } catch {
+          // ignore close failure while reporting the primary error
+        }
+        finish('error', { phase: 'error', message: String(err) });
       }
     }, commitDelayMs ?? 150);
   }
@@ -90,5 +112,5 @@ try {
       // ignore close failure while reporting the primary error
     }
   }
-  port.postMessage({ phase: 'error', message: String(err) });
+  finish('error', { phase: 'error', message: String(err) });
 }
