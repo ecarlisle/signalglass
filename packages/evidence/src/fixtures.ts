@@ -104,6 +104,37 @@ export function minimalObservations(): EvidenceObservation[] {
   ];
 }
 
+/** A non-streaming schema-1.1 trace using the revised message and response shapes. */
+export function minimalSchema11Observations(): EvidenceObservation[] {
+  return minimalObservations().map((observation) => {
+    if (observation.kind === 'model_request') {
+      return {
+        ...observation,
+        payload: {
+          requestEnvelope: {
+            model: 'claude-sonnet-4',
+            provider: 'anthropic',
+            providerNativeFidelity: 'structurally_faithful',
+            messages: [{ role: 'user', content: { text: 'hello', evidenceStatus: 'captured' } }],
+          },
+        },
+      } as EvidenceObservation;
+    }
+    if (observation.kind === 'model_response') {
+      return {
+        ...observation,
+        payload: {
+          responseEnvelope: {
+            providerNativeFidelity: 'structurally_faithful',
+            responseMeta: { statusCode: 200, contentType: 'application/json' },
+          },
+        },
+      } as EvidenceObservation;
+    }
+    return observation;
+  });
+}
+
 export function buildRecord(
   observations: readonly EvidenceObservation[] = minimalObservations(),
   boundary: CaptureBoundary = buildBoundary(),

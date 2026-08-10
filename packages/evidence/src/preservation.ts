@@ -54,6 +54,8 @@ const EVENT_PAYLOAD_FIELDS = [
   'error',
   'cancellation',
   'retry',
+  'redaction',
+  'truncation',
 ];
 
 const EVENT_SPEC: NodeSpec = {
@@ -80,6 +82,15 @@ const CONDITION_SPEC: NodeSpec = {
   keys: ['label', 'value', 'version'],
 };
 
+const IDENTITY_SPEC: NodeSpec = { keys: ['name', 'version'] };
+const ASSEMBLY_SPEC: NodeSpec = {
+  keys: ['assembler', 'decoderContract'],
+  children: {
+    assembler: { kind: 'object', spec: IDENTITY_SPEC },
+    decoderContract: { kind: 'object', spec: IDENTITY_SPEC },
+  },
+};
+
 const TRACE_SPEC: NodeSpec = {
   keys: [
     'interactionId',
@@ -94,11 +105,13 @@ const TRACE_SPEC: NodeSpec = {
     'conditions',
     'events',
     'spans',
+    'assembly',
   ],
   children: {
     events: { kind: 'arrayById', idKey: 'eventId', spec: EVENT_SPEC },
     spans: { kind: 'arrayById', idKey: 'spanId', spec: SPAN_SPEC },
     conditions: { kind: 'array', spec: CONDITION_SPEC },
+    assembly: { kind: 'object', spec: ASSEMBLY_SPEC },
   },
 };
 
@@ -135,6 +148,19 @@ const ISSUE_SPEC: NodeSpec = {
   keys: ['code', 'path', 'message'],
 };
 
+const OUTCOME_SPEC: NodeSpec = { keys: ['outcome', 'cause'] };
+const OBSERVATION_LIFECYCLE_SPEC: NodeSpec = { keys: ['terminal'] };
+const REMAINDER_SPEC: NodeSpec = { keys: ['knowledge', 'lastObservedFramePosition', 'rawForwardedBytes'] };
+const LIFECYCLE_SPEC: NodeSpec = {
+  keys: ['upstream', 'clientResponse', 'observation', 'remainder'],
+  children: {
+    upstream: { kind: 'object', spec: OUTCOME_SPEC },
+    clientResponse: { kind: 'object', spec: OUTCOME_SPEC },
+    observation: { kind: 'object', spec: OBSERVATION_LIFECYCLE_SPEC },
+    remainder: { kind: 'object', spec: REMAINDER_SPEC },
+  },
+};
+
 const ANALYSIS_SPEC: NodeSpec = {
   keys: [
     'completenessDerivationAlgorithmVersion',
@@ -157,12 +183,13 @@ const ANALYSIS_SPEC: NodeSpec = {
 };
 
 const COMPLETENESS_SPEC: NodeSpec = {
-  keys: ['eventsByStatus', 'seqGaps', 'duplicatesDetected', 'boundaryStatement'],
+  keys: ['eventsByStatus', 'seqGaps', 'duplicatesDetected', 'boundaryStatement', 'lifecycle', 'declaredLosses'],
   // `seqGaps` alignment stays positional: completeness agreement requires
   // canonical array order (a reordered serialized `seqGaps` rejects), so
   // positional overlay cannot misattach unknown fields.
   children: {
     seqGaps: { kind: 'array', spec: GAP_SPEC },
+    lifecycle: { kind: 'object', spec: LIFECYCLE_SPEC },
   },
 };
 
@@ -288,6 +315,7 @@ export function agreeTrace(derived: unknown, serialized: unknown): boolean {
     if (!eq(derived[k], serialized[k])) return false;
   }
   if (!eq(derived['captureProfile'], serialized['captureProfile'])) return false;
+  if (!eq(derived['assembly'], stripUnknowns(serialized['assembly'], ASSEMBLY_SPEC))) return false;
   if (!eq(derived['finishedAt'], serialized['finishedAt'])) return false;
 
   const de = sortedEvents(derived['events']);

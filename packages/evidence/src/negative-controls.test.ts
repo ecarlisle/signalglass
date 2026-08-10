@@ -15,7 +15,7 @@ import {
   isSpanKind,
 } from '@signalglass/evidence';
 import { serializeEvidenceRecord } from '@signalglass/evidence';
-import { minimalObservations, buildBoundary, buildRecord, obs, PROFILE, T0, T1, T2, T3, T4, T5 } from './fixtures.js';
+import { minimalObservations, minimalSchema11Observations, buildBoundary, buildRecord, obs, PROFILE, T0, T1, T2, T3, T4, T5 } from './fixtures.js';
 import type { EvidenceObservation } from './types-trace.js';
 
 const V = '1.0.0';
@@ -284,10 +284,15 @@ describe('Negative controls — Sequence, duplicates, and gaps', () => {
 describe('Negative controls — Versions and discriminants', () => {
   const baseBoundary = buildBoundary();
 
-  it('accepts supported additive minor and patch versions', () => {
-    const record = buildRecord(undefined, baseBoundary, { evidenceSchemaVersion: '1.1.0' });
+  it('accepts supported additive patch versions', () => {
+    const record = buildRecord(undefined, baseBoundary, { evidenceSchemaVersion: '1.0.1' });
     const res = parseEvidenceRecord(record as unknown);
     expect(res.ok).toBe(true);
+  });
+
+  it('accepts supported additive minor versions', () => {
+    const record = buildRecord(minimalSchema11Observations(), baseBoundary, { evidenceSchemaVersion: '1.1.0' });
+    expect(parseEvidenceRecord(record as unknown).ok).toBe(true);
   });
 
   it('preserves unknown additive fields for compatible versions', () => {

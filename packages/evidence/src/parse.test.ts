@@ -12,6 +12,7 @@ import { serializeEvidenceRecord, serializeEvidenceExport } from './serialize.js
 import type { EvidenceObservation } from './types-trace.js';
 import {
   minimalObservations,
+  minimalSchema11Observations,
   buildBoundary,
   buildRecord,
   obs,
@@ -65,10 +66,15 @@ describe('parseEvidenceRecord', () => {
     if (!res.ok) expect(res.issues.map((i) => i.code)).toContain('unsupported_evidence_schema_version');
   });
 
-  it('accepts a compatible additive minor revision within the supported MAJOR', () => {
-    const record = buildRecord(undefined, buildBoundary(), { evidenceSchemaVersion: '1.1.0' });
+  it('accepts a compatible additive patch revision within the supported MAJOR', () => {
+    const record = buildRecord(undefined, buildBoundary(), { evidenceSchemaVersion: '1.0.1' });
     const res = parseEvidenceRecord(record as unknown);
     expect(res.ok).toBe(true);
+  });
+
+  it('accepts a compatible additive minor revision within the supported MAJOR', () => {
+    const record = buildRecord(minimalSchema11Observations(), buildBoundary(), { evidenceSchemaVersion: '1.1.0' });
+    expect(parseEvidenceRecord(record as unknown).ok).toBe(true);
   });
 
   it('rejects serialized trace disagreeing with the deterministic derivation', () => {
@@ -127,18 +133,22 @@ describe('parseEvidenceRecord', () => {
     }
   });
 
-  it('never descends prototype keys when preserving additive fields (regression)', () => {
+  it('accepts additive prototype-sensitive keys but excludes them from preservation (regression)', () => {
     const record = buildRecord();
     const base = JSON.parse(serializeEvidenceRecord(record)) as Record<string, unknown>;
-    const input = { ...base, '__proto__': { polluted: true }, constructor: { x: 1 }, future: 7 } as Record<string, unknown>;
+    const input = { ...base, future: 7 } as Record<string, unknown>;
+    Object.defineProperty(input, '__proto__', { value: { polluted: true }, enumerable: true });
+    input['constructor'] = { x: 1 };
+    input['prototype'] = { y: 1 };
     const res = parseEvidenceRecord(input);
     expect(res.ok).toBe(true);
-    if (res.ok) {
-      const rec = res.record as unknown as Record<string, unknown>;
-      expect(rec['future']).toBe(7);
-      expect(Object.prototype.hasOwnProperty.call(rec as object, 'polluted')).toBe(false);
-      expect(Object.getPrototypeOf(rec as object)).toBe(Object.prototype);
-    }
+    if (!res.ok) return;
+    const parsedRecord = res.record as unknown as Record<string, unknown>;
+    for (const key of ['__proto__', 'constructor', 'prototype']) expect(Object.hasOwn(parsedRecord, key)).toBe(false);
+    const serialized = JSON.parse(serializeEvidenceRecord(res.record)) as Record<string, unknown>;
+    expect(serialized['future']).toBe(7);
+    for (const key of ['__proto__', 'constructor', 'prototype']) expect(Object.hasOwn(serialized, key)).toBe(false);
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 
   it('preserves raw array order and observation ids losslessly through serialize-parse-serialize', () => {
@@ -283,6 +293,28 @@ describe('collision processing (§4.4)', () => {
 });
 
 describe('normalizeEvidenceRecord', () => {
+  it('returns validation issues instead of throwing for malformed capture boundaries', () => {
+    for (const boundary of [null, undefined, [], 42, 'invalid', true, {}]) {
+      expect(() => normalizeEvidenceRecord(minimalObservations(), boundary as never, V)).not.toThrow();
+      const result = normalizeEvidenceRecord(minimalObservations(), boundary as never, V);
+      expect(result.ok, String(boundary)).toBe(false);
+    }
+  });
+
+  it('selects observation validation from the declared schema even without streaming metadata', () => {
+    expect(normalizeEvidenceRecord(minimalObservations(), buildBoundary(), '1.0.0', { captureProfile: PROFILE }).ok).toBe(true);
+    expect(normalizeEvidenceRecord(minimalSchema11Observations(), buildBoundary(), '1.1.0', { captureProfile: PROFILE }).ok).toBe(true);
+
+    const legacyShapesUnder11 = normalizeEvidenceRecord(minimalObservations(), buildBoundary(), '1.1.0', { captureProfile: PROFILE });
+    expect(legacyShapesUnder11.ok).toBe(false);
+    if (!legacyShapesUnder11.ok) {
+      expect(legacyShapesUnder11.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
+        'content_leaf_invalid',
+        'closed_shape_unknown_key',
+      ]));
+    }
+  });
+
   it('rejects duplicate observation identities deterministically', () => {
     const base = minimalObservations();
     const dup = [{ ...base[0]! }, { ...base[0]!, observationId: 'o0-copy' }];

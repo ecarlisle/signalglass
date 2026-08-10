@@ -81,4 +81,9 @@ export type EvidenceTrace = {
   events: readonly EventRecord[];
   finishedAt?: string;
   conditions?: readonly Condition[];
+  /** Derived from captureBoundary.streaming.assembly for schema >= 1.1. */
+  assembly?: {
+    assembler: { name: 'signalglass.streaming.assembler'; version: string };
+    decoderContract?: { name: 'signalglass.providers.openai-sse'; version: string };
+  };
 };
