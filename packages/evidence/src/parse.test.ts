@@ -65,8 +65,8 @@ describe('parseEvidenceRecord', () => {
     if (!res.ok) expect(res.issues.map((i) => i.code)).toContain('unsupported_evidence_schema_version');
   });
 
-  it('accepts a compatible additive minor revision within the supported MAJOR', () => {
-    const record = buildRecord(undefined, buildBoundary(), { evidenceSchemaVersion: '1.1.0' });
+  it('accepts a compatible additive patch revision within the supported MAJOR', () => {
+    const record = buildRecord(undefined, buildBoundary(), { evidenceSchemaVersion: '1.0.1' });
     const res = parseEvidenceRecord(record as unknown);
     expect(res.ok).toBe(true);
   });

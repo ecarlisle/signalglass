@@ -7,7 +7,7 @@
 import { isSemanticVersion, majorVersion } from './internal/formats.js';
 
 /** The exact evidence-schema version this package implements (§2.2.12). */
-export const SUPPORTED_EVIDENCE_SCHEMA_VERSION = '1.0.0';
+export const SUPPORTED_EVIDENCE_SCHEMA_VERSION = '1.1.0';
 
 /** The MAJOR version supported by this package. */
 export const SUPPORTED_MAJOR = 1;

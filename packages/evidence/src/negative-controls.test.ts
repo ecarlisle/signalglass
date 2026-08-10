@@ -284,8 +284,8 @@ describe('Negative controls — Sequence, duplicates, and gaps', () => {
 describe('Negative controls — Versions and discriminants', () => {
   const baseBoundary = buildBoundary();
 
-  it('accepts supported additive minor and patch versions', () => {
-    const record = buildRecord(undefined, baseBoundary, { evidenceSchemaVersion: '1.1.0' });
+  it('accepts supported additive patch versions', () => {
+    const record = buildRecord(undefined, baseBoundary, { evidenceSchemaVersion: '1.0.1' });
     const res = parseEvidenceRecord(record as unknown);
     expect(res.ok).toBe(true);
   });

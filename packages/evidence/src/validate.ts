@@ -7,7 +7,7 @@
  */
 import type { ValidationIssue } from './types-analysis.js';
 import type { EvidenceStructuralAnalysis } from './types-analysis.js';
-import type { EvidenceRecord, CaptureBoundary, TraceCompleteness, EvidenceRecordParseResult } from './types-record.js';
+import type { EvidenceRecord, CaptureBoundary, StreamingCaptureBoundary, EvidenceRecordParseResult } from './types-record.js';
 import type { Condition } from './types-base.js';
 import { isRecord } from './internal/guards.js';
 import { cloneJsonSafe } from './internal/overlay.js';
@@ -28,11 +28,13 @@ import {
   validateObservation,
   validateCaptureBoundary,
   validateCaptureProfile,
+  validateStreamingConsistency,
   issue,
 } from './validate-fields.js';
 import type { EvidenceObservation } from './types-trace.js';
-
-export type { EvidenceRecord };
+import type { EvidenceTrace } from './types-trace.js';
+import { toJsonView } from './normalize.js';
+import { utf8Encode } from './hash.js';
 
 export type NormalizeOptions = {
   captureProfile?: { name: string; version: string };
@@ -56,6 +58,7 @@ function fail(issues: readonly ValidationIssue[]): {
 function validateObservationList(
   raw: unknown,
   path: string,
+  schemaVersion: string,
 ): { observations: EvidenceObservation[] | null; issues: ValidationIssue[] } {
   if (!Array.isArray(raw)) {
     return { observations: null, issues: [issue('raw_observations_not_array', path, 'rawObservations must be an array')] };
@@ -63,7 +66,7 @@ function validateObservationList(
   const issues: ValidationIssue[] = [];
   const obsIds = new Set<string>();
   for (let i = 0; i < raw.length; i++) {
-    validateObservation(raw[i], `${path}[${i}]`, issues);
+    validateObservation(raw[i], `${path}[${i}]`, issues, schemaVersion);
     const rec = raw[i];
     if (isRecord(rec) && typeof rec['observationId'] === 'string') {
       if (obsIds.has(rec['observationId'] as string)) {
@@ -103,8 +106,8 @@ export function normalizeEvidenceRecord(
   if (!isSupportedEvidenceSchemaVersion(evidenceSchemaVersion)) {
     issues.push(issue('unsupported_evidence_schema_version', 'evidenceSchemaVersion', `evidenceSchemaVersion '${String(evidenceSchemaVersion)}' is not supported (supported MAJOR: 1)`));
   }
-  validateCaptureBoundary(captureBoundary, 'captureBoundary', issues);
-  const checked = validateObservationList(rawObservations, 'rawObservations');
+  validateCaptureBoundary(captureBoundary, 'captureBoundary', issues, evidenceSchemaVersion);
+  const checked = validateObservationList(rawObservations, 'rawObservations', evidenceSchemaVersion);
   issues.push(...checked.issues);
   if (issues.length > 0) return fail(issues);
 
@@ -114,12 +117,13 @@ export function normalizeEvidenceRecord(
 
   const meta = {
     evidenceSchemaVersion,
-    captureProfile: options.captureProfile ?? defaultCaptureProfile(),
+    captureProfile: captureBoundary.streaming?.captureProfile ?? options.captureProfile ?? defaultCaptureProfile(),
     captureBoundary,
     conditions: options.conditions,
   };
   const derived = deriveTrace(collapsed.events, observations, meta);
   issues.push(...derived.issues);
+  if (captureBoundary.streaming) validateStreamingConsistency(derived.trace, captureBoundary.streaming, issues);
   if (issues.length > 0) return fail(issues);
 
   const analysis = buildAnalysis(collapsed);
@@ -156,15 +160,19 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
     return fail([issue('unsupported_evidence_schema_version', 'evidenceSchemaVersion', `evidenceSchemaVersion '${String(rawVersion)}' is not supported (supported MAJOR: 1)` )]);
   }
   const evidenceSchemaVersion = rawVersion as string;
+  if (isSchema10(evidenceSchemaVersion)) {
+    const ownedPathIssue = findLegacyOwnedPath(input);
+    if (ownedPathIssue) return fail([ownedPathIssue]);
+  }
 
   // ---- Capture boundary ----
   const rawBoundary = input['captureBoundary'];
-  validateCaptureBoundary(rawBoundary, 'captureBoundary', issues);
+  validateCaptureBoundary(rawBoundary, 'captureBoundary', issues, evidenceSchemaVersion);
   if (issues.length > 0) return fail(issues);
   const captureBoundary = rawBoundary as CaptureBoundary;
 
   // ---- Raw observations ----
-  const checked = validateObservationList(input['rawObservations'], 'rawObservations');
+  const checked = validateObservationList(input['rawObservations'], 'rawObservations', evidenceSchemaVersion);
   issues.push(...checked.issues);
   if (issues.length > 0) return fail(issues);
   const observations = checked.observations!;
@@ -189,6 +197,10 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
   };
   const derived = deriveTrace(collapsed.events, observations, meta);
   issues.push(...derived.issues);
+  if (captureBoundary.streaming) {
+    validateStreamingConsistency(derived.trace, captureBoundary.streaming, issues);
+    validateStreamingRecordBudgets(input, observations, derived.trace, captureBoundary.streaming, issues);
+  }
   if (issues.length > 0) return fail(issues);
 
   const analysis = buildAnalysis(collapsed);
@@ -236,6 +248,30 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
   return { ok: true, record: record as EvidenceRecord };
 }
 
+function isSchema10(version: string): boolean {
+  return Number(version.split('.')[1] ?? 0) === 0;
+}
+
+function findLegacyOwnedPath(input: Record<string, unknown>): ValidationIssue | null {
+  const boundary = input['captureBoundary'];
+  if (isRecord(boundary) && boundary['streaming'] !== undefined) return issue('field_not_allowed_in_schema_version', 'captureBoundary.streaming', '1.1-owned field is not allowed in schema 1.0.x');
+  const completeness = input['completeness'];
+  if (isRecord(completeness) && completeness['lifecycle'] !== undefined) return issue('field_not_allowed_in_schema_version', 'completeness.lifecycle', '1.1-owned field is not allowed in schema 1.0.x');
+  if (isRecord(completeness) && completeness['declaredLosses'] !== undefined) return issue('field_not_allowed_in_schema_version', 'completeness.declaredLosses', '1.1-owned field is not allowed in schema 1.0.x');
+  const trace = input['trace'];
+  if (isRecord(trace) && trace['assembly'] !== undefined) return issue('field_not_allowed_in_schema_version', 'trace.assembly', '1.1-owned field is not allowed in schema 1.0.x');
+  for (const root of [input['rawObservations'], isRecord(trace) ? trace['events'] : undefined]) {
+    if (!Array.isArray(root)) continue;
+    for (const entry of root) {
+      if (!isRecord(entry)) continue;
+      const container = 'payload' in entry && isRecord(entry['payload']) ? entry['payload'] : entry;
+      if (!isRecord(container) || !isRecord(container['responseEnvelope'])) continue;
+      for (const key of ['responseMeta', 'choiceIndex', 'deltaText']) if (container['responseEnvelope'][key] !== undefined) return issue('field_not_allowed_in_schema_version', `events[].responseEnvelope.${key}`, '1.1-owned field is not allowed in schema 1.0.x');
+    }
+  }
+  return null;
+}
+
 function validateConditions(value: unknown): readonly Condition[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) return undefined;
@@ -246,4 +282,45 @@ function validateConditions(value: unknown): readonly Condition[] | undefined {
     }
   }
   return out;
+}
+
+function validateStreamingRecordBudgets(
+  input: Record<string, unknown>,
+  observations: readonly EvidenceObservation[],
+  trace: EvidenceTrace,
+  streaming: StreamingCaptureBoundary,
+  issues: ValidationIssue[],
+): void {
+  const budgets = streaming.budgets;
+  if (trace.events.length > budgets.maxCanonicalEvents) issues.push(issue('canonical_event_budget_exceeded', 'trace.events', 'canonical event count exceeds the declared budget'));
+  if (observations.length > budgets.maxRawObservations) issues.push(issue('raw_observation_budget_exceeded', 'rawObservations', 'raw observation count exceeds the declared budget'));
+  const rawPayloadBytes = observations.reduce((total, observation) => total + utf8Encode(JSON.stringify(toJsonView(observation.payload))).byteLength, 0);
+  if (rawPayloadBytes > budgets.maxRawObservationPayloadBytes) issues.push(issue('raw_payload_budget_exceeded', 'rawObservations', 'raw observation payload bytes exceed the declared budget'));
+  const retainedCodePoints = countRetainedCodePoints(trace.events);
+  if (retainedCodePoints > budgets.maxRetainedContentCodePoints) issues.push(issue('retained_content_budget_exceeded', 'trace.events', 'retained content exceeds the declared code-point budget'));
+  const serializedBytes = utf8Encode(JSON.stringify(toJsonView(input))).byteLength;
+  if (serializedBytes > budgets.maxSerializedEvidenceBytes) issues.push(issue('serialized_evidence_budget_exceeded', '$', 'serialized evidence exceeds its declared byte budget'));
+  const ids = observations.flatMap((observation) => [observation.observationId, observation.eventId, observation.traceId]);
+  if (ids.some((id) => utf8Encode(id).byteLength > budgets.maxIdLengthBytes)) issues.push(issue('evidence_id_budget_exceeded', 'rawObservations', 'an evidence identifier exceeds the declared byte bound'));
+}
+
+function countRetainedCodePoints(events: readonly import('./types-event.js').EventRecord[]): number {
+  let count = 0;
+  const countLeaf = (leaf: unknown): void => { if (isRecord(leaf) && typeof leaf['text'] === 'string') count += [...leaf['text']].length; };
+  for (const event of events) {
+    if (event.kind === 'model_response_chunk' && typeof event.responseEnvelope.deltaText === 'string') count += [...event.responseEnvelope.deltaText].length;
+    if (event.kind !== 'model_request' || !Array.isArray(event.requestEnvelope.messages)) continue;
+    for (const message of event.requestEnvelope.messages) {
+      if (!isRecord(message)) continue;
+      const content = message['content'];
+      if (!Array.isArray(content)) { countLeaf(content); continue; }
+      for (const part of content) if (isRecord(part)) {
+        if (part['kind'] === 'text') countLeaf(part['text']);
+        else if (part['kind'] === 'image_url') countLeaf(part['url']);
+        else if (part['kind'] === 'tool_call') countLeaf(part['arguments']);
+        else if (part['kind'] === 'tool_result') countLeaf(part['content']);
+      }
+    }
+  }
+  return count;
 }

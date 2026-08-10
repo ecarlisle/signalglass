@@ -12,7 +12,7 @@ import type {
   LifecycleTarget,
   ObservationRole,
 } from './vocabulary.js';
-import type { ContextContribution } from './types-base.js';
+import type { ContextContribution, LeafRedactionDeclaration, LeafTruncationDeclaration } from './types-base.js';
 import type { RequestEnvelope, ResponseEnvelope } from './types-envelope.js';
 import type { EventId, SpanId, TraceId } from './types-base.js';
 import type { UsageRecord } from './types-base.js';
@@ -74,7 +74,12 @@ export type EventRecord = EventCommon &
         contextContributions?: readonly ContextContribution[];
       }
     | { kind: 'model_response'; responseEnvelope: ResponseEnvelope }
-    | { kind: 'model_response_chunk'; responseEnvelope: ResponseEnvelope }
+    | {
+        kind: 'model_response_chunk';
+        responseEnvelope: ResponseEnvelope;
+        redaction?: LeafRedactionDeclaration;
+        truncation?: LeafTruncationDeclaration;
+      }
     | { kind: 'model_usage'; usage: UsageRecord }
     | { kind: 'tool_call'; tool: ToolCall }
     | { kind: 'tool_result'; toolResult: ToolResult }

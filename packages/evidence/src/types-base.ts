@@ -46,6 +46,21 @@ export type TruncationDeclaration = {
   originalLength: number;
 };
 
+/** Leaf-level redaction declaration (Spec 016 §8.7). Extends the base
+ * redaction declaration with leaf-specific counts. The base declaration
+ * is preserved per Spec 014; parse validates structure/bounds/internal
+ * consistency but cannot prove masked character counts. */
+export type LeafRedactionDeclaration = RedactionDeclaration & {
+  spanCount: number;
+  maskedCodePoints: number;
+};
+
+/** Leaf-level truncation declaration (Spec 016 §8.7). Extends the base
+ * truncation declaration with the retained length. */
+export type LeafTruncationDeclaration = TruncationDeclaration & {
+  retainedLength: number;
+};
+
 /**
  * Declared experimental or environmental condition (Spec 014 §2.2.8;
  * Spec 013 §1.1). Metadata, never evidence of outcome.

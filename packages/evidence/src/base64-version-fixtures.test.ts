@@ -129,8 +129,8 @@ describe('Version-compatibility fixture coverage (Spec 014 §5.3)', () => {
     expect(res.ok).toBe(true);
   });
 
-  it('accepts compatible additive minor revision within supported MAJOR', () => {
-    const record = buildRecord(undefined, buildBoundary(), { evidenceSchemaVersion: '1.1.0' });
+  it('accepts compatible additive patch revision within supported MAJOR', () => {
+    const record = buildRecord(undefined, buildBoundary(), { evidenceSchemaVersion: '1.0.1' });
     const res = parseEvidenceRecord(record as unknown);
     expect(res.ok).toBe(true);
   });

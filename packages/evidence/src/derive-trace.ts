@@ -234,6 +234,7 @@ export function deriveTrace(
     events: [...events].sort((a, b) => a.seq - b.seq),
     ...(finishedAt !== undefined ? { finishedAt } : {}),
     ...(meta.conditions && meta.conditions.length > 0 ? { conditions: meta.conditions } : {}),
+    ...(meta.captureBoundary.streaming ? { assembly: meta.captureBoundary.streaming.assembly } : {}),
   };
 
   return { trace, issues };
