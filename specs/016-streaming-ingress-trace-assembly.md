@@ -2,12 +2,11 @@
 
 ## Status
 
-**Draft — revision 11 (narrow correction pass).** Proposed
-for
-acceptance; **implementation is prohibited until this spec is Accepted**. No
-runtime code is produced by this PR. The proposed modules, contracts, and
-constants below are named but **not created** until an accepted
-implementation slice.
+**Accepted — revision 11 (narrow correction pass).** Proposed for
+acceptance and **accepted by human architectural review**; implementation
+is now permitted. No runtime code is produced by this PR. The proposed
+modules, contracts, and constants below are named but **not created**
+until an accepted implementation slice.
 
 Revision 11 (narrow correction pass) resolves three revision-10 defects
 without redesigning the terminal-suffix or Spec 014 collapse contracts:
@@ -3868,11 +3867,11 @@ reinterpretation.**
   `f18a153a` (it is the base of this branch). This spec's earlier drafts
   and the index misreported it as open/unmerged; that is corrected here
   and in `specs/000-index.md` (Spec 015 row: Implemented, merged).
-- This draft (Spec 016) remains a **docs-only, Draft, unmerged** PR; it
+- This spec (Spec 016) is **docs-only, Accepted, unmerged**; it
   proposes modules it does not create (§11).
 - Version-number corrections: this revision is **revision 11** of the
-  draft (revisions 2 through 11 recorded in the index).
-- The roadmap row for #23 stays "Draft spec 016".
+  spec (revisions 2 through 11 recorded in the index).
+- The roadmap row for #23 is updated to "Accepted spec 016".
 
 ### 19.2 Honest crash / no-record reporting
 
