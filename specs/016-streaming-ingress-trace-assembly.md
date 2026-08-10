@@ -2,7 +2,7 @@
 
 ## Status
 
-**Draft — revision 6 (final focused correction pass).** Proposed for
+**Draft — revision 7 (focused correction pass).** Proposed for
 acceptance; **implementation is prohibited until this spec is Accepted**. No
 runtime code is produced by this PR. The proposed modules, contracts, and
 constants below are named but **not created** until an accepted
@@ -150,6 +150,62 @@ corrections grounded in the implemented types (`types-envelope.ts`,
 9. **Validation truthfulness**: the trailing whitespace near the
    `messageContent` assignment rule is removed; this PR reports the
    actual validation outputs and exit codes (see the PR body).
+
+Revision 7 resolves the revision-6 review blockers — the contracts that
+remained inconsistent or normalized losses away. Each item is grounded in
+the implemented types and closes a concrete gap:
+
+1. **Every retained request-content leaf owns its own honest state**: the
+   normalized request-message shape now serializes a leaf-level
+   representation (retained string + leaf `evidenceStatus` + owning
+   redaction/truncation declarations with real lengths, including a value
+   that was both masked and shortened) directly on the canonical
+   `RequestEnvelope.messages` — raw observations and the canonical trace
+   round-trip identically; the event-level status is a derived aggregate
+   that never authorizes nested leaves for persistence; Rule 1/Rule 2
+   inspect each leaf's own status, declaration, path, and length (§8.7,
+   §14.2).
+2. **The closed role type and the prose are one contract**: unrecognized
+   role strings are **never preserved** — the normalized role is a closed
+   discriminant (`KnownRole | 'unrecognized'` sentinel) and the raw value
+   is dropped, with a closed structural loss fact/code
+   (`unrecognized-role-observed` / `unrecognized-role-not-retained`);
+   metadata labels are bounded (≤ 128 code points, parse-enforced), never
+   content-attested (§8.7, §7.3).
+3. **The in-memory evidence record is bounded**: named evidence budgets
+   with decided defaults and validation (canonical/raw observation count,
+   total retained content code points, serialized evidence bytes, and a
+   reservation guaranteeing the final `observation-detached` event);
+   exhaustion detaches with `record-budget-exceeded`, stops accumulating
+   evidence, continues byte-transparent backpressured passthrough, and
+   still finalizes and saves once after the response ends (§3.5, §9.2,
+   §10.2).
+4. **Request-body and pre-dispatch losses are phase-accurate**: a
+   four-value closed union distinguishes no-bytes-observed from
+   partially-observed and fully-observed-but-not-retained; distinct loss
+   wording for "not fully observed" vs. "observed but not retained";
+   pre-dispatch paths classify `messageContent` per stage — `omitted` +
+   `message-content-not-retained` on valid pre-dispatch paths with no
+   `model_request`, never `not-observed` merely because the canonical
+   event was omitted (§7.3, §10.2).
+5. **The excerpt cap is deterministic**: the
+   `signalglass.collection.ingress-metadata-safe` v1.0.0 cap is exactly
+   240 code points; the runtime-configurable 64–4096 claim is removed; a
+   different cap requires a future capture-profile version **and** a
+   matching policy contract (§8.3, §14.2, §15).
+6. **Omitted SSE metadata is declared, and zero-frame decoder
+   participation is fixed**: `event:`/`id:`/`retry:` values observed but
+   not retained are a closed loss fact (`sse-metadata-not-retained`);
+   comment lines are decided to be protocol keepalives (never retained,
+   never counted); `decoderDisposition: 'openai-sse'` means the SSE
+   decoder was selected and invoked — it may end before the first
+   complete frame (§6.1, §7.3, §13.4).
+7. **Genuine 1.0 compatibility is preserved**: the closed normalized
+   request-message validation applies only to Spec 016 records in schema
+   ≥ 1.1.x; a 1.0.x record with an arbitrary legacy `messages` value
+   parses and round-trips unchanged and is never reinterpreted as the
+   normalized representation; a future minor still receives all known
+   1.1 validation (§13.7, §8.7).
 
 This spec is forecast-only in `docs/roadmap.md` (anticipated PR #23,
 documentation-only; the implementation slices are a later, accepted
@@ -317,7 +373,7 @@ interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 | **Completeness summary** | The assembler-level accounting of what was observed, dropped, and declared (§12.5); its persisted projection is the derived `completeness` (§13.4). |
 | **Capture profile** | The named, versioned bundle of collection settings recorded on the trace (`trace.captureProfile`, Spec 013 §9) and authoritatively on `captureBoundary.streaming.captureProfile` (§13.4). |
 | **Declared content** | Content admitted under an owning `redacted`/`truncated` declaration (Spec 015 `metadata-safe`). |
-| **Bounded captured content** | Content admitted as `captured` under the explicit `metadata-safe` v1.1.0 rule — admitted only at a closed list of paths, bounded by the configured cap (code points, per Spec 015's own counting), and subject to the mandatory storage-safety gate; **not** admitted by claimed pedigree (§14.2). |
+| **Bounded captured content** | Content admitted as `captured` under the explicit `metadata-safe` v1.1.0 rule — admitted only at a closed list of paths, bounded by the v1.0.0 profile cap (240 code points, per Spec 015's own counting), and subject to the mandatory storage-safety gate; **not** admitted by claimed pedigree (§14.2). |
 | **Loss fact** | A closed, applicability-aware authoritative fact about retention — e.g. `'not-observed' | 'fully-retained' | 'partially-retained' | 'omitted'` or `'not-applicable' | 'retained' | 'not-retained'` (§7.3). |
 | **Operational observation** | An in-memory result of the save step (`PersistenceObservation`), emitted after the save and never persisted inside the canonical record (§16.2). |
 | **Retained excerpt** | The bounded representation of content the collection process retains: normalized text, an honest owning status, and the owning declarations (§8). |
@@ -413,7 +469,7 @@ lifecycle targeting, and completeness:
 |---|---|---|---|---|---|
 | **Malformed provider protocol** | `data` value is not valid JSON; invalid UTF-8 in a data value; non-integer/negative/duplicate choice index; EOF or partial frame without `[DONE]` | `failed` | `error` — the record's **final** event (Spec 014 §4.7: no `interaction_end` after a terminal declaration) | actor `model`; `lifecycleTarget: "trace"`, `lifecycleEffect: "fail"`; observationRole `provider_reported` (the provider's stream was observed to violate the protocol) | Declares the malformed frame and the unobserved remainder |
 | **Unrecognized provider extension** (valid JSON, unknown shape) | A frame that decodes to no recognized chunk/usage/error/done shape | Unaffected (not terminal) | None | — | Declared loss `unrecognized-extension-frame`; observation **continues** |
-| **Internal observer failure** | Parser/decoder/assembler exception; frame-overflow observation bound; unsupported content-encoding; decoder-tee decode failure | `unknown` | Informational `error` (actor `capture`, `lifecycleTarget: "none"`, `lifecycleEffect: "none"`) — the record's **final** event; no `interaction_end` | actor `capture`; observationRole `unobservable` | Declares observation detachment and the unknown remainder |
+| **Internal observer failure** | Parser/decoder/assembler exception; frame-overflow observation bound; evidence-budget exhaustion (§3.5); unsupported content-encoding; decoder-tee decode failure | `unknown` | Informational `error` (actor `capture`, `lifecycleTarget: "none"`, `lifecycleEffect: "none"`) — the record's **final** event; no `interaction_end` | actor `capture`; observationRole `unobservable` | Declares observation detachment and the unknown remainder |
 
 Rules:
 
@@ -718,6 +774,53 @@ declared honestly.**
   (subject to the storage-safety gate and persistence policy, which may
   refuse a specific record — §16).
 
+### 3.5 Evidence budgets: bounded in-memory assembly
+
+The record is assembled in memory across the whole stream (§3.1); the
+spec therefore defines **named evidence budgets** — the stream's own chunk
+count is not a bound, and a provider can emit an arbitrarily long stream
+without `[DONE]`. Budgets are decided, validated at ingress configuration
+(closed values; out-of-range configuration is refused at startup, never
+silently clamped), and recorded conceptually with the capture profile
+(§15.1; the budgets themselves are ingress configuration, not record
+fields — the record carries only the profile identity):
+
+| Budget | Default | Valid range | Counts toward |
+|---|---|---|---|
+| `maxCanonicalEvents` | 10,000 | 1,000 – 1,000,000 | canonical events emitted (incl. control events) |
+| `maxRawObservationPayloadBytes` | 4 MiB | 1 MiB – 64 MiB | serialized raw observation payloads |
+| `maxRetainedContentCodePoints` | 262,144 | 16,384 – 16,777,216 | total retained content (request leaves §8.7 + `deltaText` §13.5), code points |
+| `maxSerializedEvidenceBytes` | 16 MiB | 1 MiB – 64 MiB | estimated serialized `EvidenceRecord` growth |
+| `finalEventReservation` | 4 KiB | 1 KiB – 64 KiB | headroom reserved so the terminal `observation-detached` event can always be emitted |
+
+Behavior on exhaustion (closed, deterministic):
+
+1. **Detach observation with `record-budget-exceeded`** (§9.2 — a new
+   closed member of `ObservationFailureCode`; §1.4 internal-observer
+   failure). The detach is an observation decision, never a transport
+   decision.
+2. **Stop accumulating evidence**: no further canonical events, no further
+   raw observation payloads, no further retained text. The `finalEventReservation`
+   guarantees the informational `error` (actor `capture`) that finalizes
+   the record fits even when the budget was hit exactly at the boundary.
+3. **Continue byte-transparent, backpressured client passthrough** — the
+   client traffic is never cancelled, truncated, or mutated because
+   observation filled its budget (§5).
+4. **Derive the honest losses**: remainder knowledge is `unknown`;
+   `remainder-after-observation-detach-not-observed` is derived (the
+   observation terminal is `observation-detached`); if the terminal had
+   already been observed, the post-terminal fact is `unknown` and
+   `post-terminal-content-unknown` is derived — the spec never asserts
+   unobserved content was absent (§6.6, §7.3).
+5. **Still finalize and attempt the one canonical save** after the
+   client-response path ends (§3.2): the budget-exhausted record is a
+   valid `observation-detached` record (status `unknown`) and takes the
+   same persistence path as every other record (§16).
+
+Adversarial tests (T125–T127, §21.13) prove a never-ending or
+high-chunk-count stream cannot grow evidence memory without bound and that
+the transport path is unaffected by budget exhaustion.
+
 ---
 
 ## 4. Identity and deterministic ordering
@@ -947,10 +1050,10 @@ behavior matrix:
 
 | Input | Behavior |
 |---|---|
-| Comment lines (`:`) | Skipped (not canonical events) |
+| Comment lines (`:`) | Skipped (not canonical events). **Decided**: comment values are **protocol keepalives only** — never retained, never counted as observed SSE metadata, and never declared as a loss (they carry no semantic value; §7.3 `sse-metadata-not-retained` covers `event:`/`id:`/`retry:` only) |
 | Blank lines | Frame terminator |
 | `data:` lines (multiline) | Joined with `\n` (spec-conformant) |
-| `event:` / `id:` / `retry:` fields | Parsed; not canonical events (their values are not retained) |
+| `event:` / `id:` / `retry:` fields | Parsed; not canonical events. **Their values are observed but not retained**, and that non-retention is a declared loss: the closed fact `losses.sseMetadataObservedButNotRetained` (set when any such field value was observed) derives the code `sse-metadata-not-retained` (§7.3). The raw provider-controlled field values are **never** persisted in the fact or the loss — only the closed boolean fact and the code |
 | CRLF, LF, CR line endings | Accepted per spec |
 | Frame split across chunks | Accumulated until the blank line; memory-bounded (16 MiB frame cap) |
 | Multi-byte UTF-8 split across chunks | Decoded **per frame** (chunks are not concatenated into one string; each frame is decoded independently) |
@@ -1168,10 +1271,15 @@ describes the transformation actually applied to the retained representation**:
   Applying the length boundary to content that fits within it removes
   nothing; declaring `truncated` would declare a loss that did not occur.
 - `truncated` and `redacted` carry the owning
-  `TruncationDeclaration`/`RedactionDeclaration` on the raw observation
-  payload (Spec 013 §2.2.12, §5.8; projection rows E2L-078..080). Declaration
+  `TruncationDeclaration`/`RedactionDeclaration` **on the serialized
+  retained leaf itself** — for request content on each `ContentLeaf`
+  (§8.7) and for chunk deltas at event level (one leaf per chunk event,
+  §13.5) — which round-trips identically through `rawObservations` and the
+  canonical trace (Spec 013 §2.2.12, §5.8; projection rows E2L-078..080).
+  Declaration
   lengths must agree with the actual transformation (`maxLength` /
-  `originalLength` reflect real character counts).
+  `originalLength` reflect real character counts; a leaf masked **and**
+  shortened carries both declarations, §8.7).
 - **Loss codes follow the same honesty rule**: content-retention losses are
   declared **only when content was actually not retained**; fully retained
   benign content produces no such loss (§7.3).
@@ -1225,22 +1333,34 @@ type UnmappedDeltaFieldCategory =            // closed — raw provider keys are
 
 type Retention4 = 'not-observed' | 'fully-retained' | 'partially-retained' | 'omitted';
 type Retention3 = 'not-applicable' | 'retained' | 'not-retained';
-type RequestBodyRetention = 'not-observed' | 'retained' | 'not-retained';  // exact: no 'not-applicable' —
-                                                                           // a body was either read (retained/
-                                                                           // not-retained) or could not be read
-                                                                           // (not-observed)
+
+type RequestBodyRetention =                 // phase-accurate: observation and retention, one closed union
+  | 'no-bytes-observed'                      // zero body bytes were observed (body-read failure at the start);
+                                             //   there was nothing to retain and nothing was fully read
+  | 'partially-observed-not-retained'        // some but not all body bytes were observed (mid-body connection
+                                             //   loss, over-limit cutoff); the partial body was not retained
+  | 'fully-observed-not-retained'            // the complete request body was observed and intentionally not
+                                             //   retained (the default for valid requests)
+  | 'retained';                              // the body was retained (never in the default profile)
+
 type PostTerminal = 'none-observed' | 'observed-not-retained' | 'unknown';
 
 type DecoderDisposition =                    // authoritative decoder-participation fact (§13.4)
   | 'not-applicable'                         // no SSE decoding possible/needed: header-less path, non-SSE 2xx,
                                              // upstream non-2xx, invalid-body 2xx
-  | 'openai-sse'                             // the OpenAI SSE decoder participated (decoded at least one frame)
+  | 'openai-sse'                             // the SSE observation path was selected and the OpenAI SSE decoder
+                                             //   was invoked. Participation is selection/invocation, NOT
+                                             //   "decoded at least one frame": headers followed by EOF or
+                                             //   transport failure before the first complete frame is still
+                                             //   'openai-sse' with a decoderContract (§13.4)
   | 'unsupported-encoding';                  // SSE observation path selected, but the content encoding is
                                              // unsupported — the decoder was selected but could not run
 
 losses = {
-  requestBody: RequestBodyRetention,         // 'not-observed' only for body-read failures (no body was read)
-  messageContent: Retention4,                // 'not-observed' when no request messages were observed
+  requestBody: RequestBodyRetention,         // phase-accurate (§7.3.1 assignment rules)
+  messageContent: Retention4,                // 'not-observed' when no request-message content was ever formed;
+                                             //   'omitted' when content existed but no canonical representation
+                                             //   was written (valid pre-dispatch paths, §7.3.1)
   deltaContent: Retention4,                  // 'not-observed' when no content chunks were observed
   providerNative: Retention3,                // 'not-applicable' when no provider response existed (pre-dispatch)
   providerErrorBody: Retention3,             // 'not-applicable' when no provider error occurred
@@ -1254,22 +1374,38 @@ losses = {
   contentEncodingUnsupported: boolean,
   multimodalContentObserved: boolean,        // any multimodal request part observed (payloads not retained, §8.7)
   requestMessageUnknownKeysObserved: boolean, // any unknown message key / unknown part kind observed (§8.7)
+  unrecognizedRoleObserved: boolean,         // any unrecognized request-message role observed; the raw value is
+                                             //   NEVER retained — only this closed fact + the derived loss (§8.7)
+  sseMetadataObservedButNotRetained: boolean, // any `event:`/`id:`/`retry:` field value observed on the SSE
+                                             //   stream and not retained; comment lines are keepalives and are
+                                             //   NEVER counted here (§6.1). Raw field values are never stored
 };
 ```
 
 Assignment rules (applicability-aware):
 
-- `requestBody`: `'not-observed'` **only** when the request body could not
-  be read (body-read failure); otherwise `'not-retained'` (default — full
-  bodies are never retained) or `'retained'` (never in the default profile).
-  `'not-applicable'` is **not** a value of this fact: a body was either
-  read or not.
+- `requestBody` (phase-accurate): `'no-bytes-observed'` **only** when body
+  processing ended before any byte was observed (a body-read failure at the
+  start); `'partially-observed-not-retained'` when body processing ended
+  with only part of the body read (mid-body connection loss, the over-limit
+  cutoff); `'fully-observed-not-retained'` when the complete body was read
+  and intentionally not retained (the default for valid requests);
+  `'retained'` never in the default profile. An over-limit body or a
+  connection failure partway through the body is **never** described as
+  "no body was read" — it is `'partially-observed-not-retained'` with the
+  derived wording "not fully observed" (§7.3.2).
 - `messageContent`/`deltaContent`: `'fully-retained'` when every retained
-  representation is complete at the boundary (benign ≤ cap);
-  `'partially-retained'` when any representation was shortened by the
-  boundary; `'omitted'` when content was masked-omitted wholesale;
-  `'not-observed'` when no request messages / no content chunks existed.
-  Aggregate precedence across representations is defined in §7.3.3.
+  representation is complete at the boundary; `'partially-retained'` when
+  any representation was shortened by the boundary; `'omitted'` when
+  content existed but no canonical representation was written — including
+  **valid pre-dispatch paths** (missing key, key-unavailable, unroutable)
+  where the complete valid request and its normalized message content were
+  observed but no `model_request` is emitted (§10.2): the fact is
+  `'omitted'`, **never** `'not-observed'` merely because the canonical
+  event was omitted; `'not-observed'` is exact — no request-message
+  content was ever formed (invalid JSON, body-read failure, over-limit
+  cutoff). Aggregate precedence across representations is defined in
+  §7.3.3.
 - `providerNative`: `'retained'` only under the `providerNative` contract
   (§7.2); `'not-retained'` when a provider response existed and native JSON
   was not retained; `'not-applicable'` when no provider response existed
@@ -1296,8 +1432,9 @@ these codes and is never the only persisted loss record.**
 
 | Code | Meaning (derived display sentence) | Derived only when |
 |---|---|---|
-| `request-body-not-retained` | The full request body was not retained. | `losses.requestBody === 'not-retained'` |
-| `message-content-not-retained` | Request message content beyond the retained representation was not retained. | `losses.messageContent === 'partially-retained' \|\| 'omitted'` |
+| `request-body-not-retained` | The full request body was observed but not retained. | `losses.requestBody === 'fully-observed-not-retained'` |
+| `request-body-not-fully-observed` | The request body was not fully observed (zero bytes or only part of it). Distinct wording from "observed but not retained": the body processing ended before the complete body was read. | `losses.requestBody === 'no-bytes-observed' \|\| 'partially-observed-not-retained'` |
+| `message-content-not-retained` | Request message content beyond the retained representation was not retained. | `losses.messageContent === 'partially-retained' \|\| 'omitted'` — incl. valid pre-dispatch paths (missing key / key-unavailable / unroutable) where normalized message content was observed but no `model_request` was emitted (§7.3.1) |
 | `delta-content-not-retained` | Chunk delta content beyond the retained representation was not retained. | `losses.deltaContent === 'partially-retained' \|\| 'omitted'` |
 | `unmapped-delta-fields` | Content-delta sub-fields not represented by the canonical text delta were not retained. | `losses.unmappedDeltaFields.length > 0` |
 | `provider-native-not-retained` | The provider-native payload was not retained. | `losses.providerNative === 'not-retained'` — **never** when `'not-applicable'` (no provider response) |
@@ -1308,10 +1445,12 @@ these codes and is never the only persisted loss record.**
 | `remainder-after-observation-detach-not-observed` | Content after observation detached was not observed or retained. | observation terminal is `observation-detached` (event-derived, §13.2) |
 | `remainder-after-client-cancellation` | The stream remainder after client cancellation was not retained. | observation terminal is `client-cancelled` **and a response stream/remainder existed** (headers were observed — `decoderDisposition` is `openai-sse`/`unsupported-encoding` or `model_response` exists); **never** when cancellation happened before any response bytes |
 | `remainder-after-ingress-cancellation` | The stream remainder after ingress cancellation was not retained. | observation terminal is `ingress-cancelled` **and a response stream/remainder existed** (as above); **never** on pre-headers cancellation |
-| `provider-usage-absent` | The provider reported no usage. | no `model_usage` event observed **and** `decoderDisposition === 'openai-sse'` (an SSE provider response was observed and decoded) — **never** on request-failed, connect-failed, HTTP-error, non-SSE, or header-less paths |
-| `finish-reason-absent` | The stream ended without a finish reason. | no chunk envelope carried `finishReason` **and** `decoderDisposition === 'openai-sse'` (a finish reason was applicable to an observed SSE stream) — **never** on non-SSE or header-less paths |
+| `provider-usage-absent` | The provider reported no usage. | no `model_usage` event observed **and** `decoderDisposition === 'openai-sse'` (an SSE provider response was observed and the decoder was invoked) — **never** on request-failed, connect-failed, HTTP-error, non-SSE, header-less, or zero-frame-failure paths (an SSE stream that ended before producing any frame derives no usage claim) |
+| `finish-reason-absent` | The stream ended without a finish reason. | no chunk envelope carried `finishReason` **and** `decoderDisposition === 'openai-sse'` (a finish reason was applicable to an observed SSE stream) — **never** on non-SSE, header-less, or zero-frame-failure paths (an SSE stream that ended before producing any frame derives no finish-reason claim) |
 | `multimodal-payload-not-retained` | Multimodal request-part payloads were not retained (only bounded metadata). | `losses.multimodalContentObserved === true` (§8.7) |
 | `request-message-unknown-fields` | Unknown request-message keys / unknown part kinds were not retained (fail-closed). | `losses.requestMessageUnknownKeysObserved === true` (§8.7) |
+| `unrecognized-role-not-retained` | An unrecognized request-message role was observed and its raw value was not retained (the closed `'unrecognized'` sentinel replaces it). | `losses.unrecognizedRoleObserved === true` (§8.7) |
+| `sse-metadata-not-retained` | SSE `event:`/`id:`/`retry:` field values were observed and not retained. Comment lines are protocol keepalives and are never counted (§6.1). | `losses.sseMetadataObservedButNotRetained === true` — only on an observed SSE stream (`decoderDisposition` is `openai-sse`/`unsupported-encoding`); never on non-SSE, header-less, or pre-dispatch paths |
 | `unrecognized-provider-field` | Provider JSON fields not mapped to the canonical model were not retained. | decoder classification facts (unmapped fields beyond the closed delta categories) |
 | `unrecognized-extension-frame` | A frame that decoded to no recognized shape was not retained. | `losses.unrecognizedExtensionFrameObserved === true` |
 | `response-header-values-not-retained` | Upstream response header values outside the allowlist were not retained. | `losses.headerValuesBeyondAllowlist === true` |
@@ -1374,14 +1513,40 @@ canonical events and declarations, and parse rejects disagreement
   `deltaContent ∈ {'partially-retained', 'omitted'}`;
 - `deltaContent === 'not-observed'` ⇒ **no** chunk event carries a retained
   `deltaText`;
-- `messageContent === 'not-observed'` ⇒ no request-message content leaves
-  exist (empty or absent `messages`);
+- **leaf-level request ownership** (the aggregate never authorizes leaves):
+  - the `model_request` event-level `evidenceStatus` (when present) must
+    equal the §7.3.3 aggregate precedence of the leaf statuses — a forged
+    aggregate that disagrees with the serialized leaves fails parse;
+  - each serialized leaf's `evidenceStatus` is authoritative for that leaf
+    alone: a leaf with `redacted` requires its own `redaction`
+    declaration; a leaf with `truncated` requires its own `truncation`
+    declaration; a leaf may carry **both** declarations (masked **and**
+    shortened — neither transformation is erased), in which case its
+    status is `redacted` (precedence) and both declarations must hold;
+  - `truncation.maxLength` must equal the applied cap (240 for the
+    v1.0.0 profile, §8.3); `truncation.originalLength` ≥
+    `truncation.retainedLength`; `truncation.retainedLength` equals the
+    retained leaf text length in code points; `redaction.maskedCodePoints`
+    is a real masked count ≥ 1 per span, and `redaction.spanCount` ≥ 1;
+  - a missing, malformed, or contradictory leaf declaration (e.g.
+    `redacted` without `redaction`, or a declaration whose lengths disagree
+    with the retained text) fails parse;
+  - `messageContent === 'not-observed'` ⇒ no request-message content leaves
+    exist (empty or absent `messages`, or no normalized messages were ever
+    formed on a pre-dispatch path); `messageContent === 'omitted'` ⇒
+    content leaves existed in the observed request but no canonical
+    representation was written (valid pre-dispatch path, §7.3.1);
 - any content leaf with owning status `redacted` ⇒ `maskedContent === true`;
 - `maskedContent === true` ⇒ at least one leaf carries `redacted`;
 - `providerNative === 'retained'` ⇒ at least one event carries a
   `providerNative` payload with an owning status;
 - declaration lengths (`maxLength`/`originalLength`) agree with the actual
   retained representations;
+- `unrecognizedRoleObserved === true` ⇒ at least one normalized message
+  carries `role: 'unrecognized'` (and vice versa); the raw unknown role
+  value appears nowhere in the record;
+- `sseMetadataObservedButNotRetained === true` ⇒ at least one parsed SSE
+  frame carried an `event:`/`id:`/`retry:` field on an observed SSE path;
 - a fact and an event cannot disagree (e.g. `'fully-retained'` with a
   `truncated` status is a parse failure, not a warning).
 
@@ -1463,8 +1628,11 @@ pre-filter that the persistence policy can be blamed for bypassing):
      post-redaction candidate length);
    - `captured` — the retained representation is complete at the declared
      boundary (benign content that fits the cap);
-   the owning `RedactionDeclaration`/`TruncationDeclaration` (when present)
-   records real lengths.
+   each retained request-content leaf serializes its own status and its own
+   `RedactionDeclaration`/`TruncationDeclaration` (real lengths; a leaf
+   masked **and** shortened carries both declarations, §8.7); chunk deltas
+   carry the same declarations at event level (one leaf per chunk event,
+   §13.5).
 5. **Declare** — the loss facts and declarations are attached; the
    `metadata-safe` v1.1.0 classification then sees either declared content
    or bounded captured content at the closed admitted paths (§14.2).
@@ -1472,21 +1640,29 @@ pre-filter that the persistence policy can be blamed for bypassing):
    persistence policy are **non-bypassable** and run on every save,
    including saves of records produced by the collection pipeline.
 
-### 8.3 Excerpt bounds (decided, not tuning-only)
+### 8.3 Excerpt bounds (decided, deterministic)
 
-- Default cap: **240 code points** (matching the reference policy's own
-  character counting — `countCodePoints`, Spec 015).
-- Valid configured range: **64–4096 code points**.
+- **The `signalglass.collection.ingress-metadata-safe` v1.0.0 cap is
+  exactly 240 code points** — matching the reference policy's own character
+  counting (`countCodePoints`, Spec 015). There is **no
+  runtime-configurable range**: parsers and policies can always know the
+  interaction's cap from the serialized record because the v1.0.0 profile
+  identity **is** the cap. (The revision-6 "valid 64–4096" claim is
+  removed: a parser or policy cannot know a runtime-configured cap from the
+  record, and the record never carries a record-supplied cap.)
 - The cap is the **maximum retained length per string leaf** — each
-  retained string (a request-message content leaf, §8.7, or a chunk's
-  `deltaText`, §13.5) is bounded **independently**. There is **no
-  aggregate cap** across leaves: the leaf count is bounded by the
-  request-body size limit (Spec 006: an over-limit body is rejected
-  before dispatch) and by the stream's own chunk count, so total retained
-  text is bounded by (leaf count) × cap without an unbounded aggregate.
-- Changing the default cap requires a **capture-profile version bump** (the
-  profile is versioned and recorded per record, §15). The range and the
-  version-bump rule are normative, so this is no longer an open question.
+  retained request-content leaf (§8.7) and each chunk's `deltaText`
+  (§13.5) is bounded **independently** at 240 code points. **Total
+  retained content is bounded by the decided evidence budget
+  `maxRetainedContentCodePoints`** (§3.5) — the leaf count is **not** left
+  to "the stream's own chunk count", which is not a bound.
+- **Changing the cap requires a capture-profile version bump AND a matching
+  policy contract**: a future profile version (e.g. `v1.1.0` with cap 512)
+  is meaningless without a corresponding persistence-policy contract that
+  validates against that cap; the v1.0.0 profile and the `metadata-safe`
+  v1.0.0/v1.1.0 policies recognize exactly 240 code points (§14.2, §15.1).
+  The version-bump rule is normative, so this is no longer an open
+  question.
 
 ### 8.4 Structural error text
 
@@ -1517,8 +1693,8 @@ pre-filter that the persistence policy can be blamed for bypassing):
   protection** for the bounded captured text. Consequences:
   - the detector version is part of the capture profile and is recorded
     (§15);
-  - the cap bounds the maximum retained text (≤ configured cap, default
-    240 code points);
+  - the cap bounds the maximum retained text (≤ 240 code points for the
+    v1.0.0 profile, §8.3);
   - a detector miss can reach the storage-safety gate; a rejection is
     surfaced as `safety-rejected` and is never auto-labeled a code defect
     (§8.6);
@@ -1552,81 +1728,139 @@ pre-filter that the persistence policy can be blamed for bypassing):
 
 `RequestEnvelope.messages` is typed `unknown` in the 1.0.0 model; Spec 016
 **defines the exact normalized representation the streaming assembler
-writes** — the shape the persistence rule's "message content length ≤ cap"
-actually measures. The normalized representation is closed and
-fail-closed: **an arbitrary object's serialized length is never treated as
-message-content attestation** — only the closed string-leaf paths below are
-content, measured per leaf in code points.
+writes into schema ≥ 1.1.x records only** (§13.7) — the shape the
+persistence rule's "message content length ≤ cap" actually measures. A
+1.0.x record's `messages` value is arbitrary legacy data, parsed and
+round-tripped unchanged, **never reinterpreted** as this representation
+(§13.7). The normalized representation is closed and fail-closed: **an
+arbitrary object's serialized length is never treated as message-content
+attestation** — only the closed leaf strings below are content, measured
+per leaf in code points.
+
+**Every retained string on a content path is a serialized `ContentLeaf`**
+carrying the retained string, its **own** evidence status, and its **own**
+redaction/truncation declarations with real lengths. The leaf is the
+canonical serialized form: the assembler writes the same value to the
+canonical `model_request.requestEnvelope.messages` **and** the raw
+observation payload, so serializer/parse round trips through both are
+identical — there is no raw-only side channel and nothing is discarded
+during projection (Spec 014 raw-observation participation).
 
 ```ts
-// canonical normalized request representation (assembler L4 output)
-type NormalizedRole =
-  | 'system' | 'user' | 'assistant' | 'tool' | 'developer' | 'function';
+// canonical normalized request representation (assembler L4 output, schema ≥ 1.1.x only)
+type KnownRole = 'system' | 'user' | 'assistant' | 'tool' | 'developer' | 'function';
+type NormalizedRole = KnownRole | 'unrecognized';   // closed; the raw unknown role string is
+                                                    // NEVER retained — only the sentinel (§7.3
+                                                    // unrecognized-role-not-retained)
 
-type NormalizedContentPart =
-  | { kind: 'text'; text: string }                              // content leaf
-  | { kind: 'image_url'; url: string }                          // metadata leaf (URL string, bounded);
-                                                                // the image payload is never retained (§7.3 multimodal-payload-not-retained)
-  | { kind: 'tool_call'; id: string; name: string; arguments: string }  // arguments = content leaf (opaque JSON text)
-  | { kind: 'tool_result'; toolCallId: string; content: string }         // content leaf
+type LeafOwnerStatus = 'captured' | 'truncated' | 'redacted';   // closed (§7.1); describes the
+                                                                // transformation actually applied to THIS leaf
 
-type NormalizedRequestMessage = {
-  role: NormalizedRole;                     // role metadata; unrecognized role strings are preserved as
-                                            // observed metadata — never content-attested, never length-measured
-  content: string | readonly NormalizedContentPart[];
-  name?: string;                            // metadata (function/tool name), bounded ≤ 128 code points
+type RedactionDeclaration = {           // real masked-characters accounting
+  spanCount: number;                    // number of sensitive spans actually masked (≥ 1)
+  maskedCodePoints: number;             // real masked character count (code points, ≥ 1 per span)
 };
 
-// RequestEnvelope.messages: readonly NormalizedRequestMessage[]
+type TruncationDeclaration = {          // real retained-characters accounting
+  originalLength: number;               // post-redaction candidate length (code points)
+  retainedLength: number;               // retained length (code points; equals leaf text length)
+  maxLength: number;                    // the applied cap — exactly 240 for the v1.0.0 profile (§8.3)
+};
+
+type ContentLeaf = {                    // the exact serialized leaf: the only content home
+  text: string;                         // retained string: post-redaction, then post-boundary
+  evidenceStatus: LeafOwnerStatus;      // owns THIS leaf only — never borrowed from the event
+  redaction?: RedactionDeclaration;     // present iff a span was actually masked
+  truncation?: TruncationDeclaration;   // present iff characters were actually removed
+};
+// A leaf that was BOTH masked and shortened carries BOTH declarations; its
+// evidenceStatus is 'redacted' (precedence) — neither transformation is erased.
+
+type NormalizedContentPart =
+  | { kind: 'text'; text: ContentLeaf }                       // content leaf
+  | { kind: 'image_url'; url: ContentLeaf }                   // bounded URL string leaf (≤ 240);
+                                                              //   the image payload is never retained
+                                                              //   (§7.3 multimodal-payload-not-retained)
+  | { kind: 'tool_call'; id: string; name: string; arguments: ContentLeaf }   // arguments = content leaf
+  | { kind: 'tool_result'; toolCallId: string; content: ContentLeaf };        // content = content leaf
+
+type NormalizedRequestMessage = {
+  role: NormalizedRole;                 // closed role discriminant; the 'unrecognized' sentinel is
+                                        //   the only trace of an unknown role value — the raw value is
+                                        //   never retained and never length-measured as content
+  content: ContentLeaf | readonly NormalizedContentPart[];   // string-form content is ONE leaf
+  name?: string;                        // bounded metadata label (≤ 128 code points, parse-enforced),
+                                        //   never content-attested
+};
+
+// RequestEnvelope.messages: readonly NormalizedRequestMessage[]  (schema ≥ 1.1.x records only)
 ```
 
 Rules:
 
 - **Array/object structure**: `messages` is an array of message objects;
   each object has exactly the permitted keys `role`, `content`, `name`.
-  `content` is a string (common case) or an array of closed content parts.
-- **Role handling**: `role` is metadata. Known roles are normalized to the
-  closed set; an unrecognized role string is preserved as observed
-  (metadata) — it is never content-attested and never length-measured.
-- **Content leaves (the only measured strings)**: `content` in string
-  form; `content[].text`; `content[].tool_call.arguments`;
-  `content[].tool_result.content`; `content[].image_url.url` (a bounded
-  URL string). Each leaf is measured **per leaf** in code points against
-  the cap (default 240, valid 64–4096, §8.3); no aggregate cap (§8.3).
-- **Metadata (never measured)**: `role`, `name`, `tool_call.id`,
-  `tool_call.name`, `tool_result.toolCallId` — bounded labels
-  (≤ 128 code points, Spec 014 label rules), never content-attested.
+  `content` is a single `ContentLeaf` (common string case) or an array of
+  closed content parts. **A plain string is not a valid serialized leaf**
+  — string-form content is the leaf object `{ text, evidenceStatus,
+  redaction?, truncation? }`.
+- **Role handling (one exact contract)**: `role` is a closed discriminant
+  from `KnownRole | 'unrecognized'`. An unrecognized role string is
+  **never preserved** — it is replaced by the `'unrecognized'` sentinel
+  and the closed loss fact `unrecognizedRoleObserved` derives
+  `unrecognized-role-not-retained` (§7.3). The spec never claims "closed
+  roles" while preserving arbitrary strings: the raw value appears nowhere
+  in the record. Role and other metadata labels are **bounded** (≤ 128
+  code points, parse-enforced) and never content-attested or
+  length-measured as content.
+- **Content leaves (the only measured strings)**: every content string is
+  a leaf: string-form `content.text`; `content[].text.text`;
+  `content[].tool_call.arguments.text`;
+  `content[].tool_result.content.text`; `content[].image_url.url.text`
+  (bounded URL). Each leaf is measured **per leaf** in code points against
+  the v1.0.0 cap (exactly 240, §8.3); total retained content is bounded by
+  `maxRetainedContentCodePoints` (§3.5).
+- **Leaf-level ownership**: each leaf's `evidenceStatus` and declarations
+  describe that leaf's own transformation. A leaf with `captured` has no
+  declarations; `truncated` requires `truncation`; `redacted` requires
+  `redaction`; both requires both (§7.3.3 cross-validation).
+- **The event-level status is a derived aggregate, never an authority**: the
+  `model_request` event-level `evidenceStatus` (and the `messageContent`
+  fact) is the §7.3.3 aggregate precedence of the leaf statuses. It
+  **never authorizes nested leaves for persistence**: a `captured`
+  event-level status does not make any leaf admissible, and a forged
+  aggregate that disagrees with the serialized leaves fails parse.
+- **Metadata (never measured)**: `role` (closed discriminant), `name`,
+  `tool_call.id`, `tool_call.name`, `tool_result.toolCallId` — bounded
+  labels (≤ 128 code points, parse-enforced), never content-attested.
 - **Unknown-key behavior (fail-closed)**: a message key outside
   `role`/`content`/`name`, or a content part whose `kind` is outside the
   closed set, is **not normalized, not retained, and never used for length
   attestation**; it is declared via `request-message-unknown-fields`
   (§7.3) — the message's own known leaves may still be retained.
 - **Multimodal/tool-call parts**: `tool_call`/`tool_result` parts retain
-  their content leaves per the cap; `image_url` parts retain only the
-  bounded URL string — the binary payload is never retained
+  their content leaves (each ≤ 240); `image_url` parts retain only the
+  bounded URL leaf — the binary payload is never retained
   (`multimodal-payload-not-retained` when any multimodal part was
   observed, §7.3). Unsupported part kinds (e.g. audio) are fail-closed
   unknown parts (§8.7 unknown-key rule).
-- **Redaction/truncation ownership**: each content leaf is processed by
-  the collection pipeline (§8.2) and its owning status + declaration live
-  on the raw observation payload (per-leaf `RedactionDeclaration`/
-  `TruncationDeclaration`); the retained (already-transformed) text is
-  what the normalized `messages` array carries. The event-level
-  `evidenceStatus` on `model_request` reflects the most severe
-  transformation applied to any retained leaf (precedence:
-  `redacted` > `truncated` > `captured`); the aggregate fact is
-  `messageContent` (§7.3.1) with precedence per §7.3.3.
-- **Captured-content policy paths** (Rule 2, §14.2): the closed admitted
-  request paths are `messages[].content` (string form),
-  `messages[].content[].text`, `messages[].content[].tool_call.arguments`,
-  `messages[].content[].tool_result.content`, and
-  `messages[].content[].image_url.url`. Every other nested string path is
-  metadata or excluded — never admitted as captured content.
-- Serialization/parse validation: the shape above is enforced at parse
-  (unknown keys/part kinds are only allowed to be absent — the
-  normalized form never contains them); length bounds are enforced per
-  leaf; the boundary `messageContent` fact must agree with the event
-  statuses (§7.3.3 cross-validation).
+- **Captured-content policy paths** (Rule 2, §14.2) — the actual serialized
+  string locations: `messages[].content.text` (string-form leaf),
+  `messages[].content[].text.text`, `messages[].content[].tool_call.arguments.text`,
+  `messages[].content[].tool_result.content.text`, and
+  `messages[].content[].image_url.url.text`. Every other string path is a
+  metadata label or excluded — never admitted as captured content. Rule 1
+  and Rule 2 inspect **each leaf's own status, declaration, path, and
+  length** (§14.2).
+- **Version-aware scope**: the closed shape, leaf validation, and
+  admitted paths apply to schema ≥ 1.1.x records only; a 1.0.x record's
+  `messages` is arbitrary legacy data and is never reinterpreted (§13.7,
+  T133).
+- Serialization/parse validation: the shape above is enforced at parse for
+  ≥ 1.1.x records (unknown keys/part kinds are only allowed to be absent —
+  the normalized form never contains them); length bounds are enforced per
+  leaf; raw-observation and canonical `messages` round-trip identically;
+  leaf declarations cross-validate with the aggregate facts (§7.3.3).
 ---
 
 ## 9. Error taxonomy
@@ -1732,6 +1966,7 @@ type ClientRequestFailureCode =
 
 type ObservationFailureCode =      // internal observer failures (detach, §1.4)
   | 'frame-overflow'
+  | 'record-budget-exceeded'        // evidence budgets exhausted (§3.5)
   | 'observation-encoding-unsupported'
   | 'observation-decode-failure'
   | 'internal-capture-error';
@@ -1859,7 +2094,7 @@ waits on the client socket.
 | `observing-stream` | Malformed frame (5 codes) | `malformed-stream` |
 | `observing-stream` | Client disconnect processed | `client-cancelled` |
 | `observing-stream` | Ingress shutdown/limit processed | `ingress-cancelled` |
-| `observing-stream` | Observer failure (frame-overflow, encoding-unsupported, decode-failure, internal) | `observation-detached` |
+| `observing-stream` | Observer failure (frame-overflow, evidence-budget exhaustion §3.5, encoding-unsupported, decode-failure, internal) | `observation-detached` |
 
 - **Every pre-dispatch failure is reachable from `request-observed`** — the
   rev-4 table wrongly transitioned invalid/missing-key/over-limit/unroutable
@@ -1869,6 +2104,26 @@ waits on the client socket.
   model span, no `model_request`** (the canonical request was not observed at
   its declared boundary), and **no fabricated `interaction_end`** (Spec 014
   §4.7). The record parses: status `failed`, terminal `request-failed`.
+- **Pre-dispatch body/message stage matrix** (losses are phase-accurate,
+  §7.3):
+
+  | Pre-dispatch path | Typical body observation fact | `messageContent` | Derived message-content loss |
+  |---|---|---|---|
+  | `invalid-request` (malformed JSON / invalid fields) | `partially-observed-not-retained` (parse ended mid-body) or `no-bytes-observed` | `not-observed` (no normalized messages were ever formed) | none (nothing existed) |
+  | `body-read-failure` | `no-bytes-observed` (zero bytes) or `partially-observed-not-retained` (mid-body) | `not-observed` | none (nothing existed) |
+  | `over-limit` | `partially-observed-not-retained` (cutoff) | `not-observed` | none (nothing existed) |
+  | `missing-api-key` (complete valid request read) | `fully-observed-not-retained` | **`omitted`** | **`message-content-not-retained`** |
+  | `key-unavailable` (complete valid request read) | `fully-observed-not-retained` | **`omitted`** | **`message-content-not-retained`** |
+  | `unroutable` (complete valid request read) | `fully-observed-not-retained` | **`omitted`** | **`message-content-not-retained`** |
+
+  The rule: `not-observed` means **no normalized messages were ever formed**
+  (invalid/partial/unreadable body); `omitted` means normalized message
+  content **was** observed on a valid request but no canonical
+  representation was written because no `model_request` is emitted on the
+  pre-dispatch path — never `not-observed` merely because the canonical
+  event was omitted (§7.3.1). The exact body fact is per actual observation
+  (T129 tests zero-byte, partial-body, fully parsed, and normalized-message
+  stages).
 - Every terminal is reachable from defined states; no terminal is reachable
   from `initial` (a request that is never observed produces no record —
   nothing was observed, §3.1).
@@ -2061,16 +2316,17 @@ shape and never extended with provider shapes. Reports consume the
 projections (§18).
 
 `assembleTrace({ traceId, interactionId, ids, capturedAtBySeq, requestMeta,
-requestMessages, decodedEvents, boundaryFacts, captureProfile, detector })`
-produces:
+requestMessages, decodedEvents, boundaryFacts, captureProfile, detector,
+evidenceBudgets })` produces:
 
 - the canonical `EvidenceTrace`-shaped event list (Spec 013): events in
   `seq` order with `interaction_start` at `0`, one `model_request`, one
   `model_response` (when headers were observed), zero-or-more
   `chunk`/`model_usage` events, the terminal event per §10.4, and — **on
   `completed` only** — exactly one final `interaction_end`. Request messages
-  are written in the normalized representation of §8.7; retained chunk-delta
-  text is written to `responseEnvelope.deltaText` (§13.5). **The assembler
+  are written in the normalized leaf-level representation of §8.7 (schema
+  ≥ 1.1.x only, §13.7); retained chunk-delta text is written to
+  `responseEnvelope.deltaText` (§13.5). **The assembler
   never promises "exactly one final `interaction_end`" on every result**:
   on `upstream-failed`/`malformed-stream`/`request-failed` the terminal
   `error` is final; on `client-cancelled`/`ingress-cancelled` the
@@ -2157,6 +2413,7 @@ CompletenessSummary (assembler-internal; persisted projections listed in §13.4)
   observedFrames: number                    // frames actually observed by the parser (L2), 1-based positions assigned
   retainedEvents: number                    // canonical events retained (L4) up to and including the terminal event
   observationDetached: boolean              // observation detached before the observation terminal could be determined
+  detachCode?: ObservationFailureCode       // §9.2 — incl. 'record-budget-exceeded' (§3.5)
   lastObservedFramePosition?: number        // §12.3 (absent when detachment made positions unknowable)
   remainderObservation: RemainderKnowledge  // §12.4
   rawForwardedBytes?: number                // §12.3 — basis documented; optional (absent when the basis could not be established)
@@ -2220,7 +2477,10 @@ reinterpreted; no field is silently discarded on downgrade.**
 Usage normalization (§13.6) is a **clarification** of existing 1.0.0 usage
 shapes, not a new field; the normalized request-message representation
 (§8.7) is likewise a clarification of what the assembler writes into the
-1.0.0 `RequestEnvelope.messages` field, not a new path.
+1.0.0 `RequestEnvelope.messages` field, not a new path — with the
+version-aware scope that the closed leaf-level shape applies to schema
+≥ 1.1.x records only and 1.0.x `messages` values are never reinterpreted
+(§13.7).
 `evidenceSchemaVersion` advances 1.0.0 → 1.1.0
 (additive: every 1.0.0 record remains valid and unchanged in meaning; §15.3).
 
@@ -2344,7 +2604,8 @@ captureBoundary.streaming = {
     rawForwardedBytes?: number,                        // bytes accepted by the client socket (§12.3)
   },
   losses: {                                             // closed, applicability-aware facts (§7.3)
-    requestBody: RequestBodyRetention;                  // 'not-observed' | 'retained' | 'not-retained' (§7.3.1)
+    requestBody: RequestBodyRetention;                  // 'no-bytes-observed' | 'partially-observed-not-retained' |
+                                                        //   'fully-observed-not-retained' | 'retained' (§7.3.1)
     messageContent: Retention4;
     deltaContent: Retention4;
     providerNative: Retention3;
@@ -2359,6 +2620,9 @@ captureBoundary.streaming = {
     contentEncodingUnsupported: boolean;
     multimodalContentObserved: boolean;                 // §8.7
     requestMessageUnknownKeysObserved: boolean;         // §8.7
+    unrecognizedRoleObserved: boolean;                  // §8.7 — closed; raw role values never retained
+    sseMetadataObservedButNotRetained: boolean;         // §6.1 — event:/id:/retry: values observed, not retained;
+                                                        //   comments are keepalives and are never counted
   },
   assembly: {                                           // AUTHORITATIVE assembly identity (§15.1)
     assembler: { name: 'signalglass.streaming.assembler'; version: string };
@@ -2384,8 +2648,14 @@ Parse-time validation (in addition to the field itself being additive):
   (≤ 255 chars) and pattern-checked;
 - assembly fields validated per §15 (literal names, semver);
 - **decoder-participation rule**: `assembly.decoderContract` is present
-  **iff `decoderDisposition === 'openai-sse'`** — the OpenAI SSE decoder
-  participated on the SSE observation path. It is **not** tied to
+  **iff `decoderDisposition === 'openai-sse'`**. Participation is
+  **selection and invocation of the OpenAI SSE decoder on the SSE
+  observation path — NOT "decoded at least one frame"**: an SSE response
+  that ends (EOF or transport failure) before its first complete frame
+  still selected and invoked the decoder, so the disposition is
+  `'openai-sse'`, the contract is present, and no chunk events exist
+  (terminal per §6.5 — e.g. `sse-eof-without-done` malformed or
+  `upstream-failed` on transport loss). It is **not** tied to
   `model_response` presence (headers are observed on every header-observed
   path — non-SSE 2xx, upstream non-2xx, invalid-body 2xx — where no SSE
   decoding occurred). Disposition consistency: `'openai-sse'` and
@@ -2399,11 +2669,15 @@ Parse-time validation (in addition to the field itself being additive):
   without `'openai-sse'`, or `'openai-sse'` without a decoder identity)
   fails parse;
 - **deltaText validation**: `responseEnvelope.deltaText` is present only
-  on `model_response_chunk` events; it is a string ≤ the cap code points
-  (default 240); it is absent on finish-only, usage-only, metadata-only,
-  missing, and wholly-omitted chunk events; its event-level
-  `evidenceStatus` owns the representation and must agree with the
-  `deltaContent` fact (§7.3.3 cross-validation);
+  on `model_response_chunk` events; it is a string ≤ 240 code points (the
+  v1.0.0 profile cap, §8.3); it is absent on finish-only, usage-only,
+  metadata-only, missing, and wholly-omitted chunk events; its event-level
+  `evidenceStatus` owns the representation (one leaf per chunk event) and
+  must agree with the `deltaContent` fact (§7.3.3 cross-validation);
+- **request-message validation is version-aware**: the closed leaf-level
+  shape of §8.7 is validated on schema ≥ 1.1.x records **only**; a 1.0.x
+  record's `RequestEnvelope.messages` value is arbitrary legacy data,
+  parsed and round-tripped unchanged, never reinterpreted (§13.7, T133);
 - **cross-checks**: derived `trace.assembly` must equal
   `captureBoundary.streaming.assembly`; derived `trace.captureProfile` must
   equal `captureBoundary.streaming.captureProfile` (name and version);
@@ -2444,14 +2718,17 @@ Presence rules (exact):
   wholesale per the profile).
 - **Never** written into `providerNative` — normalized canonical content
   is not provider-native payload (§12.1).
-- **Cap**: `deltaText` length ≤ the cap in code points (default 240,
-  valid 64–4096, §8.3).
+- **Cap**: `deltaText` length ≤ 240 code points (the v1.0.0 profile cap,
+  §8.3); total retained delta text counts toward
+  `maxRetainedContentCodePoints` (§3.5).
 - **Status ownership**: the event-level `evidenceStatus` owns the
   `deltaText` representation (`captured` when complete at the cap,
   `truncated` when shortened, `redacted` when a sensitive span was
-  masked); the owning declarations live on the raw observation payload;
-  the aggregate fact is `deltaContent` (§7.3) and must agree with the
-  event statuses (§7.3.3).
+  masked) — a chunk delta is **one leaf per event**, so the event-level
+  status **is** the leaf-level status; the owning declarations live with
+  the event (mirroring `ContentLeaf` for request content, §8.7); the
+  aggregate fact is `deltaContent` (§7.3) and must agree with the event
+  statuses (§7.3.3).
 - **Serialization/parse validation**: string-only, per-leaf cap,
   present/absent per the rules above, and consistent with
   `decoderDisposition` (a `deltaText` requires an SSE observation path).
@@ -2497,10 +2774,16 @@ spec preserves that contract and layers version-aware validation on it:
 
 - **Version 1.0.x records** (`1.0.0` today): the seven 1.1-owned paths must
   be **absent** (a 1.0 record never carries 1.1-owned fields); everything
-  else parses exactly as today.
+  else parses exactly as today — **including `RequestEnvelope.messages`
+  as an arbitrary `unknown` value** (Spec 014 additive parse). The closed
+  normalized request-message validation of §8.7 applies **only** to Spec
+  016 records in schema ≥ 1.1.x; a valid 1.0.x record with any legacy
+  `messages` value parses and round-trips unchanged and is **never
+  reinterpreted** as the normalized representation (T133).
 - **Version ≥ 1.1.x within MAJOR 1**: the **known 1.1-owned fields receive
   owned validation** — the seven paths are validated per §13.1–§13.6
-  regardless of the minor version. A future `1.2.0` record does **not**
+  regardless of the minor version, **including the closed leaf-level
+  request-message shape of §8.7**. A future `1.2.0` record does **not**
   bypass validation of the known 1.1-owned fields.
 - **Future unknown additive fields** (a future minor's fields): preserved
   as additive, never reinterpreted, never silently discarded
@@ -2571,21 +2854,29 @@ submitted record or its capture profile never chooses which policy
 `metadata-safe` v1.1.0 = v1.0.0 **plus one additive rule** (Rule 2); v1.0.0
 itself is unchanged and never reinterpreted:
 
-- **Rule 1 (unchanged, v1.0.0)**: content-bearing fields are admissible
-  only under an owning `redacted`/`truncated` declaration
-  (`isDeclaredContent`); a `captured` content-bearing field is rejected
-  (`captured-content`).
-- **Rule 2 (additive, v1.1.0)**: a content-bearing field with owning
-  status `captured` is admissible **iff all of the following hold**:
-  - the field sits at a **closed admitted path** — the request-message
-    content leaves (`messages[].content` string form,
-    `messages[].content[].text`, `messages[].content[].tool_call.arguments`,
-    `messages[].content[].tool_result.content`,
-    `messages[].content[].image_url.url`, §8.7) and the chunk-delta text
-    (`responseEnvelope.deltaText`, §13.5); any other `captured`
-    content-bearing field is rejected;
-  - the field's retained length ≤ the cap in code points (default 240,
-    valid 64–4096) — per leaf (§8.3);
+- **Rule 1 (unchanged, v1.0.0)**: a content-bearing **leaf** is admissible
+  only under that leaf's own `redacted`/`truncated` declaration
+  (`isDeclaredContent`, evaluated per leaf — §8.7); a leaf with status
+  `captured` is rejected (`captured-content`). The event-level aggregate
+  status **never** authorizes a nested leaf.
+- **Rule 2 (additive, v1.1.0)**: a content-bearing leaf with owning status
+  `captured` is admissible **iff all of the following hold**:
+  - the leaf sits at a **closed admitted path** — the request-message
+    content leaves (`messages[].content.text` string-form leaf,
+    `messages[].content[].text.text`,
+    `messages[].content[].tool_call.arguments.text`,
+    `messages[].content[].tool_result.content.text`,
+    `messages[].content[].image_url.url.text`, §8.7) and the chunk-delta
+    text (`responseEnvelope.deltaText`, §13.5); any other `captured`
+    content-bearing leaf or field is rejected;
+  - the leaf's retained length ≤ 240 code points (the v1.0.0 profile
+    cap, §8.3); total retained content is bounded by the §3.5 budgets;
+  - **leaf ownership is inspected, never the aggregate**: the leaf's own
+    `evidenceStatus === 'captured'` and the leaf carries **no** redaction/
+    truncation declaration; a leaf whose own status is `redacted`/
+    `truncated` is evaluated by Rule 1; a forged event-level
+    `captured` on a leaf whose own status disagrees cannot occur (parse
+    rejects, §7.3.3);
   - the declared capture profile and detector are the known
     `metadata-safe` profile and the known versioned detector (§13.4) —
     these are **validation inputs** (the rule requires them for the
@@ -2594,11 +2885,13 @@ itself is unchanged and never reinterpreted:
     on the actual submitted value, not on any claimed classification;
   - the record's `evidenceSchemaVersion` is a MAJOR-1 version ≥ 1.1.0
     (a 1.1-owned field cannot ride on a 1.0.x record).
-- Rule 2 is **mechanical**: it inspects the submitted record (length,
-  path, versions, gate result) — it never trusts a provenance claim. A
+- Rule 2 is **mechanical**: it inspects the submitted record (leaf status,
+  leaf declarations, length, path, versions, gate result) — it never
+  trusts a provenance claim and never trusts an aggregate event status. A
   spoofed pedigree (a claim that the collection pipeline ran, with a
-  forged profile/detector/status) cannot bypass the gate, the length
-  bound, the path allowlist, or the version rule. Paths that are not
+  forged profile/detector/aggregate status) cannot bypass the gate, the
+  length bound, the path allowlist, the leaf-ownership check, or the
+  version rule. Paths that are not
   admitted close **fail-closed** (rejected as `captured-content`), and the
   gate has no bypass.
 - The policy counts **code points** (`countCodePoints`) as the reference
@@ -2664,7 +2957,7 @@ accepts additive minor/patch within MAJOR 1 (not an exact
 | Artifact | Example | Rules |
 |---|---|---|
 | evidence schema | `evidenceSchemaVersion` = `1.0.0` / `1.1.0` (MAJOR 1) | additive bumps only; the gate accepts any additive minor/patch in MAJOR 1 (`version.ts`); 1.0.x records read unchanged; ≥ 1.1.x fields receive owned validation (§13.7) |
-| capture profile | `signalglass.collection.ingress-metadata-safe` v1.0.0 (recorded per record) | changing default retention cap (240) requires a profile version bump; profile recorded on `captureBoundary.streaming.captureProfile` and derived on `trace.captureProfile` |
+| capture profile | `signalglass.collection.ingress-metadata-safe` v1.0.0 (recorded per record) | the v1.0.0 excerpt cap is **exactly 240 code points** (§8.3); a different cap requires a profile version bump **and** a matching persistence-policy contract (§14.2); profile recorded on `captureBoundary.streaming.captureProfile` and derived on `trace.captureProfile` |
 | sensitive detector | `signalglass.collection.sensitive-detector` v1.0.0 | recorded on `captureBoundary.streaming.detector` (single home, §13.2); bump when patterns change |
 | assembly pedigree | assembler `signalglass.streaming.assembler` + decoder `signalglass.providers.openai-sse` (semver each) | **literal** names — validated, not free text; version bumps when assembly semantics change (§15.2) |
 | persistence policy | `metadata-safe` v1.0.0 / v1.1.0 | §14.2–§14.4 |
@@ -2690,7 +2983,7 @@ accepts additive minor/patch within MAJOR 1 (not an exact
 | Change | Requires | Effect on old records |
 |---|---|---|
 | Add a serialized field (the seven paths, or any future additive field) | `evidenceSchemaVersion` bump | old records read unchanged; downgrade policy refuses (`unknown-additive-field`) |
-| Change default cap / retention behavior | capture-profile version bump | old records keep their recorded profile version |
+| Change default cap / retention behavior | capture-profile version bump **and a matching policy contract** (§8.3) | old records keep their recorded profile version |
 | Change detector patterns | detector version bump | old records keep their recorded detector version |
 | Change assembly semantics | assembler version bump | per-version verified derivation |
 | Add decoder contract | new decoder literal + version | per-record `decoderContract` |
@@ -2899,8 +3192,8 @@ reinterpretation.**
   and in `specs/000-index.md` (Spec 015 row: Implemented, merged).
 - This draft (Spec 016) remains a **docs-only, Draft, unmerged** PR; it
   proposes modules it does not create (§11).
-- Version-number corrections: this revision is **revision 6** of the draft
-  (revisions 2, 3, 4, 5, and 6 recorded in the index).
+- Version-number corrections: this revision is **revision 7** of the draft
+  (revisions 2, 3, 4, 5, 6, and 7 recorded in the index).
 - The roadmap row for #23 stays "Draft spec 016".
 
 ### 19.2 Honest crash / no-record reporting
@@ -2959,11 +3252,11 @@ implemented in this docs-only spec.**
 
 | Slice | Scope | Outcome | Depends on |
 |---|---|---|---|
-| **S1** | 1.1 schema foundation in `@signalglass/evidence`: additive `captureBoundary.streaming` parse/validation (incl. `decoderDisposition`, `RequestBodyRetention`, loss booleans), `responseEnvelope.deltaText`, version-aware MAJOR-1 validation, closed vocabularies, authority-model verification (deriveCompleteness recompute + disagreement failure, aggregate precedence + cross-validation §7.3.3) | `parseEvidenceRecord` accepts/validates 1.1 streaming records; tampering with derived fields fails parse | Spec 014/015 code (existing) |
-| **S2** | `metadata-safe` v1.1.0 persistence policy (Rule 2 with the closed admitted paths §14.2) in `@signalglass/storage` + construction-time policy selection (Spec 015 model) + policy-version recording + leak-free `policy-failed` reasons (no `unknown-policy-version`) | persistence admits bounded captured content mechanically at closed paths; v1.0.0 unchanged; policy chosen at construction | S1 (1.1 records exist, deltaText/messages shapes) |
-| **S3** | `@signalglass/streaming`: L2 SSE parser (incremental, bounded, `[DONE]`-aware, deterministic post-terminal continuation, frame-overflow) | parser unit-tested (T01–T12); network-free | none |
-| **S4** | `@signalglass/streaming` assembler + `@signalglass/providers` L3 decoder (openai-sse contract): normalization, `choiceIndex` identity, closed-category unmapped fields, usage, terminalization, honest evidence statuses, explicit nondeterministic inputs, remainder knowledge, `deltaText` assembly, normalized request-message shape (§8.7) | decoder/assembler unit-tested (T13–T44, T49–T61, T72–T87, T101–T115); builds against S1 schema fields and S2 Rule 2 admitted-path contracts | S1 (schema fields), S2 (policy contracts as applicable), S3 |
-| **S5** | `apps/ingress` wiring: streaming path on the existing route, passthrough pipeline + backpressure, bounded decoder tee, client-response orchestration (Spec 006 error-envelope semantics preserved), save-after-response-end, observability projection, **projection-matrix and parity rows in `@signalglass/core` updated for the new canonical fields** (deltaText, normalized messages, decoderDisposition) | e2e tests (T62–T71, T98–T100) + parity/projection updates + integration with the existing suite | S2, S4 |
+| **S1** | 1.1 schema foundation in `@signalglass/evidence`: additive `captureBoundary.streaming` parse/validation (incl. `decoderDisposition`, phase-accurate `RequestBodyRetention`, loss booleans incl. `unrecognizedRoleObserved`/`sseMetadataObservedButNotRetained`), `responseEnvelope.deltaText`, the **closed leaf-level request-message shape (§8.7) with version-aware scope** (validated on ≥ 1.1.x records only; 1.0.x `messages` parses/round-trips unchanged — T133), `record-budget-exceeded` as a closed `ObservationFailureCode`, version-aware MAJOR-1 validation, closed vocabularies, authority-model verification (deriveCompleteness recompute + disagreement failure, aggregate precedence + cross-validation incl. leaf-level rules §7.3.3) | `parseEvidenceRecord` accepts/validates 1.1 streaming records; tampering with derived fields fails parse; 1.0 records with arbitrary legacy `messages` unchanged | Spec 014/015 code (existing) |
+| **S2** | `metadata-safe` v1.1.0 persistence policy (Rule 2 with the closed admitted paths §14.2, **inspecting each leaf's own status/declaration/path/length** — never the aggregate event status; cap exactly 240 code points) in `@signalglass/storage` + construction-time policy selection (Spec 015 model) + policy-version recording + leak-free `policy-failed` reasons (no `unknown-policy-version`) | persistence admits bounded captured content mechanically at closed paths; v1.0.0 unchanged; policy chosen at construction | S1 (1.1 records exist, deltaText/messages leaf shapes) |
+| **S3** | `@signalglass/streaming`: L2 SSE parser (incremental, bounded, `[DONE]`-aware, deterministic post-terminal continuation, frame-overflow, **SSE-metadata fact `sseMetadataObservedButNotRetained` with comments-as-keepalives §6.1**) | parser unit-tested (T01–T12, T131); network-free | none |
+| **S4** | `@signalglass/streaming` assembler + `@signalglass/providers` L3 decoder (openai-sse contract): normalization, `choiceIndex` identity, closed-category unmapped fields, usage, terminalization, honest evidence statuses, explicit nondeterministic inputs, remainder knowledge, `deltaText` assembly, **leaf-level request-message assembly with role sentinel (§8.7), evidence-budget enforcement (§3.5)** | decoder/assembler unit-tested (T13–T44, T49–T61, T72–T87, T101–T133); builds against S1 schema fields and S2 Rule 2 admitted-path contracts | S1 (schema fields), S2 (policy contracts as applicable), S3 |
+| **S5** | `apps/ingress` wiring: streaming path on the existing route, passthrough pipeline + backpressure, bounded decoder tee, client-response orchestration (Spec 006 error-envelope semantics preserved), **evidence-budget configuration and validation at startup (§3.5)**, save-after-response-end, observability projection, **projection-matrix and parity rows in `@signalglass/core` updated for the new canonical fields** (deltaText, normalized leaf messages, decoderDisposition) | e2e tests (T62–T71, T98–T100, T125–T127) + parity/projection updates + integration with the existing suite | S2, S4 |
 
 Each slice runs the full validation sequence before commit (AGENTS.md):
 `pnpm test`, `pnpm build`, evidence-example validation, projection-matrix
@@ -2973,11 +3266,11 @@ verification, `git diff --check`, Fallow checks.
 
 ## 21. Test groups
 
-**Decision 21 — 117 test groups (T01–T117) map to the 48 acceptance
+**Decision 21 — 133 test groups (T01–T133) map to the 56 acceptance
 criteria (§22) through the many-to-many mapping in §23. Tests live with the
 slice that implements them (unit tests for parser/assembler/decoder/policy;
 smoke tests for report generation; e2e for ingress wiring). Contract and
-serialized-shape groups (T101–T117) assert the exact 1.1 shapes.**
+serialized-shape groups (T101–T133) assert the exact 1.1 shapes.**
 
 ### 21.1 SSE parser (L2) — T01–T12
 
@@ -3066,8 +3359,9 @@ serialized-shape groups (T101–T117) assert the exact 1.1 shapes.**
 - **T46** `key-unavailable` / `missing-api-key`: actor `capture`, never an
   upstream outcome (§9.2).
 - **T47** `unroutable`.
-- **T48** `body-read-failure`: `requestBody: 'not-observed'`; record exists
-  with the body-read failure terminal.
+- **T48** `body-read-failure`: `requestBody` is `'no-bytes-observed'` (zero
+  bytes) or `'partially-observed-not-retained'` (mid-body) per actual
+  observation (§7.3.1); record exists with the body-read failure terminal.
 
 ### 21.6 Lifecycle / upstream–client outcomes — T49–T65
 
@@ -3139,8 +3433,11 @@ serialized-shape groups (T101–T117) assert the exact 1.1 shapes.**
   declaration present.
 - **T84** Empty content → `captured` (§7.1).
 - **T85** Loss facts closed and applicability-aware: `'not-applicable'` only
-  where the source did not exist; `RequestBodyRetention` exact union; no
-  boolean conflation; **absence losses derived only when applicable**
+  where the source did not exist; `RequestBodyRetention` phase-accurate
+  union (`no-bytes-observed` | `partially-observed-not-retained` |
+  `fully-observed-not-retained` | `retained`) with distinct "not fully
+  observed" vs. "observed but not retained" loss wording; no boolean
+  conflation; **absence losses derived only when applicable**
   (`provider-usage-absent`/`finish-reason-absent` only on an observed SSE
   path; `remainder-after-*-cancellation` only when a response remainder
   existed); **aggregate precedence** (§7.3.3) for mixed retention; and
@@ -3205,7 +3502,10 @@ serialized-shape groups (T101–T117) assert the exact 1.1 shapes.**
   consistency per §13.4 (SSE → decoder present; encoded SSE decoded →
   decoder present; unsupported encoding → decoder selected but could not
   run, contract absent; non-SSE 2xx → absent; upstream non-2xx → absent;
-  header-less failure → absent).
+  header-less failure → absent; **SSE headers followed by EOF/transport
+  failure before the first complete frame → `'openai-sse'` with contract
+  present and no chunk events — participation is selection/invocation,
+  not frame count**, §13.4, T132).
 - **T108** `trace.captureProfile` cross-checked; detector single home.
 - **T109** §2.3 matrix pair validation; `lastObservedFramePosition`/`
   rawForwardedBytes` bounds; `statusCode` 100–599; content-type bounds.
@@ -3222,18 +3522,23 @@ serialized-shape groups (T101–T117) assert the exact 1.1 shapes.**
   missing/wholly-omitted; per-leaf cap; event-level status ownership;
   raw-observation declarations; serialization + parse validation;
   multi-choice per-choice semantics; never in `providerNative` (§13.5).
-- **T114** Normalized request-message shape: array/object structure,
-  permitted keys, role handling, string-or-part content, closed part
-  kinds, per-leaf cap, unknown-key fail-closed
+- **T114** Normalized request-message shape (schema ≥ 1.1.x records only):
+  array/object structure, permitted keys, **closed role discriminant with
+  the `'unrecognized'` sentinel (raw unknown role values never
+  retained, §8.7)**, string-or-part content where every content string is
+  a serialized `ContentLeaf` with its own status and declarations, closed
+  part kinds, per-leaf cap 240, unknown-key fail-closed
   (`request-message-unknown-fields`), multimodal/tool-call parts
-  (`multimodal-payload-not-retained`), redaction/truncation ownership,
+  (`multimodal-payload-not-retained`), leaf-level ownership,
   captured-content paths (§8.7); an arbitrary object's serialized length
-  is never content attestation.
+  is never content attestation; 1.0.x records with arbitrary legacy
+  `messages` values are untouched (T133).
 - **T115** Decoder participation per path: SSE → `openai-sse` (contract
   present); encoded SSE decoded → `openai-sse`; unsupported encoding →
   `unsupported-encoding` (contract absent, `encoded-content-not-observed`);
   non-SSE 2xx → `not-applicable`; upstream non-2xx → `not-applicable`;
-  header-less failure → `not-applicable` (§13.4).
+  header-less failure → `not-applicable`; SSE headers + EOF before the
+  first complete frame → `openai-sse` with contract present (§13.4, T132).
 - **T116** Policy selection at construction: operator constructs storage
   with `metadata-safe` v1.0.0 or v1.1.0; capture profile/detector are
   validation inputs, never selectors; unknown/unavailable policy version
@@ -3244,11 +3549,84 @@ serialized-shape groups (T101–T117) assert the exact 1.1 shapes.**
   owned validation; future unknown additive fields preserved; unsupported
   MAJOR refused; a future minor cannot bypass known 1.1-owned validation
   (§13.7).
+
+### 21.13 Revision-7 contract corrections — T118–T133
+
+- **T118** Leaf-level ownership: one request carries mixed leaves
+  (captured, truncated, redacted); each leaf serializes its own
+  `evidenceStatus` and its own declarations; the event-level status is the
+  §7.3.3 aggregate and equals the precedence of the leaf statuses (§8.7).
+- **T119** A leaf that is both masked and shortened: `redaction` **and**
+  `truncation` declarations coexist with real lengths (masked code points,
+  original/retained/maxLength); leaf status `redacted`; neither
+  transformation is erased (§8.7).
+- **T120** Forged aggregate event status that disagrees with leaf ownership
+  (e.g. event `captured`, leaf `truncated` with declaration) → parse
+  failure `completeness_disagrees_with_derivation`; the aggregate never
+  authorizes leaves (§7.3.3).
+- **T121** Missing, malformed, or contradictory leaf declarations
+  (`redacted` without `redaction`; declaration lengths disagreeing with
+  retained text; `maxLength` ≠ 240) → parse failure (§7.3.3).
+- **T122** Serializer/parse round trips through **both** `rawObservations`
+  and the canonical trace preserve leaf ownership identically; no
+  raw-only side channel (§8.7).
+- **T123** Policy admission/rejection is per leaf — Rule 1/Rule 2 inspect
+  each leaf's own status/declaration/path/length; a leaf is never admitted
+  or rejected on the aggregate event status (§14.2).
+- **T124** Closed role handling: known roles normalize; an unrecognized
+  role string is **never retained** — the `'unrecognized'` sentinel is
+  written, `unrecognizedRoleObserved === true`, and
+  `unrecognized-role-not-retained` is derived; metadata labels bounded ≤
+  128 (§8.7, §7.3).
+- **T125** Evidence budgets — canonical-event count: a stream exceeding
+  `maxCanonicalEvents` detaches with `record-budget-exceeded`, stops
+  accumulating evidence, and continues byte-transparent backpressured
+  passthrough; the record still saves once after the response path ends
+  (§3.5).
+- **T126** Evidence budgets — retained-content and serialized-growth:
+  `maxRetainedContentCodePoints` / `maxSerializedEvidenceBytes` bound the
+  record; `finalEventReservation` guarantees the terminal
+  `observation-detached` event fits; honest losses
+  (`remainder-after-observation-detach-not-observed`,
+  `post-terminal-content-unknown` when applicable) are derived (§3.5).
+- **T127** Adversarial: a never-ending / high-chunk-count stream (no
+  `[DONE]`) cannot grow evidence memory beyond the budgets; transport
+  remains unaffected and completes for the client (§3.5).
+- **T128** Request-body phase accuracy: zero-byte / partial-body /
+  full-body observations map to the exact `RequestBodyRetention` values;
+  distinct derived loss wording — `request-body-not-fully-observed` vs.
+  `request-body-not-retained` (§7.3).
+- **T129** Pre-dispatch stage matrix: every pre-dispatch failure tested at
+  zero-byte, partial-body, fully parsed, and normalized-message stages;
+  `messageContent` is `not-observed` when no messages were formed and
+  **`omitted`** + `message-content-not-retained` on valid pre-dispatch
+  paths (missing key / key-unavailable / unroutable) where content was
+  observed but no `model_request` is emitted (§10.2).
+- **T130** Excerpt cap determinism: the v1.0.0 profile cap is exactly 240
+  code points; no runtime-configurable range exists; parsers and policies
+  know the cap from the profile identity alone; a different cap requires
+  a profile version bump and a matching policy contract (§8.3, §14.2).
+- **T131** SSE metadata loss: `event:`/`id:`/`retry:` field values observed
+  but not retained → `sseMetadataObservedButNotRetained` +
+  `sse-metadata-not-retained` (on an observed SSE path); raw field values
+  never persisted; comment lines are protocol keepalives — never retained,
+  never counted (§6.1, §7.3).
+- **T132** Zero-frame decoder participation: SSE headers followed by EOF or
+  transport failure before the first complete frame →
+  `decoderDisposition: 'openai-sse'`, `decoderContract` present, no chunk
+  events, terminal per §6.5 (participation is selection/invocation, not
+  frame count) (§13.4).
+- **T133** Genuine 1.0 compatibility: a valid 1.0.x record with an
+  arbitrary legacy `RequestEnvelope.messages` value parses and
+  round-trips unchanged; the closed §8.7 validation applies only to
+  schema ≥ 1.1.x records; legacy 1.0 message shapes are never
+  reinterpreted; a future minor still receives all known 1.1 validation
+  (§13.7).
 ---
 
 ## 22. Acceptance criteria
 
-**Decision 22 — 48 acceptance criteria (AC1–AC48). A spec is Implemented
+**Decision 22 — 56 acceptance criteria (AC1–AC56). A spec is Implemented
 only when every criterion is covered by tests, `pnpm test` passes, and
 `pnpm build` passes (AGENTS.md).**
 
@@ -3324,10 +3702,15 @@ only when every criterion is covered by tests, `pnpm test` passes, and
 - **AC19** — Evidence statuses are honest: `captured` only when complete at
   the declared boundary; `truncated` only when characters were actually
   removed; `redacted` only when content was actually masked; empty content
-  is `captured`. The event-level status owns the retained representation
-  (request-message content leaves §8.7; chunk `deltaText` §13.5).
-- **AC20** — The default retention cap is 240 code points (valid 64–4096);
-  changing it requires a capture-profile version bump.
+  is `captured`. **Every retained request-content leaf owns its own status
+  and its own declarations** (serialized `ContentLeaf`, §8.7); the
+  event-level status is a derived aggregate that never authorizes nested
+  leaves for persistence; chunk `deltaText` is one leaf per event (§13.5).
+- **AC20** — The `signalglass.collection.ingress-metadata-safe` v1.0.0
+  excerpt cap is **exactly 240 code points** (no runtime-configurable
+  range); parsers and policies know the cap from the profile identity;
+  changing it requires a capture-profile version bump and a matching
+  policy contract (§8.3).
 - **AC21** — Collection runs detect-then-retain: the versioned detector
   scans the full candidate text before any length boundary; masking
   precedes truncation; owning declarations carry real lengths.
@@ -3363,9 +3746,15 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   from applicability-aware authoritative facts; absence losses
   (`provider-usage-absent`, `finish-reason-absent`,
   `remainder-after-client-cancellation`, `remainder-after-ingress-cancellation`)
-  are derived only when applicable; aggregate precedence and
-  boundary-vs-event cross-validation hold; post-terminal accounting is the
-  three-state fact; no inverted boolean derivations.
+  are derived only when applicable; `request-body-not-fully-observed` and
+  `request-body-not-retained` distinguish partial from complete body
+  observation (§7.3.2); `sse-metadata-not-retained` and
+  `unrecognized-role-not-retained` declare observed-but-unretained SSE
+  fields and unknown roles; `message-content-not-retained` is derived on
+  valid pre-dispatch paths where content was observed but no `model_request`
+  was emitted; aggregate precedence and leaf-level boundary-vs-event
+  cross-validation hold; post-terminal accounting is the three-state fact;
+  no inverted boolean derivations.
 
 ### 22.6 Schema and versioning
 
@@ -3373,11 +3762,15 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   including `events[].responseEnvelope.deltaText` for retained delta text;
   no `upstreamStatus` field; usage normalization is a clarification with
   exact `UsageValue`/`UsageRecord` shapes; the normalized request-message
-  representation is defined (§8.7).
+  representation with serialized leaf-level ownership is defined for
+  schema ≥ 1.1.x records (§8.7).
 - **AC32** — 1.0.x records parse unchanged; the version gate accepts
   additive minor/patch within MAJOR 1 (not an exact `1.0.0 | 1.1.0`
-  allowlist); 1.0.x records carry no 1.1-owned fields; ≥ 1.1.x fields
-  receive owned validation; future unknown additive fields are preserved;
+  allowlist); 1.0.x records carry no 1.1-owned fields **and their
+  arbitrary legacy `RequestEnvelope.messages` values parse and round-trip
+  unchanged, never reinterpreted as the §8.7 representation**; ≥ 1.1.x
+  fields receive owned validation (incl. the closed leaf-level
+  request-message shape); future unknown additive fields are preserved;
   unsupported MAJOR versions are refused; a downgrade policy refuses
   1.1-owned fields (`unknown-additive-field`) rather than dropping them.
 - **AC33** — Persistence uses the Spec 015 pipeline unmodified: the
@@ -3388,10 +3781,12 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   are validation inputs, never policy selectors.
 - **AC34** — `metadata-safe` v1.1.0 admits bounded `captured` content
   mechanically at closed admitted paths (request-message content leaves
-  §8.7 and chunk `deltaText` §13.5); a spoofed pedigree cannot bypass
-  the gate, the length bound, the path allowlist, or the version rule;
-  non-admitted paths fail closed; the known profile/detector are
-  validation inputs, never selectors.
+  §8.7 and chunk `deltaText` §13.5), **inspecting each leaf's own
+  status/declaration/path/length — never the aggregate event status**; a
+  spoofed pedigree cannot bypass the gate, the length bound, the path
+  allowlist, the leaf-ownership check, or the version rule; non-admitted
+  paths fail closed; the known profile/detector are validation inputs,
+  never selectors.
 - **AC35** — v1.0.0 is never weakened or reinterpreted; policy version ≠
   schema version (§14.3 table holds).
 - **AC36** — `policy-crash` does not exist; policy exceptions are
@@ -3415,7 +3810,11 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   still possible"; a crash/no-save is reported as `crash-no-record` at the
   system level, never as a record completeness fact.
 - **AC42** — Backpressure holds end-to-end (upstream read paced by client
-  writability); no unbounded buffering.
+  writability); no unbounded buffering; the in-memory `EvidenceRecord` is
+  bounded by the decided evidence budgets (§3.5) — budget exhaustion
+  detaches observation (`record-budget-exceeded`) without affecting the
+  byte-transparent passthrough, and the record still saves once after the
+  response path ends.
 - **AC43** — Encoded streams are observed through a bounded decoder tee;
   unsupported/undecodable content detaches observation with
   `encoded-content-not-observed` while the passthrough continues.
@@ -3426,13 +3825,56 @@ only when every criterion is covered by tests, `pnpm test` passes, and
 
 - **AC45** — Versioning rules are normative: literal names, semver
   validation, and the version-bump table.
-- **AC46** — All criteria are covered by tests (117 groups, §21); `pnpm
+- **AC46** — All criteria are covered by tests (133 groups, §21); `pnpm
   test` and `pnpm build` pass on the implementation branch.
 - **AC47** — This spec is docs-only: modules are named and specified, not
   created.
 - **AC48** — Factual claims are correct: PR #22 (Spec 015 implementation,
   commit `f18a153a`) is **merged**; `specs/000-index.md` reflects that
-  (Implemented, merged) and records Spec 016 as revision 6, Draft.
+  (Implemented, merged) and records Spec 016 as revision 7, Draft.
+- **AC49** — Every retained request-content leaf serializes its own
+  `evidenceStatus` and its own redaction/truncation declarations with real
+  lengths; a leaf masked **and** shortened carries both declarations;
+  serializer/parse round trips through `rawObservations` and the canonical
+  trace preserve leaf ownership identically; the event-level status is a
+  derived aggregate that never authorizes leaves (§8.7, T118–T123).
+- **AC50** — Request-message roles are a closed discriminant
+  (`KnownRole | 'unrecognized'`); unrecognized role values are never
+  retained — the sentinel is written and `unrecognized-role-not-retained`
+  is derived; the spec never claims closed roles while preserving
+  arbitrary strings (§8.7, §7.3, T124).
+- **AC51** — The in-memory evidence record is bounded by named evidence
+  budgets with decided defaults and validation (§3.5); exhaustion detaches
+  with `record-budget-exceeded`, stops accumulating evidence, never
+  cancels or truncates client traffic, derives honest unknown-remainder
+  and detachment losses, and still finalizes and saves once after the
+  response path ends (T125–T127).
+- **AC52** — Request-body losses are phase-accurate
+  (`no-bytes-observed | partially-observed-not-retained |
+  fully-observed-not-retained | retained`) with distinct "not fully
+  observed" vs. "observed but not retained" wording; pre-dispatch paths
+  classify `messageContent` per stage — `omitted` +
+  `message-content-not-retained` on valid pre-dispatch paths where content
+  was observed but no `model_request` was emitted, never `not-observed`
+  merely because the canonical event was omitted (§7.3, §10.2, T128–T129).
+- **AC53** — The excerpt cap is deterministic: exactly 240 code points for
+  `signalglass.collection.ingress-metadata-safe` v1.0.0; no
+  runtime-configurable range; a different cap requires a future
+  capture-profile version and a matching policy contract (§8.3, T130).
+- **AC54** — Observed-but-unretained SSE metadata (`event:`/`id:`/`retry:`
+  field values) is a closed loss fact deriving
+  `sse-metadata-not-retained`; raw provider-controlled field values are
+  never persisted; comment lines are decided to be protocol keepalives,
+  never retained and never counted (§6.1, §7.3, T131).
+- **AC55** — Decoder participation is selection/invocation, not frame
+  count: SSE headers followed by EOF or transport failure before the first
+  complete frame still yields `decoderDisposition: 'openai-sse'` with
+  `decoderContract` present and no chunk events (§13.4, T132).
+- **AC56** — Genuine 1.0 compatibility: the closed §8.7 request-message
+  validation applies only to schema ≥ 1.1.x records; a valid 1.0.x record
+  with an arbitrary legacy `messages` value parses and round-trips
+  unchanged and is never reinterpreted; a future minor still receives all
+  known 1.1 validation (§13.7, T133).
 
 ---
 
@@ -3446,13 +3888,13 @@ every test group tied to ≥ 1 AC.**
 | AC1 | T62, T66, T71, T98 | AC25 | T23, T102, T113 |
 | AC2 | T62, T96 | AC26 | T99, T100, T26 |
 | AC3 | T59, T60, T63 | AC27 | T104, T105 |
-| AC4 | T49–T53, T58, T61 | AC28 | T106–T108, T115 |
+| AC4 | T49–T53, T58, T61 | AC28 | T106–T108, T115, T132 |
 | AC5 | T54–T58 | AC29 | T104, T110 |
-| AC6 | T58, T109 | AC30 | T85, T86, T110 |
-| AC7 | T28, T43, T45–T48 | AC31 | T102, T103, T113 |
-| AC8 | T53, T59–T61, T64 | AC32 | T89, T101, T111, T117 |
+| AC6 | T58, T109 | AC30 | T85, T86, T110, T124, T128, T129, T131 |
+| AC7 | T28, T43, T45–T48, T129 | AC31 | T102, T103, T113, T114 |
+| AC8 | T53, T59–T61, T64 | AC32 | T89, T101, T111, T117, T133 |
 | AC9 | T05, T06, T110 | AC33 | T88, T93, T97, T116 |
-| AC10 | T110, T69 | AC34 | T91, T92, T114 |
+| AC10 | T110, T69 | AC34 | T91, T92, T114, T123 |
 | AC11 | T13–T15, T18, T19, T21 | AC35 | T89, T90, T116 |
 | AC12 | T16, T17 | AC36 | T94 |
 | AC13 | T18, T20, T86 | AC37 | T95, T96 |
@@ -3460,15 +3902,19 @@ every test group tied to ≥ 1 AC.**
 | AC15 | T33–T43, T109 | AC39 | T87, T112 |
 | AC16 | T27, T29, T44 | AC40 | T98, T99 |
 | AC17 | T43, T46 | AC41 | T72–T74, T87, T95 |
-| AC18 | T30 | AC42 | T12, T71 |
-| AC19 | T26, T81–T84, T113, T114 | AC43 | T66–T70, T115 |
-| AC20 | T26, T111 | AC44 | T78, T79, T87 |
-| AC21 | T72–T74, T80, T114 | AC45 | T102, T107, T111 |
+| AC18 | T30 | AC42 | T12, T71, T125–T127 |
+| AC19 | T26, T81–T84, T113, T114, T118–T120 | AC43 | T66–T70, T115, T132 |
+| AC20 | T26, T111, T130 | AC44 | T78, T79, T87 |
+| AC21 | T72–T74, T80, T114, T119 | AC45 | T102, T107, T111 |
 | AC22 | T21, T87, T112 | AC46 | §21 all |
 | AC23 | T24, T77 | AC47 | §11, §20 (docs-only) |
 | AC24 | T32, T109 | AC48 | §19.1, index row |
+| AC49 | T118–T123 | AC53 | T130 |
+| AC50 | T124 | AC54 | T131 |
+| AC51 | T125–T127 | AC55 | T132 |
+| AC52 | T128, T129 | AC56 | T133 |
 
-Coverage: every AC (1–48) appears above; every test group T01–T117 appears
+Coverage: every AC (1–56) appears above; every test group T01–T133 appears
 at least once.
 
 ---
@@ -3488,37 +3934,44 @@ at least once.
 
 ## 25. Open questions
 
-**None.** The revision-6 pass resolved the nine revision-5 review blockers:
+**None.** The revision-7 pass resolved the seven revision-6 review blockers
+— the contracts that remained inconsistent or normalized losses away:
 
-1. (resolved) `deltaText` — the seventh canonical 1.1 field — is the
-   canonical home for retained streaming delta text (§13.5), with the
-   request-message captured-content shape defined exactly (§8.7).
-2. (resolved) Policy selection is construction-time in `EvidenceStorage`;
-   capture profile/detector are validation inputs, never selectors;
-   `unknown-policy-version` is removed from policy outcomes
-   (`PolicyFailureReason` stays `'exception' | 'malformed-decision'`)
-   (§14).
-3. (resolved) `SaveOutcome` is the real discriminated object union from
-   `@signalglass/storage`, with all typed fields preserved internally in
-   `PersistenceObservation` (§16.2).
-4. (resolved) Decoder participation is exact via the authoritative closed
-   `decoderDisposition`; `decoderContract` is derived from it, not from
-   `model_response` presence (§13.4).
-5. (resolved) `RequestBodyRetention` exact union; absence losses
-   (`provider-usage-absent`, `finish-reason-absent`,
-   `remainder-after-*-cancellation`) derived only when applicable;
-   aggregate precedence and cross-validation defined (§7.3).
-6. (resolved) MAJOR-1 forward compatibility preserved with version-aware
-   validation; the spec does not narrow the gate to an exact
-   `1.0.0 | 1.1.0` allowlist (§13.7).
-7. (resolved) Package and slice claims corrected: `@signalglass/evidence`,
-   `@signalglass/storage`, and `@signalglass/core` are changed; slice
-   dependencies explicit (§11, §20).
-8. (resolved) The six-path count is corrected to seven; the normalized
-   request-message shape is not a new path (a clarification of what the
-   assembler writes into `RequestEnvelope.messages`) (§13.1).
-9. (resolved) Validation truthfulness: trailing whitespace removed; actual
-   validation outputs and exit codes reported.
+1. (resolved) **Leaf-level ownership**: every retained request-content leaf
+   serializes its own status and its own redaction/truncation declarations
+   with real lengths, including a leaf both masked and shortened; the
+   event-level status is a derived aggregate that never authorizes nested
+   leaves; Rule 1/Rule 2 inspect each leaf (§8.7, §14.2).
+2. (resolved) **Closed role type reconciled with the prose**: the raw
+   unknown role value is never preserved — the normalized role is a closed
+   discriminant (`KnownRole | 'unrecognized'` sentinel) with a closed loss
+   fact/code (`unrecognized-role-observed` /
+   `unrecognized-role-not-retained`); metadata labels are bounded and
+   never content-attested (§8.7).
+3. (resolved) **Bounded in-memory evidence record**: named evidence budgets
+   with decided defaults and validation (§3.5); exhaustion detaches with
+   `record-budget-exceeded`, keeps the passthrough byte-transparent, and
+   still saves once after the response ends.
+4. (resolved) **Phase-accurate request-body and pre-dispatch losses**: a
+   four-value closed union distinguishes no-bytes from partial from full
+   observation; distinct "not fully observed" vs. "observed but not
+   retained" wording; `messageContent` is `omitted` +
+   `message-content-not-retained` on valid pre-dispatch paths, never
+   `not-observed` merely because the canonical event was omitted (§7.3,
+   §10.2).
+5. (resolved) **Deterministic excerpt cap**: exactly 240 code points for
+   the v1.0.0 profile; the runtime-configurable 64–4096 claim is removed;
+   a different cap requires a profile version bump and a matching policy
+   contract (§8.3).
+6. (resolved) **SSE metadata loss and zero-frame decoder participation**: `event:`/`id:`/`retry:`
+   values observed-but-unretained are a closed fact + code; comments are
+   decided keepalives; `decoderDisposition: 'openai-sse'` means
+   selection/invocation, not "decoded at least one frame" (§6.1, §13.4).
+7. (resolved) **Genuine 1.0 compatibility**: the closed request-message
+   validation applies only to schema ≥ 1.1.x records; 1.0.x records with
+   arbitrary legacy `messages` values parse and round-trip unchanged and
+   are never reinterpreted; a future minor still receives all known 1.1
+   validation (§13.7).
 
 ---
 
