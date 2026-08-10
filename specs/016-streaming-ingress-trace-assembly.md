@@ -2,11 +2,28 @@
 
 ## Status
 
-**Draft — revision 9 (focused correction pass).** Proposed for
+**Draft — revision 10 (final architectural correction pass).** Proposed
+for
 acceptance; **implementation is prohibited until this spec is Accepted**. No
 runtime code is produced by this PR. The proposed modules, contracts, and
 constants below are named but **not created** until an accepted
 implementation slice.
+
+Revision 10 resolves the four revision-9 architectural contradictions — the
+contracts that reserved too little for terminalization, approximated Spec
+014 collapse, or contradicted revision 9: (1) the complete terminal suffix
+is reserved (`span_end` + `interaction_end` = two canonical events + two
+raw observations while `completed` remains possible; one + one after the
+span closed) with byte-budget admission as the **maximum over every valid
+terminal-suffix alternative** and deterministic pre-allocated finalization
+inputs (§3.5, §10.4, §12.6); (2) atomic admission runs the **actual Spec
+014 collapse semantics** — replay is identical canonical projection
+(same `eventId` + `seq`), same-ID/same-seq divergence is the Spec 014
+conflict/collision contract, never a second ordinary event (§3.5); (3)
+superseded revision language is removed or explicitly labeled (§6.6, §19.1,
+§25); (4) the observation-failure classification matrix is exhaustive
+(`record-budget-exceeded` on the internal-observer-failure row; every
+closed-union member maps exactly once; T165) (§1.4, §9.3).
 
 Revision 5 resolves the revision-4 review blockers, which all concerned
 contracts that still conflicted with the implemented system (Spec 006
@@ -235,6 +252,17 @@ declarations, `evidenceStorage.ts` policy behavior):
    exact limits serialized authoritatively under
    `captureBoundary.streaming.budgets` — no "estimated" growth, no
    "recorded conceptually" (§3.5, §13.4).
+
+   **⚠ Superseded history (revision 10):** the deterministic
+   upper-bound accounting, the single reserved canonical-event/raw slot,
+   and the worst-case terminal-shape reservation described here are
+   **replaced** by the revision-10 exact-snapshot contract: one normative
+   reference measurement of the complete finalizable snapshot, a
+   state-dependent **terminal-suffix** reservation (`span_end` +
+   `interaction_end` = two events + two raw observations while `completed`
+   remains possible; one + one after the span closed), the maximum over
+   every valid terminal-suffix alternative, and pre-allocated deterministic
+   finalization inputs (§3.5).
 3. **First-terminal-wins on budget exhaustion**: before any observation
    terminal, exhaustion emits the reserved informational error and the
    terminal becomes `observation-detached`; after a terminal (`[DONE]`
@@ -266,6 +294,13 @@ declarations, `evidenceStorage.ts` policy behavior):
 
 Revision 9 resolves the four revision-8 mechanical contradictions — the
 contracts that were still pseudo-exact, impossible, or over-claimed:
+
+**⚠ Superseded history (revision 10):** items 1–2 below are replaced by
+the revision-10 contracts — the byte budget is the **maximum over every
+valid terminal-suffix alternative** (not a single budget-only terminal)
+with deterministic pre-allocated finalization inputs, and atomic admission
+runs the **actual Spec 014 collapse semantics** (not a create/replay
+approximation). See the revision-10 narrative above and §25.
 
 1. **One exact reference algorithm for the serialized-size budget**: the
    pseudo-exact sum (canonical bytes + raw bytes + a second retained-content
@@ -319,6 +354,58 @@ contracts that were still pseudo-exact, impossible, or over-claimed:
    decided), so complete `SaveOutcome` objects may legitimately differ;
    comparisons use isolated stores/identities so `already-present` cannot
    mask them (§14.2, §14.3).
+
+Revision 10 resolves the four revision-9 architectural contradictions —
+the contracts that reserved too little for terminalization, approximated
+Spec 014 collapse, or contradicted revision 9:
+
+1. **The complete terminal suffix is reserved, not one event**: the
+   `completed` final sequence is `span_end` **and** `interaction_end`
+   (two canonical events) with **two** raw observations. Count admission
+   is `maximum − reservedTerminalSuffixCount(state)`: **two** canonical
+   and **two** raw slots while successful model-span completion remains
+   possible, **one** + **one** once only `interaction_end` remains — never
+   universally `maximum − 1`. The state-dependent reservation is applied
+   before every transition and no transition can enter a state whose
+   terminal suffix no longer fits. The byte budget is the **maximum** over
+   every valid terminal-suffix alternative from the applicable state
+   (completed, failed, cancelled, request-failed, observation-detached),
+   each measured on the actual serializer — never an assumption that one
+   informational error is byte-worst. **Deterministic finalization inputs**:
+   a maximum terminal ID/timestamp bundle is allocated once as explicit
+   assembler input and used for both measurement and actual finalization;
+   repeated candidate evaluation cannot consume or change it; unused
+   reserved IDs are never reassigned (§3.5, §10.4, §12.6, T154–T159).
+2. **Atomic admission runs the actual Spec 014 collapse semantics**: the
+   revision-9 "same observation identity ⇒ replay; new normalized content
+   ⇒ new canonical event" approximation is removed. Every `observationId`
+   is unique; replay comparison excludes `observationId`/`rawCapturedAt`;
+   replay is identical canonical projection (same `eventId` **and** `seq`);
+   the candidate process tentatively adds the raw observation, runs the
+   real Spec 014 collapse/derivation on the candidate set, derives the
+   exact canonical events, replay and collision/conflict analysis,
+   completeness, and serialized record, and admits or rejects the entire
+   candidate snapshot atomically. Same `eventId`/`seq` with divergent
+   content is handled exactly as the Spec 014 conflict/collision contract
+   requires — never fabricated as a second ordinary canonical event
+   (§3.5, T160–T164).
+3. **Superseded revision language is removed or explicitly marked**: §6.6
+   no longer allows "evidence-budget exhaustion after the terminal" (only
+   a later observer failure changes post-terminal knowledge to `unknown`);
+   the revision-8 status summary describing deterministic upper-bound
+   accounting and a single reserved event/raw slot is **labeled superseded
+   history**; every historical mention of the removed constants
+   (`FINALIZATION_OVERHEAD_BYTES`, `TERMINAL_WORST_CASE_BYTES`) is
+   confined to explicitly historical text. The normative document contains
+   only the revision-10 exact-snapshot contract (§6.6, §25, §3.5).
+4. **The observation-failure classification matrix is exhaustive**: the
+   internal-observer-failure row now includes **`record-budget-exceeded`**
+   (`error.type` union, §9.3; §1.4 examples); the matrix declares that
+   every member of every closed failure-code union maps **exactly once**;
+   T165 is a mechanical exhaustiveness test that fails on an absent
+   member, a code in multiple incompatible rows, or a row whose
+   actor/role/status/completeness result contradicts the normative
+   transition (§9.3, §1.4).
 
 This spec is forecast-only in `docs/roadmap.md` (anticipated PR #23,
 documentation-only; the implementation slices are a later, accepted
@@ -582,7 +669,7 @@ lifecycle targeting, and completeness:
 |---|---|---|---|---|---|
 | **Malformed provider protocol** | `data` value is not valid JSON; invalid UTF-8 in a data value; non-integer/negative/duplicate choice index; EOF or partial frame without `[DONE]` | `failed` | `error` — the record's **final** event (Spec 014 §4.7: no `interaction_end` after a terminal declaration) | actor `model`; `lifecycleTarget: "trace"`, `lifecycleEffect: "fail"`; observationRole `provider_reported` (the provider's stream was observed to violate the protocol) | Declares the malformed frame and the unobserved remainder |
 | **Unrecognized provider extension** (valid JSON, unknown shape) | A frame that decodes to no recognized chunk/usage/error/done shape | Unaffected (not terminal) | None | — | Declared loss `unrecognized-extension-frame`; observation **continues** |
-| **Internal observer failure** | Parser/decoder/assembler exception; frame-overflow observation bound; evidence-budget exhaustion (§3.5); unsupported content-encoding; decoder-tee decode failure | `unknown` | Informational `error` (actor `capture`, `lifecycleTarget: "none"`, `lifecycleEffect: "none"`) — the record's **final** event; no `interaction_end` | actor `capture`; observationRole `unobservable` | Declares observation detachment and the unknown remainder |
+| **Internal observer failure** | Parser/decoder/assembler exception; frame-overflow observation bound; evidence-budget exhaustion (`record-budget-exceeded`, §3.5); unsupported content-encoding; decoder-tee decode failure | `unknown` | Informational `error` (actor `capture`, `lifecycleTarget: "none"`, `lifecycleEffect: "none"`) — the record's **final** event; no `interaction_end` | actor `capture`; observationRole `unobservable` | Declares observation detachment and the unknown remainder |
 
 Rules:
 
@@ -921,12 +1008,12 @@ captureBoundary.streaming.budgets = {
 
 | Budget | Default | Valid range | Semantics / exact basis |
 |---|---|---|---|
-| `maxCanonicalEvents` | 10,000 | 1,000 – 1,000,000 | **count, per record** (canonical events incl. control events). One slot is reserved (§3.5 atomic admission), so content may consume `maxCanonicalEvents − 1` events |
-| `maxRawObservations` | 20,000 | 2,000 – 2,000,000 | **count, per record** (raw observation payloads). Default and range are ≥ the canonical budget's, so the cross-field invariant can hold; one slot is reserved for the terminal-path raw observation |
+| `maxCanonicalEvents` | 10,000 | 1,000 – 1,000,000 | **count, per record** (canonical events incl. control events). Count admission is `maxCanonicalEvents − reservedTerminalSuffixCount(state)` (§3.5): **two** slots are reserved while successful model-span completion remains possible (the `completed` suffix = `span_end` + `interaction_end`), **one** slot once only `interaction_end` remains (span already closed) — never universally `maximum − 1` |
+| `maxRawObservations` | 20,000 | 2,000 – 2,000,000 | **count, per record** (raw observation payloads). Default and range are ≥ the canonical budget's, so the cross-field invariant can hold; the same terminal-suffix reservation applies: **two** raw slots while the `completed` suffix is possible, **one** after the span closed |
 | `maxRawObservationPayloadBytes` | 4 MiB | 1 MiB – 64 MiB | **byte, cumulative across raw observations**: the sum of each payload's exact serialized UTF-8 byte length (`JSON.stringify` bytes as stored). Each stored raw observation counts its actual serialized bytes — there is no dedup credit for canonical duplication (see below) |
 | `maxRetainedContentCodePoints` | 262,144 | 16,384 – 16,777,216 | **code points, cumulative — a SEMANTIC content limit, never a serialized-byte count**: total retained content (request `ContentLeaf.text` strings + `deltaText` strings), counted per leaf by code points (`countCodePoints`, Spec 015). It is **not** counted again inside `maxSerializedEvidenceBytes` (the snapshot measurement below already contains the serialized text) |
 | `maxSerializedEvidenceBytes` | 16 MiB | 1 MiB – 64 MiB | **byte, exact, measured — never a sum of estimated parts**: the `utf8Encode(serializeEvidenceRecord(snapshot)).byteLength` of the complete finalizable snapshot constructed by the normative reference algorithm below. The snapshot already contains every retained serialized copy (canonical events, raw observations, retained content, and the derived trace/analysis/completeness/boundary fields), so no term is added by hand and nothing is double-counted |
-| `maxIdLengthBytes` | 128 | 16 – 256 | **bytes, per id**: the explicit bound on assembler-generated opaque ids (event ids, observation ids, `traceId == interactionId`). Ids are generated within this bound (§12.6); the bound participates in the closed maximum structural text of the budget-only terminal event (§3.5 reference algorithm step 2) |
+| `maxIdLengthBytes` | 128 | 16 – 256 | **bytes, per id**: the explicit bound on assembler-generated opaque ids (event ids, observation ids, `traceId == interactionId`). Ids are generated within this bound (§12.6); the bound participates in the closed maximum structural text of **every terminal-suffix alternative** (§3.5 reference algorithm step 2) |
 
 **Cross-field invariants (validated at configuration AND at parse of the
 serialized `budgets`; incompatible combinations are refused, never
@@ -943,7 +1030,7 @@ clamped):**
    declared range; defaults (10,000 canonical / 20,000 raw) satisfy the
    count invariant with headroom for replay/duplicate observations
    (replayed observations consume raw budget without creating canonical
-   events, T146).
+   events, T146) and for the terminal-suffix reservation (T154–T155).
 
 **Normative reference budget algorithm — the exact serialized-size
 measurement (blocker-1 resolution, revision 9):**
@@ -955,19 +1042,30 @@ one normative reference calculation built on the actual serializer
 persistence path uses, Spec 015 §4.1/§5.8):
 
 1. **Construct the candidate state transactionally** — the candidate raw
-   observation (and, if it creates one, the candidate canonical event)
-   are added to a scratch copy of the current observation state. Nothing
-   is committed yet.
+   observation is added to a scratch copy of the current observation set.
+   Nothing is committed yet.
 2. **If no observation terminal exists yet**, append to the scratch state
-   a **budget-only worst-case terminal**: the informational `error`
-   (actor `capture`, `observation-detached`) with the **actual allocated
-   IDs** (the event id the terminal would receive, within
+   the **byte-worst valid terminal suffix from the applicable state**: the
+   exact serialized size of **every** valid terminal-suffix alternative
+   from that state is measured on the actual serializer, and the
+   **maximum** is used — never an assumption that one informational `error`
+   is byte-worst. The closed alternatives (§10.4, §10.5):
+   - `completed` — `span_end` **and** `interaction_end` (the record's
+     final sequence; **two** canonical events) plus their two raw
+     observations;
+   - `upstream-failed` / `malformed-stream` / `request-failed` — the
+     causal `error` (final) plus its raw observation;
+   - `client-cancelled` / `ingress-cancelled` — the `cancelled` event
+     (final) plus its raw observation;
+   - `observation-detached` — the informational `error` (final) plus its
+     raw observation.
+   Each alternative uses the **actual allocated IDs** (within
    `maxIdLengthBytes`) and the **closed maximum structural text** (`§8.4`:
-   fixed vocabulary, `error.message` ≤ 200 chars, bounded ids) — plus its
-   one corresponding raw observation. The budget-only terminal is used
-   **for measurement only** and is **not persisted unless exhaustion
-   actually occurs** (in which case the same reserved slot and bytes are
-   spent on the real informational error, §3.5 behavior).
+   fixed vocabulary, `error.message` ≤ 200 chars, bounded ids). The
+   budget-only terminal suffix is used **for measurement only** and is
+   **not persisted unless exhaustion actually occurs** (in which case the
+   same reserved slots and bytes are spent on the real terminal, §3.5
+   behavior).
 3. **Derive the candidate trace, analysis, completeness, and boundary
    exactly** — the derived fields (`trace`, `analysis`,
    `completeness`, and the boundary-derivation artifacts) are produced
@@ -978,7 +1076,7 @@ persistence path uses, Spec 015 §4.1/§5.8):
    real record's would. There is **no `FINALIZATION_OVERHEAD_BYTES`
    constant and no "exact worst case" formula without a complete
    normative computation** — the derivation is executed, not bounded by
-   hand (T144–T148).
+   hand (T144–T148, T156–T157).
 4. **Serialize that complete finalizable snapshot** — the scratch
    state + derived fields as one `EvidenceRecord` document via
    `serializeEvidenceRecord` (the identical serializer the save path
@@ -996,9 +1094,28 @@ as a separate term**; raw/canonical duplication counts **by the actual
 serialized bytes of each stored copy** (both copies are in the snapshot
 and both are measured); escaping and multibyte UTF-8 count their real
 serialized byte lengths (T144, T145). Configurable combinations cannot
-make the reservation impossible: there is no separately-configured
-reservation to conflict with — the budget-only terminal is part of every
-pre-terminal measurement (T148).
+make the reservation impossible: the measured terminal suffix is part of
+every pre-terminal measurement (T148, T156).
+
+**Deterministic finalization inputs (blocker-1 resolution, revision 10):**
+the terminal suffix is measured **and** (if exhaustion occurs, or at real
+finalization) emitted with **the same values**, never re-allocated per
+measurement:
+
+- The assembler receives, as one explicit input, the **maximum terminal
+  ID/timestamp bundle** for the applicable state: event IDs and raw
+  observation IDs for up to the reserved terminal-suffix count
+  (two events + two raw observations while the `completed` suffix is
+  possible; one event + one raw observation once only `interaction_end`
+  remains), plus the timestamps they carry (§12.6).
+- Every size measurement of a terminal-suffix alternative and the actual
+  finalization (budget-exhausted or normal) use **exactly this bundle**;
+  repeated candidate evaluations (including rejected ones) **cannot
+  consume or change** the bundle — previewing never draws from it (§12.6,
+  T158).
+- Unused reserved IDs (e.g. the second `completed`-suffix slot when the
+  record detaches) may remain **unused but are never reassigned** to any
+  other observation or event (T158).
 
 **Equivalence for optimized implementations:** an implementation may
 replace the full snapshot measurement with an incremental counter only if
@@ -1007,34 +1124,62 @@ snapshot calculation for **every tested case** (escaping, multibyte text,
 duplicates, derivation growth, every terminal shape, boundary-plus-one;
 T144–T148). The reference calculation above remains normative.
 
-**Atomic observation admission (blocker-2 resolution, revision 9) —
-canonical events and raw observations are ONE surface, never two
-independently-appended ones:**
+**Atomic observation admission (blocker-2 resolution, revision 10) —
+canonical events and raw observations are ONE surface, and the collapse
+semantics are exactly Spec 014's, never an approximate parallel replay
+algorithm:**
 
-Spec 014 requires every canonical event to derive from at least one raw
-observation; a raw observation may replay an existing canonical event
-(duplicate/replay, consuming raw budget only) or create a new one. A
-single observation is therefore admitted **atomically**:
+Spec 014 §4.4 governs: every `observationId` is **unique**; replay
+comparison **excludes `observationId` and `rawCapturedAt`** and every
+raw-provenance field; `projectCanonicalEvent` retains `eventId`,
+`traceId`, `spanId`, `seq`, `kind`, `capturedAt`, `evidenceStatus`,
+`observationRole`, payload fields, and applicable unknown additive fields.
+Exact replay = semantically equal projected events (identical `eventId`
+**and** `seq`); same-ID/same-sequence content conflict = identical
+`eventId`/`seq` with divergent projections → handled by the Spec 014
+conflict/collision contract (never fabricated as a second ordinary
+canonical event); same-ID/different-sequence groups retain the lowest
+sequence; different-ID/same-sequence collisions are rejected. The
+candidate process is therefore:
 
-1. **Tentatively add one raw observation** to the scratch state.
-2. **Derive whether it creates or replays a canonical event** (Spec 014
-   derivation: same observation identity ⇒ replay; new normalized content
-   ⇒ new canonical event).
-3. **Test every applicable budget on the combined effect**: raw count
-   (`maxRawObservations`), canonical count (`maxCanonicalEvents`),
-   raw payload bytes (`maxRawObservationPayloadBytes`), retained content
+1. **Tentatively add one unique raw observation** to the scratch
+   observation set.
+2. **Run the actual Spec 014 collapse/derivation algorithm**
+   (`collapseObservations`-equivalent: validate observation identity,
+   `projectCanonicalEvent` every observation, group exact replays, reject
+   same-ID/same-sequence content conflicts, resolve same-ID/different-
+   sequence groups, reject different-ID/same-sequence collisions,
+   validate event-ID/sequence uniqueness, derive gaps) on the **candidate
+   observation set** — there is **no parallel "replay ≈ same observation
+   identity" approximation** anywhere in Spec 016 (T160–T163).
+3. **Derive the exact canonical events, replay analysis, and
+   collision/conflict analysis** — how many retained canonical events the
+   candidate set yields (replays add no canonical event), whether a
+   conflict/collision exists and what the Spec 014 contract does with it,
+   and the exact completeness facts (`duplicateDetected`, gap/conflict
+   declarations) — plus completeness, trace, analysis, and the
+   serialized record.
+4. **Test every applicable budget on the combined effect**: raw count
+   (`maxRawObservations`), canonical count (`maxCanonicalEvents`), raw
+   payload bytes (`maxRawObservationPayloadBytes`), retained content
    (`maxRetainedContentCodePoints`), and the exact finalizable snapshot
    measurement (`maxSerializedEvidenceBytes`, reference algorithm above).
-   The count tests use the reserved slots: content may consume
-   `maxCanonicalEvents − 1` canonical events and `maxRawObservations − 1`
-   raw observations; the two reserved slots together are what the
-   budget-only terminal (and later the real exhaustion terminal) occupy
-   (T149).
-4. **Commit both derived effects or neither** — if any test fails, the
-   tentative raw observation **and** any canonical event it would have
-   created are both discarded; there is no state where the raw
-   observation exists without its canonical event or vice versa (T149).
-5. **On failure the budget-exhaustion path below runs**; the scratch
+   The count tests use the state-dependent terminal-suffix reservation:
+   content may consume `maxCanonicalEvents − reservedTerminalSuffixCount`
+   canonical events and `maxRawObservations −
+   reservedTerminalSuffixCount` raw observations, where
+   `reservedTerminalSuffixCount` is **2** while successful model-span
+   completion remains possible and **1** once only `interaction_end`
+   remains (T154–T155). The state machine's transitions cannot enter a
+   state whose terminal suffix no longer fits: the reservation is applied
+   **before** every transition, and a transition is refused if the
+   resulting state's suffix would exceed the budget (T154, T159).
+5. **Commit the entire candidate snapshot or reject it atomically** — if
+   any test fails, the tentative raw observation and every derived effect
+   (retained events, replays, completeness facts) are all discarded;
+   there is no observable partial state, and a rejected candidate leaves
+   the prior state byte-for-byte unchanged (T164).
+6. **On failure the budget-exhaustion path below runs**; the scratch
    state is untouched and no partial append is observable.
 
 Post-terminal clarity (blocker-2 resolution): **once the final canonical
@@ -1054,11 +1199,13 @@ Behavior on exhaustion (closed, deterministic; **first-terminal-wins**,
 1. **Before any observation terminal**: a rejected candidate detaches
    observation with `record-budget-exceeded` (§9.2 — a closed member of
    `ObservationFailureCode`; §1.4 internal-observer failure). The reserved
-   canonical-event slot and reserved raw-observation slot are spent on the
-   informational `error` (actor `capture`) and its raw observation, which
-   finalize the record; the terminal becomes **`observation-detached`**
-   (status `unknown`). The detach is an observation decision, never a
-   transport decision.
+   terminal-suffix slots (two events + two raw observations while the
+   `completed` suffix was possible, one + one after the span closed) are
+   spent on the informational `error` (actor `capture`) and its raw
+   observation from the **pre-allocated finalization bundle** (§3.5
+   deterministic finalization inputs), which finalize the record; the
+   terminal becomes **`observation-detached`** (status `unknown`). The
+   detach is an observation decision, never a transport decision.
 2. **After an observation terminal was already observed** (e.g. `[DONE]`):
    no candidate is ever appended (atomic admission is closed), so
    exhaustion **cannot occur** in this phase — the terminal **remains
@@ -1088,13 +1235,14 @@ Behavior on exhaustion (closed, deterministic; **first-terminal-wins**,
    client-response path ends (§3.2): the budget-exhausted record takes the
    same persistence path as every other record (§16).
 
-Adversarial and boundary tests (T125–T127, T134–T153, §21.13–§21.15)
+Adversarial and boundary tests (T125–T127, T134–T165, §21.13–§21.16)
 prove a never-ending or high-chunk-count stream cannot grow evidence
 memory beyond the declared hard limits, that the transport path is
 unaffected by budget exhaustion, and that every budget boundary (counts,
 measured serialized bytes, escaping, multibyte, duplication, derivation
-growth, id length, every terminal shape, boundary-plus-one, atomic
-admission, and the count invariants) is exact.
+growth, id length, every terminal-suffix alternative, boundary-plus-one,
+atomic Spec 014 collapse admission, finalization-bundle stability, and the
+count invariants) is exact.
 
 ---
 
@@ -1479,10 +1627,11 @@ Terminal rules (Spec 014 §4.7):
       trailing frame (or only comments/blank lines);
     - `observed-not-retained` — the parser observed at least one trailing
       content frame that was not retained;
-    - `unknown` — the parser detached (observer failure, incl.
-      evidence-budget exhaustion after the terminal, §3.5) or could not
-      frame, so the observer cannot determine whether trailing content
-      existed;
+    - `unknown` — the parser detached on a **later observer failure**
+      (frame overflow, decode failure, internal capture error — never
+      evidence-budget exhaustion, which cannot occur after the terminal
+      because no candidate is appended, §3.5) or could not frame, so the
+      observer cannot determine whether trailing content existed;
   - **post-terminal bookkeeping is constant-space**: a single state word
     (`none-observed` | `observed-not-retained` | `unknown`) — it never
     buffers trailing bytes, never accumulates memory with stream length,
@@ -2362,7 +2511,23 @@ type AbortReason =                 // derivation aid (never persisted); feeds re
 | Malformed stream (5 codes) | `malformed-stream` | `error` (final) | `model` / `trace` / `fail` | the specific `sse-*` code |
 | Client disconnect mid-stream | `client-cancelled` | `cancelled` (final; requestedBy `client`) | — / `trace` / `cancel` | — |
 | Ingress shutdown / idle timeout | `ingress-cancelled` | `cancelled` (final; requestedBy `ingress`) | — / `trace` / `cancel` | — |
-| Internal observer failure | `observation-detached` | informational `error` (final) | `capture` / `none` / `none` | `frame-overflow` \| `observation-encoding-unsupported` \| `observation-decode-failure` \| `internal-capture-error` |
+| Internal observer failure | `observation-detached` | informational `error` (final) | `capture` / `none` / `none` | `frame-overflow` \| `record-budget-exceeded` \| `observation-encoding-unsupported` \| `observation-decode-failure` \| `internal-capture-error` |
+
+**Exhaustiveness (blocker-4 resolution, revision 10):** every member of
+every closed failure-code union maps **exactly once** to a row above:
+`ClientRequestFailureCode` (`invalid-request`, `missing-api-key`,
+`key-unavailable`, `unroutable`, `body-read-failure`) → `request-failed`;
+`TransportFailureCode` (`connection-error`, `upstream-timeout`,
+`tls-failure`), `http-error-status`, `provider-error-frame`, and
+`non-sse-response` → `upstream-failed`; each `MalformedStreamCode`
+member → `malformed-stream`; **every `ObservationFailureCode` member —
+including `record-budget-exceeded` (§9.2) — → `observation-detached`**;
+`client-disconnect` → `client-cancelled`; `ingress-shutdown` /
+`idle-timeout` → `ingress-cancelled`. T165 is a mechanical
+exhaustiveness test that fails when a closed-union member is absent from
+this matrix, when a code appears in multiple incompatible rows, or when a
+row assigns an actor/role/status/completeness result inconsistent with the
+normative transition.
 
 Every terminal appears in exactly one row; every classification maps to
 exactly one terminal. The upstream outcome and client-response outcome are
@@ -2522,6 +2687,15 @@ independently and never invented:
   would derive `completed`, which detachment must never claim).
 - **Nothing follows the final event** — identical in the state table, the
   event mapping, §6.5, acceptance criterion 16, and the tests.
+- **The terminal suffix is budget-reserved as a suffix, not as one event**
+  (§3.5): the `completed` final sequence (`span_end` + `interaction_end`)
+  is **two** canonical events with **two** raw observations; while
+  successful model-span completion remains possible the count admission
+  is `maxCanonicalEvents − 2` / `maxRawObservations − 2`, and once the
+  span is closed only `interaction_end` remains (`− 1`). Every candidate
+  measurement includes the byte-worst valid suffix alternative from the
+  applicable state, and the state machine refuses any transition into a
+  state whose terminal suffix no longer fits (T154, T159).
 
 ### 10.5 Terminal-event sequence (tested invariant)
 
@@ -2792,10 +2966,19 @@ CompletenessSummary (assembler-internal; persisted projections listed in §13.4)
 - **Identifiers are explicitly bounded**: every assembler-generated opaque
   id (event ids, observation ids, `traceId == interactionId`) is generated
   within `maxIdLengthBytes` (UTF-8 bytes, §3.5) — this bound participates
-  in the closed maximum structural text of the budget-only terminal event
-  (§3.5 reference algorithm step 2), keeping the terminal's measured size
-  deterministic. A generated id that would exceed the bound is refused by
-  the allocator (never truncated).
+  in the closed maximum structural text of the terminal-suffix
+  alternatives (§3.5 reference algorithm step 2), keeping the measured
+  sizes deterministic. A generated id that would exceed the bound is
+  refused by the allocator (never truncated).
+- **Maximum terminal ID/timestamp bundle (deterministic finalization
+  inputs, §3.5)**: the assembler receives, as explicit input, one bundle
+  of event IDs, raw observation IDs, and timestamps sized for the
+  reserved terminal suffix of the current state (two events + two raw
+  observations while the `completed` suffix is possible; one + one after
+  the span closed). Every size measurement **and** the actual
+  finalization use exactly this bundle; repeated candidate evaluations
+  (including rejected ones) never consume or alter it; unused reserved
+  IDs may remain unused but are **never reassigned** (T158).
 - **No hidden nondeterminism**: the assembler contains no
   `Date.now()`, no `Math.random()`, no `crypto.randomUUID()`, no ambient
   clock reads. This is enforced by the package boundary tests (§21 T109)
@@ -2990,11 +3173,11 @@ captureBoundary.streaming = {
   captureProfile: { name: 'signalglass.collection.ingress-metadata-safe'; version: string },  // AUTHORITATIVE
   detector: { name: 'signalglass.collection.sensitive-detector'; version: string },           // AUTHORITATIVE
   budgets: {                          // AUTHORITATIVE — the exact limits that governed capture (§3.5)
-    maxCanonicalEvents: number;       // count budget (one reserved slot)
-    maxRawObservations: number;       // count budget (one reserved slot); >= maxCanonicalEvents
+    maxCanonicalEvents: number;       // count budget; admission = max − reservedTerminalSuffixCount (2/1)
+    maxRawObservations: number;       // count budget (same terminal-suffix reservation); >= maxCanonicalEvents
     maxRawObservationPayloadBytes: number;
     maxRetainedContentCodePoints: number;   // semantic content limit (code points, not bytes)
-    maxSerializedEvidenceBytes: number;     // measured finalizable-snapshot byte budget
+    maxSerializedEvidenceBytes: number;     // measured finalizable-snapshot byte budget (max suffix alternative)
     maxIdLengthBytes: number;
   },
   // NOTE: observationTerminal is intentionally ABSENT — derived from the final event (§13.2).
@@ -3050,10 +3233,15 @@ Parse-time validation (in addition to the field itself being additive):
   cross-field invariants hold (`maxRawObservations ≥ maxCanonicalEvents`;
   incompatible combinations are rejected at parse, never clamped);
   `maxSerializedEvidenceBytes` is the measured finalizable-snapshot byte
-  budget (normative reference algorithm, §3.5) — a record whose
+  budget (normative reference algorithm, §3.5), taken as the **maximum
+  over every valid terminal-suffix alternative from the applicable
+  state** — a record whose
   `utf8Encode(serializeEvidenceRecord(...)).byteLength` exceeds its own
   declared `maxSerializedEvidenceBytes` is a parse failure (atomic
-  admission, §3.5); `maxRetainedContentCodePoints` is a semantic content
+  admission, §3.5); the terminal-suffix reservation is state-dependent
+  (two canonical + two raw while `completed` is possible; one + one after
+  the span closed) and no state can be entered whose terminal suffix no
+  longer fits (§3.5); `maxRetainedContentCodePoints` is a semantic content
   limit and is not recounted as serialized bytes;
 - **cross-checks**: derived `trace.assembly` must equal
   `captureBoundary.streaming.assembly`; derived `trace.captureProfile` must
@@ -3619,8 +3807,8 @@ reinterpretation.**
   and in `specs/000-index.md` (Spec 015 row: Implemented, merged).
 - This draft (Spec 016) remains a **docs-only, Draft, unmerged** PR; it
   proposes modules it does not create (§11).
-- Version-number corrections: this revision is **revision 9** of the draft
-  (revisions 2, 3, 4, 5, 6, 7, 8, and 9 recorded in the index).
+- Version-number corrections: this revision is **revision 10** of the
+  draft (revisions 2 through 10 recorded in the index).
 - The roadmap row for #23 stays "Draft spec 016".
 
 ### 19.2 Honest crash / no-record reporting
@@ -3679,11 +3867,11 @@ implemented in this docs-only spec.**
 
 | Slice | Scope | Outcome | Depends on |
 |---|---|---|---|
-| **S1** | 1.1 schema foundation in `@signalglass/evidence`: additive `captureBoundary.streaming` parse/validation (incl. `decoderDisposition`, phase-accurate `RequestBodyRetention`, loss booleans incl. `unrecognizedRoleObserved`/`sseMetadataObservedButNotRetained`, **exact `captureBoundary.streaming.budgets` validation §3.5/§13.4 — ranges AND the `maxRawObservations ≥ maxCanonicalEvents` cross-field invariant**), `responseEnvelope.deltaText`, the **closed leaf-level request-message shape (§8.7) with version-aware scope** (validated on ≥ 1.1.x records only; 1.0.x `messages` parses/round-trips unchanged — T133; additive `LeafRedactionDeclaration`/`LeafTruncationDeclaration` on the unchanged Spec 014 types), `record-budget-exceeded` as a closed `ObservationFailureCode`, version-aware MAJOR-1 validation, closed vocabularies, authority-model verification (deriveCompleteness recompute + disagreement failure, aggregate precedence + cross-validation incl. leaf-level rules §7.3.3) | `parseEvidenceRecord` accepts/validates 1.1 streaming records; tampering with derived fields fails parse; 1.0 records with arbitrary legacy `messages` unchanged | Spec 014/015 code (existing) |
+| **S1** | 1.1 schema foundation in `@signalglass/evidence`: additive `captureBoundary.streaming` parse/validation (incl. `decoderDisposition`, phase-accurate `RequestBodyRetention`, loss booleans incl. `unrecognizedRoleObserved`/`sseMetadataObservedButNotRetained`, **exact `captureBoundary.streaming.budgets` validation §3.5/§13.4 — ranges AND the `maxRawObservations ≥ maxCanonicalEvents` cross-field invariant AND the state-dependent terminal-suffix reservation**), `responseEnvelope.deltaText`, the **closed leaf-level request-message shape (§8.7) with version-aware scope** (validated on ≥ 1.1.x records only; 1.0.x `messages` parses/round-trips unchanged — T133; additive `LeafRedactionDeclaration`/`LeafTruncationDeclaration` on the unchanged Spec 014 types), `record-budget-exceeded` as a closed `ObservationFailureCode`, version-aware MAJOR-1 validation, closed vocabularies, authority-model verification (deriveCompleteness recompute + disagreement failure, aggregate precedence + cross-validation incl. leaf-level rules §7.3.3) | `parseEvidenceRecord` accepts/validates 1.1 streaming records; tampering with derived fields fails parse; 1.0 records with arbitrary legacy `messages` unchanged | Spec 014/015 code (existing) |
 | **S2** | `metadata-safe` v1.1.0 persistence policy (Rules 1–2 with the closed admitted paths §14.2, **inspecting each leaf's own status/declaration/path/length** — never the aggregate event status; cap exactly 240 code points; **v1.0.0 unchanged — whole-payload event-level authorization, `unknown-additive-field` refusal, no `ContentLeaf` interpretation; v1.1.0 delegating v1.0 admission/classification semantics for 1.0.x records with truthful v1.1.0 deciding-policy identity**) in `@signalglass/storage` + construction-time policy selection (Spec 015 model) + policy-version recording + leak-free `policy-failed` reasons (no `unknown-policy-version`) | persistence admits bounded captured content mechanically at closed paths; v1.0.0 unchanged; delegation status/code equivalent with truthful identity; policy chosen at construction | S1 (1.1 records exist, deltaText/messages leaf shapes) |
 | **S3** | `@signalglass/streaming`: L2 SSE parser (incremental, bounded, `[DONE]`-aware, deterministic post-terminal continuation, frame-overflow, **SSE-metadata fact `sseMetadataObservedButNotRetained` (openai-sse applicability only, §7.3) with comments-ignored-by-canonical-semantics §6.1**) | parser unit-tested (T01–T12, T131, T142); network-free | none |
-| **S4** | `@signalglass/streaming` assembler + `@signalglass/providers` L3 decoder (openai-sse contract): normalization, `choiceIndex` identity, closed-category unmapped fields, usage, terminalization, honest evidence statuses, explicit nondeterministic inputs, remainder knowledge, `deltaText` assembly, **leaf-level request-message assembly with role sentinel (§8.7), evidence-budget enforcement with the normative snapshot measurement, atomic observation admission, and first-terminal-wins (§3.5)** | decoder/assembler unit-tested (T13–T44, T49–T61, T72–T87, T101–T153); builds against S1 schema fields and S2 Rule 2 admitted-path contracts | S1 (schema fields), S2 (policy contracts as applicable), S3 |
-| **S5** | `apps/ingress` wiring: streaming path on the existing route, passthrough pipeline + backpressure, bounded decoder tee, client-response orchestration (Spec 006 error-envelope semantics preserved), **evidence-budget configuration and validation at startup (§3.5) including the count-budget cross-field invariants**, save-after-response-end, observability projection, **projection-matrix and parity rows in `@signalglass/core` updated for the new canonical fields** (deltaText, normalized leaf messages, decoderDisposition) | e2e tests (T62–T71, T98–T100, T125–T127, T150) + parity/projection updates + integration with the existing suite | S2, S4 |
+| **S4** | `@signalglass/streaming` assembler + `@signalglass/providers` L3 decoder (openai-sse contract): normalization, `choiceIndex` identity, closed-category unmapped fields, usage, terminalization, honest evidence statuses, explicit nondeterministic inputs, remainder knowledge, `deltaText` assembly, **leaf-level request-message assembly with role sentinel (§8.7), evidence-budget enforcement with the normative snapshot measurement (maximum over valid terminal-suffix alternatives), state-dependent terminal-suffix reservation, deterministic finalization inputs, atomic observation admission running actual Spec 014 collapse, first-terminal-wins, and classification-matrix exhaustiveness (§3.5, §9.3)** | decoder/assembler unit-tested (T13–T44, T49–T61, T72–T87, T101–T165); builds against S1 schema fields and S2 Rule 2 admitted-path contracts | S1 (schema fields), S2 (policy contracts as applicable), S3 |
+| **S5** | `apps/ingress` wiring: streaming path on the existing route, passthrough pipeline + backpressure, bounded decoder tee, client-response orchestration (Spec 006 error-envelope semantics preserved), **evidence-budget configuration and validation at startup (§3.5) including the count-budget cross-field invariants and the terminal-suffix reservation**, save-after-response-end, observability projection, **projection-matrix and parity rows in `@signalglass/core` updated for the new canonical fields** (deltaText, normalized leaf messages, decoderDisposition) | e2e tests (T62–T71, T98–T100, T125–T127, T150, T154, T155) + parity/projection updates + integration with the existing suite | S2, S4 |
 
 Each slice runs the full validation sequence before commit (AGENTS.md):
 `pnpm test`, `pnpm build`, evidence-example validation, projection-matrix
@@ -3693,11 +3881,11 @@ verification, `git diff --check`, Fallow checks.
 
 ## 21. Test groups
 
-**Decision 21 — 153 test groups (T01–T153) map to the 67 acceptance
+**Decision 21 — 165 test groups (T01–T165) map to the 74 acceptance
 criteria (§22) through the many-to-many mapping in §23. Tests live with the
 slice that implements them (unit tests for parser/assembler/decoder/policy;
 smoke tests for report generation; e2e for ingress wiring). Contract and
-serialized-shape groups (T101–T153) assert the exact 1.1 shapes.**
+serialized-shape groups (T101–T165) assert the exact 1.1 shapes.**
 
 ### 21.1 SSE parser (L2) — T01–T12
 
@@ -4014,19 +4202,21 @@ serialized-shape groups (T101–T153) assert the exact 1.1 shapes.**
   written, `unrecognizedRoleObserved === true`, and
   `unrecognized-role-not-retained` is derived; metadata labels bounded ≤
   128 (§8.7, §7.3).
-- **T125** Evidence budgets — canonical-event count: a stream exceeding
-  `maxCanonicalEvents` **before any terminal** detaches with
-  `record-budget-exceeded`; the reserved informational `error` event
-  (and its raw observation) finalize the record; terminal is
+- **T125** Evidence budgets — canonical-event count: a stream whose
+  content would exceed `maxCanonicalEvents − reservedTerminalSuffixCount`
+  **before any terminal** detaches with `record-budget-exceeded`; the
+  informational `error` (from the pre-allocated finalization bundle) and
+  its raw observation finalize the record; terminal is
   `observation-detached`; passthrough continues byte-transparent and the
   record still saves once after the response path ends (§3.5).
 - **T126** Evidence budgets — raw-observation count and byte accounting:
-  `maxRawObservations` count (with the one reserved slot) and
-  `maxRawObservationPayloadBytes` cumulative exact bytes are enforced;
-  retained content is bounded by `maxRetainedContentCodePoints` (a
-  **semantic** code-point limit, never recounted as serialized bytes);
+  `maxRawObservations` count (with the state-dependent terminal-suffix
+  reservation) and `maxRawObservationPayloadBytes` cumulative exact bytes
+  are enforced; retained content is bounded by `maxRetainedContentCodePoints`
+  (a **semantic** code-point limit, never recounted as serialized bytes);
   `maxSerializedEvidenceBytes` is the **measured** finalizable-snapshot
-  byte budget (§3.5 reference algorithm) (§3.5).
+  byte budget, taken as the maximum over every valid terminal-suffix
+  alternative (§3.5 reference algorithm) (§3.5).
 - **T127** Adversarial: a never-ending / high-chunk-count stream (no
   `[DONE]`) cannot grow evidence memory beyond the budgets; transport
   remains unaffected and completes for the client (§3.5).
@@ -4067,19 +4257,21 @@ serialized-shape groups (T101–T153) assert the exact 1.1 shapes.**
 
 ### 21.14 Revision-8 exact-accounting corrections — T134–T143
 
-- **T134** First-terminal-wins, event-count exhaustion: a stream hitting
-  `maxCanonicalEvents` before any terminal → informational `error`
-  (reserved slot) + its raw observation finalize the record, terminal
-  `observation-detached`; **after** `[DONE]` no event-count or
-  raw-observation candidate is appended at all (atomic admission is
-  closed), so a budget can never "newly be hit after `[DONE]`" — the
-  terminal stays unchanged, no error is appended, and only the `unknown`
-  post-terminal/remainder fact (`post-terminal-content-unknown`) may be
-  derived; the terminal is never rewritten (§3.5, §10.2, §6.6).
-- **T135** Raw-observation slot exhaustion: exactly one raw-observation
-  slot is reserved; content never consumes it; the reserved terminal-path
-  raw observation is emitted on the `record-budget-exceeded` terminal
-  (§3.5).
+- **T134** First-terminal-wins, event-count exhaustion: a stream whose
+  content would exhaust the count budget before any terminal →
+  informational `error` + its raw observation (from the finalization
+  bundle) finalize the record, terminal `observation-detached`;
+  **after** `[DONE]` no event-count or raw-observation candidate is
+  appended at all (atomic admission is closed), so a budget can never
+  "newly be hit after `[DONE]`" — the terminal stays unchanged, no error
+  is appended, and only the `unknown` post-terminal/remainder fact
+  (`post-terminal-content-unknown`) may be derived; the terminal is never
+  rewritten (§3.5, §10.2, §6.6).
+- **T135** Raw-observation count exhaustion: the state-dependent
+  terminal-suffix raw slots (two while the `completed` suffix is
+  possible, one after the span closed) are never consumed by content;
+  the reserved terminal-path raw observation is emitted on the
+  `record-budget-exceeded` terminal (§3.5).
 - **T136** Exact byte boundaries: a candidate whose measured
   finalizable-snapshot size exceeds the remaining `maxRawObservationPayloadBytes`
   / `maxSerializedEvidenceBytes` is rejected; the boundary size is
@@ -4101,14 +4293,14 @@ serialized-shape groups (T101–T153) assert the exact 1.1 shapes.**
   snapshot size exceeds its declared `maxSerializedEvidenceBytes` fails
   parse (§3.5, §13.4; T146).
 - **T139** Long valid assembler ids: ids up to `maxIdLengthBytes` (e.g.
-  128-byte opaque ids) serialize within the budget-only terminal
+  128-byte opaque ids) serialize within every terminal-suffix-alternative
   measurement (closed maximum structural text, §8.4); an id that would
   exceed the bound is refused by the allocator, never truncated (§12.6,
   §3.5).
 - **T140** Finalization always fits: every candidate is measured as the
-  complete finalizable snapshot (including the budget-only terminal when
-  none exists); every resulting record is within its own declared hard
-  limits (§3.5, §13.4).
+  complete finalizable snapshot (including the byte-worst terminal-suffix
+  alternative when none exists); every resulting record is within its own
+  declared hard limits (§3.5, §13.4).
 - **T141** Body-observation representation matrix: zero-byte read
   failure, mid-body read failure, over-limit cutoff, fully read malformed
   JSON, and fully read valid JSON map to `no-bytes-observed` /
@@ -4162,27 +4354,30 @@ serialized-shape groups (T101–T153) assert the exact 1.1 shapes.**
   document — **no `FINALIZATION_OVERHEAD_BYTES` constant and no
   hand-computed "exact worst case" exists anywhere in the spec** (§3.5,
   T138).
-- **T148** Every terminal shape within budget: the budget-only worst-case
-  terminal (fixed vocabulary, `error.message` ≤ 200 chars, ids at
-  `maxIdLengthBytes`, §8.4/§12.6) is measured as part of every
-  pre-terminal snapshot; all closed terminal shapes (`completed`,
-  `upstream-failed`, `malformed-stream`, `request-failed`,
-  `client-cancelled`, `ingress-cancelled`, `observation-detached`)
-  finalize within `maxSerializedEvidenceBytes`; the budget-only terminal
-  is not persisted unless exhaustion occurs (§3.5).
-- **T149** Atomic observation admission: tentative raw observation +
-  derived canonical event (create or replay) are tested together against
-  raw count, canonical count, payload bytes, retained content, and the
-  finalizable snapshot; both effects commit or **neither** — no partial
-  state (raw without canonical or canonical without raw) is observable
-  (§3.5).
+- **T148** Every terminal suffix within budget: every valid terminal-suffix
+  alternative (completed = `span_end` + `interaction_end`;
+  upstream-failed / malformed-stream / request-failed = causal `error`;
+  client-cancelled / ingress-cancelled = `cancelled`;
+  observation-detached = informational `error`; fixed vocabulary,
+  `error.message` ≤ 200 chars, ids at `maxIdLengthBytes`, §8.4/§12.6) is
+  measured as part of every pre-terminal snapshot; the **maximum** over
+  the alternatives is the byte budget used; the budget-only suffix is
+  not persisted unless exhaustion occurs (§3.5).
+- **T149** Atomic observation admission: tentative raw observation + the
+  **actual Spec 014 collapse/derivation** of the candidate observation set
+  (exact canonical events, replay analysis, collision/conflict analysis,
+  completeness) are tested together against raw count, canonical count,
+  payload bytes, retained content, and the finalizable snapshot; the
+  entire candidate snapshot commits or is **rejected atomically** — no
+  partial state is observable (§3.5).
 - **T150** Count-budget invariants: defaults are 10,000 canonical /
   20,000 raw with `maxRawObservations ≥ maxCanonicalEvents`; ranges are
   aligned (canonical 1,000–1,000,000; raw 2,000–2,000,000); incompatible
   combinations (e.g. 1,000,000 canonical with 2,000 raw) are rejected at
   configuration **and** at parse of the serialized `budgets` — never
-  clamped; one canonical slot and one raw slot are reserved together
-  (§3.5, §13.4).
+  clamped; the terminal-suffix reservation (2/2 while `completed` is
+  possible, 1/1 after the span closed) is state-dependent and never
+  bypassed (§3.5, §13.4).
 - **T151** Post-terminal no-candidate: after the final event, no
   event-count or raw-observation candidate is appended; a canonical/raw
   budget cannot be hit after `[DONE]`; the constant-space state word may
@@ -4203,11 +4398,75 @@ serialized-shape groups (T101–T153) assert the exact 1.1 shapes.**
   differs (v1.0.0 vs v1.1.0 in `SaveOutcome.policy` and, on `stored`,
   in `StorageManifest.persistencePolicy`); the comparison uses **isolated
   stores/identities** so `already-present` cannot mask it (§14.2, §14.3).
+
+### 21.16 Revision-10 terminal-suffix, Spec 014 collapse, and classification-exhaustiveness corrections — T154–T165
+
+- **T154** Terminal-suffix reservation — completed path: an interaction
+  whose content sits exactly at the count boundary
+  (`maxCanonicalEvents − 2` canonical events / `maxRawObservations − 2`
+  raw observations consumed) can still emit **both** `span_end` and
+  `interaction_end` (and their two raw observations); a genuinely
+  observed completion is **never** replaced with `observation-detached`
+  merely because only one slot was reserved (§3.5, §10.4, §10.5).
+- **T155** Terminal-suffix reservation — raw side: both completed-suffix
+  raw observations fit within `maxRawObservations`; after the span is
+  closed the reservation drops to one event + one raw observation, and
+  content may consume up to `maximum − 1` in that state (§3.5).
+- **T156** Maximum serialized terminal suffix: the byte-worst suffix is
+  computed from **actual serializer snapshots of every valid suffix
+  alternative** from the applicable state (completed is two events and
+  typically the largest, but the maximum is measured, never assumed);
+  the measured maximum governs `maxSerializedEvidenceBytes` admission
+  (§3.5).
+- **T157** Failure and cancellation suffixes fit: `upstream-failed` /
+  `malformed-stream` / `request-failed` (causal `error`) and
+  `client-cancelled` / `ingress-cancelled` (`cancelled`) and
+  `observation-detached` (informational `error`) each finalize within
+  the same byte budget from the same state (§3.5, §10.4).
+- **T158** Finalization-input stability: the maximum terminal ID/timestamp
+  bundle is allocated once; repeated candidate evaluations (accepted and
+  rejected) do **not** consume or change the bundle's IDs or timestamps;
+  unused reserved IDs remain unused and are never reassigned (§3.5,
+  §12.6).
+- **T159** No completion replacement: an interaction that would complete
+  at the content boundary emits `span_end` + `interaction_end` (two
+  events, two raw observations) — the reserved suffix is never spent on
+  an earlier informational error, and no transition can enter a state
+  whose terminal suffix no longer fits (§3.5, §10.2, §10.4).
+- **T160** Spec 014 collapse — replay: two **distinct observation IDs**
+  with identical canonical projection (`projectCanonicalEvent` excluding
+  `observationId`/`rawCapturedAt`) → raw count increases, canonical
+  event count does **not**; `duplicateDetected` is reported (§3.5,
+  Spec 014 §4.4).
+- **T161** Spec 014 collapse — conflict/collision: same canonical
+  `eventId`/`seq` with divergent projected content is handled exactly as
+  the Spec 014 conflict/collision contract requires (same-ID/same-seq
+  content conflict → invalid; different-ID/same-seq collision → rejected)
+  — never fabricated as a second ordinary canonical event (§3.5, Spec
+  014 §4.4).
+- **T162** Spec 014 collapse — genuinely new content: a new observation
+  with a new canonical projection yields exactly **one** new canonical
+  event (§3.5, Spec 014 §4.4).
+- **T163** Replay/collision near the limit: replay groups and collision
+  analysis change the serialized size near the record limit — the
+  snapshot measurement captures the difference and admission is exact
+  (§3.5).
+- **T164** Atomic rejection leaves the prior state unchanged: a rejected
+  candidate (any budget or a Spec 014 conflict) leaves the prior
+  candidate state byte-for-byte identical — no partial raw/canonical/
+  completeness effect is observable (§3.5).
+- **T165** Classification-matrix exhaustiveness (mechanical): every
+  member of every closed failure-code union maps **exactly once** in the
+  §9.3 matrix — including **`record-budget-exceeded`** on the
+  internal-observer-failure row; the test fails on an absent member, a
+  code in multiple incompatible rows, or a row whose
+  actor/role/status/completeness result contradicts the normative
+  transition (§1.4, §9.3).
 ---
 
 ## 22. Acceptance criteria
 
-**Decision 22 — 67 acceptance criteria (AC1–AC67). A spec is Implemented
+**Decision 22 — 74 acceptance criteria (AC1–AC74). A spec is Implemented
 only when every criterion is covered by tests, `pnpm test` passes, and
 `pnpm build` passes (AGENTS.md).**
 
@@ -4406,13 +4665,13 @@ only when every criterion is covered by tests, `pnpm test` passes, and
 
 - **AC45** — Versioning rules are normative: literal names, semver
   validation, and the version-bump table.
-- **AC46** — All criteria are covered by tests (153 groups, §21); `pnpm
+- **AC46** — All criteria are covered by tests (165 groups, §21); `pnpm
   test` and `pnpm build` pass on the implementation branch.
 - **AC47** — This spec is docs-only: modules are named and specified, not
   created.
 - **AC48** — Factual claims are correct: PR #22 (Spec 015 implementation,
   commit `f18a153a`) is **merged**; `specs/000-index.md` reflects that
-  (Implemented, merged) and records Spec 016 as revision 9, Draft.
+  (Implemented, merged) and records Spec 016 as revision 10, Draft.
 - **AC49** — Every retained request-content leaf serializes its own
   `evidenceStatus` and its own **additive** declarations
   (`LeafRedactionDeclaration`/`LeafTruncationDeclaration`, built on the
@@ -4433,8 +4692,10 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   (`maxRawObservations ≥ maxCanonicalEvents`, rejected at configuration
   and parse), a **normative reference budget algorithm** that measures the
   complete finalizable snapshot
-  (`utf8Encode(serializeEvidenceRecord(...)).byteLength`), one reserved
-  canonical-event slot and one reserved raw-observation slot, atomic
+  (`utf8Encode(serializeEvidenceRecord(...)).byteLength`), a
+  state-dependent terminal-suffix reservation (two canonical + two raw
+  slots while the `completed` suffix is possible; one + one after the
+  span closed), atomic
   observation admission (raw + derived canonical effects commit together
   or not at all), and `maxRetainedContentCodePoints` as a separate
   semantic content limit never recounted as serialized bytes; the exact
@@ -4443,7 +4704,7 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   terminal** (first-terminal-wins), stops accumulating evidence, never
   cancels or truncates client traffic, derives honest unknown-remainder
   and detachment losses, and still finalizes and saves once after the
-  response path ends (§3.5, §13.4, T125–T127, T134–T153).
+  response path ends (§3.5, §13.4, T125–T127, T134–T165).
 - **AC52** — Request-body losses are phase-accurate
   (`no-bytes-observed | partially-observed-not-retained |
   fully-observed-not-retained | retained`) with distinct "not fully
@@ -4490,15 +4751,16 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   §6.6, T134, T151).
 - **AC58** — Budget accounting is exact and mechanical: the **normative
   reference budget algorithm** measures the complete finalizable snapshot
-  (`serializeEvidenceRecord` + `utf8Encode`, including the budget-only
-  worst-case terminal and its raw observation when none exists, and the
-  derived trace/analysis/completeness/boundary fields); retained content
+  (`serializeEvidenceRecord` + `utf8Encode`, including the **maximum over
+  every valid terminal-suffix alternative** when no terminal exists, and
+  the derived trace/analysis/completeness/boundary fields); retained content
   is counted once inside the serialized copies where it lives; raw/canonical
   duplication counts by actual serialized bytes of each stored copy; there
   is **no `FINALIZATION_OVERHEAD_BYTES` constant and no `finalEventReservation`
   / `TERMINAL_WORST_CASE_BYTES`**; boundary and boundary-plus-one are
   exact; limits are serialized authoritatively under
-  `captureBoundary.streaming.budgets` (§3.5, §13.4, T135–T148).
+  `captureBoundary.streaming.budgets` (§3.5, §13.4, T135–T148, T156,
+  T157).
 - **AC59** — Request-body representation is honest: the exact phase matrix
   follows bytes actually observed, never the validation result — a fully
   read malformed body is `fully-observed-not-retained`; a `body-read-failure`
@@ -4522,21 +4784,24 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   T143, T153).
 - **AC62** — `maxSerializedEvidenceBytes` is the **measured** byte length
   of the complete finalizable snapshot by the normative reference
-  algorithm (candidate state + budget-only terminal when none exists +
-  derived fields, serialized by `serializeEvidenceRecord`, measured by
+  algorithm (candidate state + the **byte-worst terminal-suffix
+  alternative** from the applicable state when none exists + derived
+  fields, serialized by `serializeEvidenceRecord`, measured by
   `utf8Encode(...).byteLength`); retained content is counted once inside
   the serialized copies, never added again; there is no
   `FINALIZATION_OVERHEAD_BYTES` constant and no hand-computed worst-case
-  formula; the budget-only terminal is not persisted unless exhaustion
+  formula; the measured suffix is not persisted unless exhaustion
   occurs; incremental optimizations require an equivalence proof
-  (§3.5, T144–T148).
+  (§3.5, T144–T148, T156–T158).
 - **AC63** — Count-budget defaults and invariants are feasible:
   `maxCanonicalEvents` 10,000 / `maxRawObservations` 20,000 with
   `maxRawObservations ≥ maxCanonicalEvents` (Spec 014: every canonical
   event derives from ≥ 1 raw observation); ranges are aligned and
   incompatible combinations are rejected at configuration **and** at
-  parse of the serialized `budgets`; one canonical slot and one raw slot
-  are reserved together (§3.5, §13.4, T150).
+  parse of the serialized `budgets`; the terminal-suffix reservation is
+  state-dependent (two + two while `completed` is possible; one + one
+  after the span closed) and never bypassed (§3.5, §13.4, T150, T154,
+  T155, T159).
 - **AC64** — Observation admission is **atomic**: one tentative raw
   observation plus the canonical event it creates (or replays) are tested
   together against raw count, canonical count, payload bytes, retained
@@ -4562,6 +4827,52 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   complete `SaveOutcome` objects may differ; stored manifests record
   v1.1.0 when v1.1.0 decided; comparisons use isolated stores/identities
   so `already-present` cannot mask them (§14.2, §14.3, T153).
+- **AC68** — The terminal suffix is reserved as a **suffix**, not one
+  event: while the `completed` final sequence (`span_end` +
+  `interaction_end`) remains possible, count admission is
+  `maxCanonicalEvents − 2` / `maxRawObservations − 2`; once the span is
+  closed the reservation drops to one event + one raw observation; an
+  observed completion is **never** replaced with `observation-detached`
+  because only one slot was reserved, and no transition can enter a
+  state whose terminal suffix no longer fits (§3.5, §10.4, §10.5, T154,
+  T155, T159).
+- **AC69** — The serialized byte budget is the **maximum over every valid
+  terminal-suffix alternative** from the applicable state, each measured
+  on the actual serializer (the two-event `completed` suffix included;
+  failure/cancel/detach alternatives kept) — never an assumption that
+  one informational error is byte-worst (§3.5, T156, T157).
+- **AC70** — Finalization inputs are deterministic: a maximum terminal
+  ID/timestamp bundle is allocated once as explicit assembler input and
+  used for both measurement and actual finalization; repeated candidate
+  evaluations (accepted or rejected) never consume or change it; unused
+  reserved IDs are never reassigned (§3.5, §12.6, T158).
+- **AC71** — Observation admission honors actual Spec 014 collapse
+  semantics: every `observationId` is unique; replay comparison excludes
+  `observationId`/`rawCapturedAt` and means identical canonical
+  projection (same `eventId` **and** `seq`); same `eventId`/`seq` with
+  divergent content is the Spec 014 conflict/collision contract
+  (invalid/rejected), never a second ordinary canonical event (§3.5,
+  Spec 014 §4.4, T160–T162).
+- **AC72** — Admission is atomic over the candidate snapshot: tentative
+  raw observation → **actual Spec 014 collapse/derivation** of the
+  candidate observation set → exact canonical events, replay/collision/
+  completeness, and serialized record → admit or reject the entire
+  candidate snapshot; there is **no parallel approximate replay
+  algorithm** and no partially applied state (§3.5, T149, T163, T164).
+- **AC73** — The observation-failure classification matrix is
+  exhaustive: **`record-budget-exceeded`** is on the
+  internal-observer-failure row; every member of every closed
+  failure-code union maps exactly once; T165 is a mechanical
+  exhaustiveness test failing on an absent member, a code in multiple
+  incompatible rows, or a row contradicting the normative transition
+  (§1.4, §9.3, T165).
+- **AC74** — Superseded revision language is removed or explicitly
+  labeled: the normative document never claims evidence-budget
+  exhaustion after the terminal (§6.6), and every historical mention of
+  `FINALIZATION_OVERHEAD_BYTES` / `TERMINAL_WORST_CASE_BYTES` /
+  `maxCanonicalEvents − 1` / `maxRawObservations − 1` / "one reserved
+  slot" / "deterministic upper-bound accounting" is confined to
+  explicitly historical text (§19.1, §25, §6.6).
 
 ---
 
@@ -4589,7 +4900,7 @@ every test group tied to ≥ 1 AC.**
 | AC15 | T33–T43, T109 | AC39 | T87, T112 |
 | AC16 | T27, T29, T44 | AC40 | T98, T99 |
 | AC17 | T43, T46 | AC41 | T72–T74, T87, T95 |
-| AC18 | T30 | AC42 | T12, T71, T125–T127, T134–T153 |
+| AC18 | T30 | AC42 | T12, T71, T125–T127, T134–T165 |
 | AC19 | T26, T81–T84, T113, T114, T118–T120 | AC43 | T66–T70, T115, T132 |
 | AC20 | T26, T111, T130 | AC44 | T78, T79, T87 |
 | AC21 | T72–T74, T80, T114, T119 | AC45 | T102, T107, T111 |
@@ -4598,16 +4909,19 @@ every test group tied to ≥ 1 AC.**
 | AC24 | T32, T109 | AC48 | §19.1, index row |
 | AC49 | T118–T123 | AC53 | T130 |
 | AC50 | T124 | AC54 | T131, T142 |
-| AC51 | T125–T127, T134–T153 | AC55 | T132 |
+| AC51 | T125–T127, T134–T165 | AC55 | T132 |
 | AC52 | T128, T129, T141, T152 | AC56 | T133 |
 | AC57 | T134, T151 | AC60 | T142 |
-| AC58 | T135–T148 | AC61 | T143, T153 |
-| AC59 | T141, T152 | AC62 | T144–T148 |
-| AC63 | T150 | AC65 | T151 |
-| AC64 | T149 | AC66 | T152 |
-| | | AC67 | T153 |
+| AC58 | T135–T148, T156, T157 | AC61 | T143, T153 |
+| AC59 | T141, T152 | AC62 | T144–T148, T156–T158 |
+| AC63 | T150, T154, T155, T159 | AC65 | T151 |
+| AC64 | T149, T160–T164 | AC66 | T152 |
+| AC67 | T153 | AC68 | T154, T155, T159 |
+| AC69 | T156, T157 | AC70 | T158 |
+| AC71 | T160–T162 | AC72 | T149, T163, T164 |
+| AC73 | T165 | AC74 | T151 |
 
-Coverage: every AC (1–67) appears above; every test group T01–T153 appears
+Coverage: every AC (1–74) appears above; every test group T01–T165 appears
 at least once.
 
 ---
@@ -4682,7 +4996,8 @@ behavior):
    `maskedContent` cross-validation recognizes request `ContentLeaf`
    redaction **and** redacted chunk `deltaText` via its event-level
    declaration (§8.7, §7.3.3, T118–T123).
-2. (resolved) **Exact, mechanically enforceable budgets**: exact
+2. (resolved) **Exact, mechanically enforceable budgets** (**superseded
+   in its reservation mechanics by revision 10**): exact
    UTF-8/serialization basis; cumulative vs. per-item semantics;
    raw/canonical duplication counted by actual serialized bytes; exact
    deterministic accounting for derived fields
@@ -4762,6 +5077,51 @@ or over-claimed:
    objects may differ; stored manifests record v1.1.0 when v1.1.0
    decided); comparisons use isolated stores/identities (§14.2, §14.3,
    T153).
+
+The revision-10 pass resolved the four revision-9 architectural
+contradictions — the contracts that reserved too little for
+terminalization, approximated Spec 014 collapse, or contradicted revision
+9:
+
+1. (resolved) **The complete terminal suffix is reserved, not one event**:
+   the `completed` final sequence is `span_end` **and** `interaction_end`
+   (two canonical events) with two raw observations; admission is
+   `maximum − reservedTerminalSuffixCount(state)` (two + two while
+   `completed` remains possible; one + one after the span closed); the
+   byte budget is the **maximum over every valid terminal-suffix
+   alternative** from the applicable state, each measured on the actual
+   serializer; deterministic finalization inputs (a maximum terminal
+   ID/timestamp bundle, allocated once, never consumed by candidate
+   evaluation, unused reserved IDs never reassigned) make measurement and
+   actual finalization identical (§3.5, §10.4, §12.6, T154–T159).
+2. (resolved) **Atomic admission runs the actual Spec 014 collapse
+   semantics**: every `observationId` is unique; replay excludes
+   `observationId`/`rawCapturedAt` and means identical canonical
+   projection (same `eventId` **and** `seq`); the candidate process
+   tentatively adds the raw observation, runs the real collapse/
+   derivation, and derives exact events, replay/collision/conflict,
+   completeness, and the serialized record before admitting or rejecting
+   the candidate snapshot atomically; same-ID/same-seq divergence is the
+   Spec 014 conflict/collision contract, never a second ordinary canonical
+   event; no parallel approximate replay algorithm (§3.5, Spec 014 §4.4,
+   T160–T164).
+3. (resolved) **Superseded revision language removed or labeled**: §6.6 no
+   longer permits evidence-budget exhaustion after the terminal (only a
+   later observer failure moves the state word to `unknown`); the
+   revision-8 status summary describing deterministic upper-bound
+   accounting and one reserved event/raw slot is marked **superseded
+   history**; every historical mention of
+   `FINALIZATION_OVERHEAD_BYTES` / `TERMINAL_WORST_CASE_BYTES` /
+   `maxCanonicalEvents − 1` / `maxRawObservations − 1` / "one reserved
+   slot" / "deterministic upper-bound accounting" is confined to
+   explicitly historical text (§6.6, §19.1).
+4. (resolved) **Exhaustive observation-failure classification**: the
+   internal-observer-failure row now includes **`record-budget-exceeded`**;
+   the §9.3 matrix declares every member of every closed failure-code
+   union maps exactly once; T165 is a mechanical exhaustiveness test that
+   fails on an absent member, a code in multiple incompatible rows, or a
+   row whose actor/role/status/completeness result contradicts the
+   normative transition (§1.4, §9.3).
 
 ---
 
