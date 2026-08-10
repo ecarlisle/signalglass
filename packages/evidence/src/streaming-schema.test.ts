@@ -69,6 +69,7 @@ describe('Spec 016 S1 schema foundation', () => {
     const response = events.find((event) => event['kind'] === 'model_response')!['responseEnvelope'] as Record<string, unknown>;
     const chunk = events.find((event) => event['kind'] === 'model_response_chunk')!['responseEnvelope'] as Record<string, unknown>;
     expect((value['captureBoundary'] as Record<string, unknown>)['streaming']).toBeDefined();
+    expect(((value['captureBoundary'] as any).streaming).observationTerminal).toBeUndefined();
     expect(completeness['lifecycle']).toBeDefined();
     expect(completeness['declaredLosses']).toEqual(['request-body-not-retained', 'provider-native-not-retained', 'wire-bytes-not-retained', 'provider-usage-absent']);
     expect(trace['assembly']).toEqual((value['captureBoundary'] as Record<string, unknown>)['streaming'] && ((value['captureBoundary'] as Record<string, unknown>)['streaming'] as Record<string, unknown>)['assembly']);
@@ -96,6 +97,7 @@ describe('Spec 016 S1 schema foundation', () => {
       (v: Record<string, unknown>) => (((v['completeness'] as any).lifecycle.observation.terminal) = 'failed'),
       (v: Record<string, unknown>) => (((v['completeness'] as any).declaredLosses) = []),
       (v: Record<string, unknown>) => (((v['trace'] as any).assembly.assembler.version) = '9.0.0'),
+      (v: Record<string, unknown>) => (((v['trace'] as any).captureProfile.version) = '9.0.0'),
       (v: Record<string, unknown>) => (((v['completeness'] as any).boundaryStatement) = 'altered'),
     ]) {
       const result = mutate(base, change);
@@ -118,6 +120,22 @@ describe('Spec 016 S1 schema foundation', () => {
     truncatedSource[2]!.evidenceStatus = 'truncated';
     const valid = record('1.1.0', streamingBoundary({ losses: { ...streamingBoundary().streaming!.losses, messageContent: 'partially-retained' } }), truncatedSource);
     expect(parseEvidenceRecord(valid).ok).toBe(true);
+    const both = {
+      text: 'masked-short', evidenceStatus: 'redacted',
+      redaction: { policy: 'detector-v1', reasons: ['credential'], spanCount: 1, maskedCodePoints: 8 },
+      truncation: { maxLength: 240, originalLength: 300, retainedLength: 12 },
+    };
+    const bothSource = observations(both);
+    bothSource[2]!.evidenceStatus = 'redacted';
+    const bothRecord = record('1.1.0', streamingBoundary({ losses: { ...streamingBoundary().streaming!.losses, messageContent: 'partially-retained', maskedContent: true } }), bothSource);
+    const bothParsed = parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(bothRecord)));
+    expect(bothParsed.ok).toBe(true);
+    if (bothParsed.ok) {
+      const request = bothParsed.record.trace.events.find((event) => event.kind === 'model_request') as any;
+      expect(request.requestEnvelope.messages[0].content).toEqual((bothParsed.record.rawObservations[2]!.payload as any).requestEnvelope.messages[0].content);
+    }
+    const forgedAggregate = observations(truncated);
+    expect(normalizeEvidenceRecord(forgedAggregate, streamingBoundary({ losses: { ...streamingBoundary().streaming!.losses, messageContent: 'partially-retained' } }), '1.1.0').ok).toBe(false);
     const invalidLeaves = [
       { text: 'x', evidenceStatus: 'redacted' },
       { text: 'x', evidenceStatus: 'truncated', truncation: { maxLength: 120, originalLength: 3, retainedLength: 1 } },

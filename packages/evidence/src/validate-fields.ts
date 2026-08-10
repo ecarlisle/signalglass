@@ -558,7 +558,7 @@ export function validateStreamingConsistency(trace: EvidenceTrace, streaming: St
   const hasImagePart = requestMessages.some((message) => isRecord(message) && Array.isArray(message['content']) && message['content'].some((part) => isRecord(part) && part['kind'] === 'image_url'));
   if (hasImagePart && !streaming.losses.multimodalContentObserved) out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.multimodalContentObserved', 'multimodal content requires its authoritative loss fact'));
   if (requestStatuses.length > 0) {
-    const aggregate = aggregateRetention(requestStatuses);
+    const aggregate = aggregateRetention(requestStatuses, requestMessages.some((message) => messageHasTruncation(message)));
     const eventAggregate = aggregateEventStatus(requestStatuses);
     if (requestEvents.some((event) => event.evidenceStatus !== eventAggregate)) out.push(issue('completeness_disagrees_with_derivation', 'trace.events', 'model request aggregate status disagrees with its content leaves'));
     if (streaming.losses.messageContent !== aggregate && streaming.losses.messageContent !== 'omitted') out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.messageContent', 'message-content fact disagrees with retained leaves'));
@@ -614,8 +614,15 @@ function collectLeafStatuses(messages: unknown): Array<'captured' | 'truncated' 
   return statuses;
 }
 
-function aggregateRetention(statuses: readonly string[]): 'fully-retained' | 'partially-retained' {
-  return statuses.includes('truncated') ? 'partially-retained' : 'fully-retained';
+function messageHasTruncation(message: unknown): boolean {
+  if (!isRecord(message)) return false;
+  const content = message['content'];
+  if (!Array.isArray(content)) return isRecord(content) && content['truncation'] !== undefined;
+  return content.some((part) => isRecord(part) && [part['text'], part['url'], part['arguments'], part['content']].some((leaf) => isRecord(leaf) && leaf['truncation'] !== undefined));
+}
+
+function aggregateRetention(statuses: readonly string[], hasTruncation: boolean): 'fully-retained' | 'partially-retained' {
+  return statuses.includes('truncated') || hasTruncation ? 'partially-retained' : 'fully-retained';
 }
 
 function aggregateEventStatus(statuses: readonly string[]): 'captured' | 'truncated' | 'redacted' {
