@@ -62,16 +62,20 @@ const MALFORMED_STREAM_CODES_SET: Set<string> = new Set(MALFORMED_STREAM_CODES);
 const CLIENT_REQUEST_FAILURE_CODES_SET: Set<string> = new Set(CLIENT_REQUEST_FAILURE_CODES);
 const TRANSPORT_FAILURE_CODES_SET: Set<string> = new Set(TRANSPORT_FAILURE_CODES);
 const OBSERVATION_FAILURE_CODES_SET: Set<string> = new Set(OBSERVATION_FAILURE_CODES);
-const ERROR_CODES_SET = new Set<string>([...MALFORMED_STREAM_CODES, ...CLIENT_REQUEST_FAILURE_CODES, ...UPSTREAM_FAILURE_CODES, ...OBSERVATION_FAILURE_CODES]);
+const UPSTREAM_FAILURE_CODES_SET: Set<string> = new Set(UPSTREAM_FAILURE_CODES);
+const ALL_ERROR_CODES_SET = new Set<string>([...MALFORMED_STREAM_CODES, ...CLIENT_REQUEST_FAILURE_CODES, ...UPSTREAM_FAILURE_CODES, ...OBSERVATION_FAILURE_CODES]);
 const RETENTION3_SET = new Set<string>(RETENTION3_VALUES);
 const RETENTION4_SET = new Set<string>(RETENTION4_VALUES);
 const REMAINDER_SET = new Set<string>(REMAINDER_KNOWLEDGE_VALUES);
 const UNMAPPED_DELTA_SET = new Set<string>(UNMAPPED_DELTA_FIELD_CATEGORIES);
-const SAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const MAX_RETAINED_CONTENT_CODE_POINTS = 240;
+const MAX_METADATA_LABEL_CODE_POINTS = 128;
+const MAX_ERROR_MESSAGE_CODE_POINTS = 200;
 
 function isAtLeast11(version: string): boolean {
-  const [, minor = '0'] = version.split('.');
-  return Number(minor) >= 1;
+  if (!isSemanticVersion(version)) return false;
+  const [major, minor] = version.split('.').map(Number);
+  return major === 1 && (minor ?? 0) >= 1;
 }
 
 function codePoints(value: string): number {
@@ -80,7 +84,7 @@ function codePoints(value: string): number {
 
 function closedObject(value: Record<string, unknown>, keys: readonly string[], path: string, out: ValidationIssue[]): void {
   const allowed = new Set(keys);
-  if (Object.keys(value).some((key) => !allowed.has(key) && !SAFE_KEYS.has(key))) {
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
     out.push(issue('closed_shape_unknown_key', path, 'object contains a field outside the closed schema'));
   }
 }
@@ -105,6 +109,13 @@ function validateEnvelope(
     return;
   }
   const v = env as Record<string, unknown>;
+  if (isAtLeast11(schemaVersion)) {
+    const common = ['providerNativeFidelity', 'nativeEncoding', 'nativeContentType', 'nativeContentHash'];
+    const requestKeys = [...common, 'model', 'provider', 'messages', 'providerNative'];
+    const responseHeaderKeys = [...common, 'responseMeta'];
+    const responseChunkKeys = [...common, 'finishReason', 'providerNative', 'usage', 'chunkIndex', 'choiceIndex', 'deltaText'];
+    closedObject(v, kind === 'request' ? requestKeys : eventKind === 'model_response' ? responseHeaderKeys : responseChunkKeys, path, out);
+  }
   const fid = v['providerNativeFidelity'];
   if (fid !== 'structurally_faithful' && fid !== 'byte_faithful') {
     out.push(issue('envelope_invalid_fidelity', path, `${kind}Envelope missing required providerNativeFidelity (structurally_faithful | byte_faithful)`));
@@ -281,8 +292,8 @@ function validateKindSpecific(
     }
     if (isAtLeast11(schemaVersion) && isRecord(pv['error'])) {
       closedObject(pv['error'], ['type', 'message'], `${path}.payload.error`, out);
-      if (!ERROR_CODES_SET.has(pv['error']['type'] as string)) out.push(issue('error_type_invalid', `${path}.payload.error.type`, 'error type is outside the closed vocabulary'));
-      if (pv['error']['message'] !== undefined && (typeof pv['error']['message'] !== 'string' || codePoints(pv['error']['message'] as string) > 200)) out.push(issue('error_message_invalid', `${path}.payload.error.message`, 'error message must be bounded structural text'));
+      if (!ALL_ERROR_CODES_SET.has(pv['error']['type'] as string)) out.push(issue('error_type_invalid', `${path}.payload.error.type`, 'error type is outside the closed vocabulary'));
+      if (pv['error']['message'] !== undefined && (typeof pv['error']['message'] !== 'string' || codePoints(pv['error']['message'] as string) > MAX_ERROR_MESSAGE_CODE_POINTS)) out.push(issue('error_message_invalid', `${path}.payload.error.message`, 'error message must be bounded structural text'));
     }
     validateTargetSpan(spanId, pv['lifecycleTarget'], path, out);
   } else if (kind === 'cancelled') {
@@ -349,7 +360,7 @@ function validateLeaf(value: unknown, path: string, out: ValidationIssue[]): voi
   closedObject(value, ['text', 'evidenceStatus', 'redaction', 'truncation'], path, out);
   const text = value['text'];
   const status = value['evidenceStatus'];
-  if (typeof text !== 'string' || codePoints(text) > 240) out.push(issue('content_leaf_text_invalid', `${path}.text`, 'content leaf text must be a string of at most 240 code points'));
+  if (typeof text !== 'string' || codePoints(text) > MAX_RETAINED_CONTENT_CODE_POINTS) out.push(issue('content_leaf_text_invalid', `${path}.text`, `content leaf text must be a string of at most ${MAX_RETAINED_CONTENT_CODE_POINTS} code points`));
   if (status !== 'captured' && status !== 'truncated' && status !== 'redacted') out.push(issue('content_leaf_status_invalid', `${path}.evidenceStatus`, 'content leaf status is outside the closed leaf vocabulary'));
   const redaction = value['redaction'];
   const truncation = value['truncation'];
@@ -365,7 +376,7 @@ function validateLeaf(value: unknown, path: string, out: ValidationIssue[]): voi
     else {
       closedObject(truncation, ['maxLength', 'originalLength', 'retainedLength'], `${path}.truncation`, out);
       const retained = typeof text === 'string' ? codePoints(text) : -1;
-      if (truncation['maxLength'] !== 240 || !Number.isInteger(truncation['originalLength']) || !Number.isInteger(truncation['retainedLength']) || truncation['retainedLength'] !== retained || (truncation['originalLength'] as number) <= retained) out.push(issue('leaf_truncation_invalid', `${path}.truncation`, 'leaf truncation declaration is malformed or inconsistent'));
+      if (truncation['maxLength'] !== MAX_RETAINED_CONTENT_CODE_POINTS || !Number.isInteger(truncation['originalLength']) || !Number.isInteger(truncation['retainedLength']) || truncation['retainedLength'] !== retained || (truncation['originalLength'] as number) <= retained) out.push(issue('leaf_truncation_invalid', `${path}.truncation`, 'leaf truncation declaration is malformed or inconsistent'));
     }
   }
   if (status === 'captured' && (redaction !== undefined || truncation !== undefined)) out.push(issue('leaf_declaration_disagrees', path, 'captured leaf must not carry transformation declarations'));
@@ -374,7 +385,7 @@ function validateLeaf(value: unknown, path: string, out: ValidationIssue[]): voi
 }
 
 function validateLabel(value: unknown, path: string, out: ValidationIssue[]): void {
-  if (typeof value !== 'string' || codePoints(value) > 128) out.push(issue('metadata_label_invalid', path, 'metadata label must be a string of at most 128 code points'));
+  if (typeof value !== 'string' || codePoints(value) > MAX_METADATA_LABEL_CODE_POINTS) out.push(issue('metadata_label_invalid', path, `metadata label must be a string of at most ${MAX_METADATA_LABEL_CODE_POINTS} code points`));
 }
 
 function validateMessages(value: unknown, path: string, out: ValidationIssue[]): void {
@@ -417,7 +428,7 @@ function validateResponse11(v: Record<string, unknown>, eventStatus: unknown, ev
   } else if (eventKind === 'model_response_chunk') {
     if (meta !== undefined) out.push(issue('response_envelope_field_placement', `${path}.responseMeta`, 'responseMeta is allowed only on model_response'));
     if (!Number.isInteger(choice) || (choice as number) < 0) out.push(issue('choice_index_invalid', `${path}.choiceIndex`, 'choiceIndex must be a non-negative integer'));
-    if (delta !== undefined && (typeof delta !== 'string' || codePoints(delta) > 240)) out.push(issue('delta_text_invalid', `${path}.deltaText`, 'deltaText must be a string of at most 240 code points'));
+    if (delta !== undefined && (typeof delta !== 'string' || codePoints(delta) > MAX_RETAINED_CONTENT_CODE_POINTS)) out.push(issue('delta_text_invalid', `${path}.deltaText`, `deltaText must be a string of at most ${MAX_RETAINED_CONTENT_CODE_POINTS} code points`));
     if (delta !== undefined && !['captured', 'truncated', 'redacted'].includes(String(eventStatus))) out.push(issue('delta_text_status_invalid', path, 'retained deltaText requires a retaining evidence status'));
   } else if (meta !== undefined || choice !== undefined || delta !== undefined) out.push(issue('response_envelope_field_placement', path, '1.1 response fields are not allowed on this event'));
 }
@@ -471,7 +482,12 @@ const VALID_PAIRS: Record<string, readonly string[]> = {
 };
 
 function validateIdentity(value: unknown, path: string, literal: string, out: ValidationIssue[]): void {
-  if (!isRecord(value) || value['name'] !== literal || !isSemanticVersion(value['version'])) out.push(issue('versioned_identity_invalid', path, 'versioned identity has an invalid literal name or semantic version'));
+  if (!isRecord(value)) {
+    out.push(issue('versioned_identity_invalid', path, 'versioned identity has an invalid literal name or semantic version'));
+    return;
+  }
+  closedObject(value, ['name', 'version'], path, out);
+  if (value['name'] !== literal || !isSemanticVersion(value['version'])) out.push(issue('versioned_identity_invalid', path, 'versioned identity has an invalid literal name or semantic version'));
 }
 
 function validateStreamingBoundary(value: unknown, path: string, out: ValidationIssue[]): void {
@@ -507,11 +523,14 @@ function validateStreamingBoundary(value: unknown, path: string, out: Validation
   }
   validateIdentity(v['captureProfile'], `${path}.captureProfile`, 'signalglass.collection.ingress-metadata-safe', out);
   validateIdentity(v['detector'], `${path}.detector`, 'signalglass.collection.sensitive-detector', out);
+  if (isRecord(v['captureProfile']) && isRecord(v['assembly']) && isRecord(v['assembly']['assembler']) && v['captureProfile']['version'] !== v['assembly']['assembler']['version']) out.push(issue('capture_profile_pedigree_disagrees', `${path}.captureProfile.version`, 'capture-profile version disagrees with the assembly pedigree version'));
   validateBudgets(v['budgets'], `${path}.budgets`, out);
 }
 
 function validateLosses(value: unknown, path: string, disposition: unknown, out: ValidationIssue[]): void {
-  const keys = ['requestBody', 'messageContent', 'deltaContent', 'providerNative', 'providerErrorBody', 'wireBytes', 'postTerminalContent', 'unmappedDeltaFields', 'unrecognizedExtensionFrameObserved', 'headerValuesBeyondAllowlist', 'contentTypeParametersDropped', 'maskedContent', 'contentEncodingUnsupported', 'multimodalContentObserved', 'requestMessageUnknownKeysObserved', 'unrecognizedRoleObserved', 'sseMetadataObservedButNotRetained'];
+  const enumeratedKeys = ['requestBody', 'messageContent', 'deltaContent', 'providerNative', 'providerErrorBody', 'wireBytes', 'postTerminalContent', 'unmappedDeltaFields'];
+  const booleanKeys = ['unrecognizedExtensionFrameObserved', 'headerValuesBeyondAllowlist', 'contentTypeParametersDropped', 'maskedContent', 'contentEncodingUnsupported', 'multimodalContentObserved', 'requestMessageUnknownKeysObserved', 'unrecognizedRoleObserved', 'sseMetadataObservedButNotRetained'];
+  const keys = [...enumeratedKeys, ...booleanKeys];
   if (!isRecord(value)) { out.push(issue('streaming_losses_invalid', path, 'losses must be a complete closed object')); return; }
   closedObject(value, keys, path, out);
   if (!keys.every((key) => key in value)) out.push(issue('streaming_losses_incomplete', path, 'losses must contain every required loss fact'));
@@ -520,7 +539,7 @@ function validateLosses(value: unknown, path: string, disposition: unknown, out:
   for (const key of ['providerNative', 'providerErrorBody', 'wireBytes']) if (!RETENTION3_SET.has(value[key] as string)) out.push(issue('retention_fact_invalid', `${path}.${key}`, 'retention fact is outside the closed vocabulary'));
   if (!POST_TERMINAL_SET.has(value['postTerminalContent'] as string)) out.push(issue('post_terminal_invalid', `${path}.postTerminalContent`, 'post-terminal fact is outside the closed vocabulary'));
   if (!Array.isArray(value['unmappedDeltaFields']) || !value['unmappedDeltaFields'].every((x) => typeof x === 'string' && UNMAPPED_DELTA_SET.has(x))) out.push(issue('unmapped_delta_fields_invalid', `${path}.unmappedDeltaFields`, 'unmapped delta fields must use the closed categories'));
-  for (const key of keys.slice(8)) if (typeof value[key] !== 'boolean') out.push(issue('loss_boolean_invalid', `${path}.${key}`, 'loss fact must be boolean'));
+  for (const key of booleanKeys) if (typeof value[key] !== 'boolean') out.push(issue('loss_boolean_invalid', `${path}.${key}`, 'loss fact must be boolean'));
   if (value['sseMetadataObservedButNotRetained'] === true && disposition !== 'openai-sse') out.push(issue('sse_metadata_applicability_invalid', `${path}.sseMetadataObservedButNotRetained`, 'SSE metadata can be observed only when the OpenAI SSE decoder participated'));
   if (disposition === 'unsupported-encoding' && value['contentEncodingUnsupported'] !== true) out.push(issue('encoding_loss_disagrees', `${path}.contentEncodingUnsupported`, 'unsupported encoding disposition requires its authoritative loss fact'));
 }
@@ -541,7 +560,7 @@ export function validateStreamingConsistency(trace: EvidenceTrace, streaming: St
   validateStreamingTerminal(trace, streaming, out);
   const responses = trace.events.filter((event) => event.kind === 'model_response');
   const responseIndexes = trace.events.flatMap((event, index) => event.kind === 'model_response' ? [index] : []);
-  const responseDerivedIndexes = trace.events.flatMap((event, index) => ['model_response', 'model_response_chunk', 'model_usage'].includes(event.kind) ? [index] : []);
+  const responseDerivedIndexes = trace.events.flatMap((event, index) => ['model_response', 'model_response_chunk', 'model_usage'].includes(event.kind) || (event.kind === 'error' && event.actor === 'model') ? [index] : []);
   const headersObserved = responses.length > 0;
   const responseMeta = responses.length === 1 ? responses[0]!.responseEnvelope.responseMeta : undefined;
   if ((streaming.decoderDisposition === 'openai-sse' || streaming.decoderDisposition === 'unsupported-encoding') && !headersObserved) out.push(issue('decoder_disposition_disagrees', 'captureBoundary.streaming.decoderDisposition', 'decoder participation requires an observed response metadata event'));
@@ -563,9 +582,17 @@ export function validateStreamingConsistency(trace: EvidenceTrace, streaming: St
     if (requestEvents.some((event) => event.evidenceStatus !== eventAggregate)) out.push(issue('completeness_disagrees_with_derivation', 'trace.events', 'model request aggregate status disagrees with its content leaves'));
     if (streaming.losses.messageContent !== aggregate && streaming.losses.messageContent !== 'omitted') out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.messageContent', 'message-content fact disagrees with retained leaves'));
   } else if (streaming.losses.messageContent === 'fully-retained' || streaming.losses.messageContent === 'partially-retained') out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.messageContent', 'message-content fact claims retained leaves that do not exist'));
-  const chunks = trace.events.filter((event) => event.kind === 'model_response_chunk' && event.responseEnvelope.deltaText !== undefined);
-  const deltaAggregate = chunks.length === 0 ? 'not-observed' : chunks.some((event) => event.evidenceStatus === 'truncated') ? 'partially-retained' : 'fully-retained';
-  if (streaming.losses.deltaContent !== deltaAggregate && streaming.losses.deltaContent !== 'omitted') out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.deltaContent', 'delta-content fact disagrees with retained chunk text'));
+  const allChunks = trace.events.filter((event) => event.kind === 'model_response_chunk');
+  const chunks = allChunks.filter((event) => event.responseEnvelope.deltaText !== undefined);
+  const wholesaleOmission = allChunks.some((event) => event.responseEnvelope.deltaText === undefined && (event.evidenceStatus === 'missing' || event.evidenceStatus === 'unknown'));
+  const deltaAggregate = wholesaleOmission
+    ? 'omitted'
+    : chunks.length === 0
+      ? 'not-observed'
+      : chunks.some((event) => event.evidenceStatus === 'truncated' || event.truncation !== undefined)
+        ? 'partially-retained'
+        : 'fully-retained';
+  if (streaming.losses.deltaContent !== deltaAggregate) out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.deltaContent', 'delta-content fact disagrees with retained chunk text and declarations'));
   const redacted = requestStatuses.includes('redacted') || chunks.some((event) => event.evidenceStatus === 'redacted');
   if (streaming.losses.maskedContent !== redacted) out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.maskedContent', 'masked-content fact disagrees with owning declarations'));
   if (trace.captureProfile.name !== streaming.captureProfile.name || trace.captureProfile.version !== streaming.captureProfile.version) out.push(issue('trace_capture_profile_disagrees', 'trace.captureProfile', 'trace capture profile disagrees with the authoritative streaming boundary'));
@@ -580,20 +607,29 @@ function validateStreamingTerminal(trace: EvidenceTrace, streaming: StreamingCap
   }
   if (final.kind === 'cancelled') {
     const requestedBy = final.cancellation.requestedBy;
-    if (streaming.upstream.outcome !== 'cancelled-by-ingress' || (requestedBy === 'client' && streaming.upstream.cause !== 'client-disconnect') || (requestedBy === 'ingress' && streaming.upstream.cause === 'client-disconnect')) out.push(issue('streaming_terminal_disagrees', 'captureBoundary.streaming.upstream', 'cancellation terminal disagrees with the authoritative transport facts'));
+    if ((requestedBy !== 'client' && requestedBy !== 'ingress') || final.lifecycleTarget !== 'trace' || final.lifecycleEffect !== 'cancel' || streaming.upstream.outcome !== 'cancelled-by-ingress' || (requestedBy === 'client' && streaming.upstream.cause !== 'client-disconnect') || (requestedBy === 'ingress' && streaming.upstream.cause === 'client-disconnect')) out.push(issue('streaming_terminal_disagrees', 'captureBoundary.streaming.upstream', 'cancellation terminal disagrees with the authoritative transport facts'));
     return;
   }
   if (final.kind !== 'error') {
     out.push(issue('streaming_terminal_invalid', 'trace.events', 'streaming record does not end in a recognized terminal event'));
     return;
   }
-  if (final.lifecycleTarget === 'none' && final.lifecycleEffect === 'none') {
-    if (final.actor !== 'capture' || !OBSERVATION_FAILURE_CODES_SET.has(final.error.type)) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'observation-detached terminal has inconsistent classification'));
-  } else if (final.actor === 'capture') {
-    if (streaming.upstream.outcome !== 'not-started' || !CLIENT_REQUEST_FAILURE_CODES_SET.has(final.error.type)) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'request-failed terminal disagrees with the authoritative transport facts'));
-  } else if (final.actor === 'model') {
-    if (!ERROR_CODES_SET.has(final.error.type)) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'provider terminal classification is outside the closed vocabulary'));
-  } else out.push(issue('streaming_terminal_disagrees', 'trace.events', 'streaming terminal actor is inconsistent with the closed terminal matrix'));
+  const code = final.error.type;
+  const modelFailureShape = final.actor === 'model' && final.lifecycleTarget === 'trace' && final.lifecycleEffect === 'fail';
+  const requestFailureShape = final.actor === 'capture' && final.lifecycleTarget === 'trace' && final.lifecycleEffect === 'fail';
+  const observerFailureShape = final.actor === 'capture' && final.lifecycleTarget === 'none' && final.lifecycleEffect === 'none';
+  const malformedOutcome = streaming.upstream.outcome === 'response-completed' || streaming.upstream.outcome === 'stream-ended-prematurely';
+  const transportOutcome = streaming.upstream.outcome === 'connection-failed' || streaming.upstream.outcome === 'stream-ended-prematurely';
+  if (MALFORMED_STREAM_CODES_SET.has(code)) {
+    if (!modelFailureShape || !malformedOutcome) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'malformed-stream terminal disagrees with the exact classification matrix'));
+  } else if (UPSTREAM_FAILURE_CODES_SET.has(code)) {
+    const outcomeMatches = TRANSPORT_FAILURE_CODES_SET.has(code) ? transportOutcome : streaming.upstream.outcome === 'response-completed';
+    if (!modelFailureShape || !outcomeMatches) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'upstream-failed terminal disagrees with the exact classification matrix'));
+  } else if (CLIENT_REQUEST_FAILURE_CODES_SET.has(code)) {
+    if (!requestFailureShape || streaming.upstream.outcome !== 'not-started') out.push(issue('streaming_terminal_disagrees', 'trace.events', 'request-failed terminal disagrees with the exact classification matrix'));
+  } else if (OBSERVATION_FAILURE_CODES_SET.has(code)) {
+    if (!observerFailureShape) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'observation-detached terminal disagrees with the exact classification matrix'));
+  } else out.push(issue('streaming_terminal_disagrees', 'trace.events', 'terminal code is outside the exact classification matrix'));
 }
 
 function collectLeafStatuses(messages: unknown): Array<'captured' | 'truncated' | 'redacted'> {
@@ -638,6 +674,7 @@ export function validateCaptureProfile(profile: unknown, path: string, out: Vali
     return;
   }
   const v = profile as Record<string, unknown>;
+  closedObject(v, ['name', 'version'], path, out);
   if (typeof v['name'] !== 'string' || v['name'].length === 0) {
     out.push(issue('capture_profile_name_invalid', `${path}.name`, 'captureProfile.name must be a non-empty string'));
   }

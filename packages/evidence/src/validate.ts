@@ -33,6 +33,7 @@ import {
 } from './validate-fields.js';
 import type { EvidenceObservation } from './types-trace.js';
 import type { EvidenceTrace } from './types-trace.js';
+import type { EventRecord } from './types-event.js';
 import { toJsonView } from './normalize.js';
 import { utf8Encode } from './hash.js';
 
@@ -104,10 +105,10 @@ export function normalizeEvidenceRecord(
 ): EvidenceRecordParseResult {
   const issues: ValidationIssue[] = [];
   if (!isSupportedEvidenceSchemaVersion(evidenceSchemaVersion)) {
-    issues.push(issue('unsupported_evidence_schema_version', 'evidenceSchemaVersion', `evidenceSchemaVersion '${String(evidenceSchemaVersion)}' is not supported (supported MAJOR: 1)`));
+    return fail([issue('unsupported_evidence_schema_version', 'evidenceSchemaVersion', `evidenceSchemaVersion '${String(evidenceSchemaVersion)}' is not supported (supported MAJOR: 1)`)]);
   }
   validateCaptureBoundary(captureBoundary, 'captureBoundary', issues, evidenceSchemaVersion);
-  const checked = validateObservationList(rawObservations, 'rawObservations', evidenceSchemaVersion);
+  const checked = validateObservationList(rawObservations, 'rawObservations', captureBoundary.streaming ? evidenceSchemaVersion : '1.0.0');
   issues.push(...checked.issues);
   if (issues.length > 0) return fail(issues);
 
@@ -152,6 +153,10 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
   if (!isRecord(input)) {
     return fail([issue('record_not_object', '$', 'evidence record must be a JSON object')]);
   }
+  const unsafePath = findUnsafeOwnKey(input, '$');
+  if (unsafePath) {
+    return fail([issue('unsafe_object_key', unsafePath, 'object contains a prototype-sensitive own key')]);
+  }
   const issues: ValidationIssue[] = [];
 
   // ---- Schema version ----
@@ -169,10 +174,10 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
   const rawBoundary = input['captureBoundary'];
   validateCaptureBoundary(rawBoundary, 'captureBoundary', issues, evidenceSchemaVersion);
   if (issues.length > 0) return fail(issues);
-  const captureBoundary = rawBoundary as CaptureBoundary;
+  const captureBoundary = cloneJsonSafe(rawBoundary) as CaptureBoundary;
 
   // ---- Raw observations ----
-  const checked = validateObservationList(input['rawObservations'], 'rawObservations', evidenceSchemaVersion);
+  const checked = validateObservationList(input['rawObservations'], 'rawObservations', captureBoundary.streaming ? evidenceSchemaVersion : '1.0.0');
   issues.push(...checked.issues);
   if (issues.length > 0) return fail(issues);
   const observations = checked.observations!;
@@ -248,6 +253,23 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
   return { ok: true, record: record as EvidenceRecord };
 }
 
+function findUnsafeOwnKey(value: unknown, path: string): string | null {
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++) {
+      const found = findUnsafeOwnKey(value[index], `${path}[${index}]`);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!isRecord(value)) return null;
+  for (const key of Object.keys(value)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') return path;
+    const found = findUnsafeOwnKey(value[key], `${path}.${key}`);
+    if (found) return found;
+  }
+  return null;
+}
+
 function isSchema10(version: string): boolean {
   return Number(version.split('.')[1] ?? 0) === 0;
 }
@@ -284,7 +306,7 @@ function validateConditions(value: unknown): readonly Condition[] | undefined {
   return out;
 }
 
-function validateStreamingRecordBudgets(
+export function validateStreamingRecordBudgets(
   input: Record<string, unknown>,
   observations: readonly EvidenceObservation[],
   trace: EvidenceTrace,
@@ -294,7 +316,10 @@ function validateStreamingRecordBudgets(
   const budgets = streaming.budgets;
   if (trace.events.length > budgets.maxCanonicalEvents) issues.push(issue('canonical_event_budget_exceeded', 'trace.events', 'canonical event count exceeds the declared budget'));
   if (observations.length > budgets.maxRawObservations) issues.push(issue('raw_observation_budget_exceeded', 'rawObservations', 'raw observation count exceeds the declared budget'));
-  const rawPayloadBytes = observations.reduce((total, observation) => total + utf8Encode(JSON.stringify(toJsonView(observation.payload))).byteLength, 0);
+  const rawPayloadBytes = observations.reduce((total, observation) => {
+    const serialized = JSON.stringify(toJsonView(observation.payload));
+    return total + (serialized === undefined ? 0 : utf8Encode(serialized).byteLength);
+  }, 0);
   if (rawPayloadBytes > budgets.maxRawObservationPayloadBytes) issues.push(issue('raw_payload_budget_exceeded', 'rawObservations', 'raw observation payload bytes exceed the declared budget'));
   const retainedCodePoints = countRetainedCodePoints(trace.events);
   if (retainedCodePoints > budgets.maxRetainedContentCodePoints) issues.push(issue('retained_content_budget_exceeded', 'trace.events', 'retained content exceeds the declared code-point budget'));
@@ -304,7 +329,7 @@ function validateStreamingRecordBudgets(
   if (ids.some((id) => utf8Encode(id).byteLength > budgets.maxIdLengthBytes)) issues.push(issue('evidence_id_budget_exceeded', 'rawObservations', 'an evidence identifier exceeds the declared byte bound'));
 }
 
-function countRetainedCodePoints(events: readonly import('./types-event.js').EventRecord[]): number {
+function countRetainedCodePoints(events: readonly EventRecord[]): number {
   let count = 0;
   const countLeaf = (leaf: unknown): void => { if (isRecord(leaf) && typeof leaf['text'] === 'string') count += [...leaf['text']].length; };
   for (const event of events) {

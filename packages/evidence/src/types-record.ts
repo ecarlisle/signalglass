@@ -1,6 +1,7 @@
 /** Evidence record and Spec 016 S1 additive schema types. */
 import type {
   CaptureSurface,
+  EvidenceStatus,
   ClientResponseOutcome,
   DeclaredLossCode,
   DecoderDisposition,
@@ -86,7 +87,7 @@ export type StreamingLifecycle = {
 };
 
 export type TraceCompleteness = {
-  eventsByStatus: Partial<Record<string, number>>;
+  eventsByStatus: Record<EvidenceStatus, number>;
   seqGaps: readonly SequenceGap[];
   duplicatesDetected: readonly string[];
   boundaryStatement: string;

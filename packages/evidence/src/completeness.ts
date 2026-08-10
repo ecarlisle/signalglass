@@ -67,7 +67,11 @@ function deriveObservationTerminal(events: readonly EventRecord[]): ObservationT
   const event = events[events.length - 1];
   if (!event) return 'observation-detached';
   if (event.kind === 'interaction_end') return 'completed';
-  if (event.kind === 'cancelled') return event.cancellation.requestedBy === 'client' ? 'client-cancelled' : 'ingress-cancelled';
+  if (event.kind === 'cancelled') {
+    if (event.cancellation.requestedBy === 'client') return 'client-cancelled';
+    if (event.cancellation.requestedBy === 'ingress') return 'ingress-cancelled';
+    return 'observation-detached';
+  }
   if (event.kind === 'error') {
     if (event.lifecycleTarget === 'none' && event.lifecycleEffect === 'none') return 'observation-detached';
     if (event.actor === 'capture') return 'request-failed';

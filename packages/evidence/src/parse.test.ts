@@ -71,6 +71,11 @@ describe('parseEvidenceRecord', () => {
     expect(res.ok).toBe(true);
   });
 
+  it('accepts a compatible additive minor revision within the supported MAJOR', () => {
+    const record = buildRecord(undefined, buildBoundary(), { evidenceSchemaVersion: '1.1.0' });
+    expect(parseEvidenceRecord(record as unknown).ok).toBe(true);
+  });
+
   it('rejects serialized trace disagreeing with the deterministic derivation', () => {
     const record = buildRecord();
     const bad = JSON.parse(serializeEvidenceRecord(record)) as Record<string, unknown>;
@@ -127,18 +132,14 @@ describe('parseEvidenceRecord', () => {
     }
   });
 
-  it('never descends prototype keys when preserving additive fields (regression)', () => {
+  it('rejects prototype-sensitive own keys instead of silently discarding them (regression)', () => {
     const record = buildRecord();
     const base = JSON.parse(serializeEvidenceRecord(record)) as Record<string, unknown>;
     const input = { ...base, '__proto__': { polluted: true }, constructor: { x: 1 }, future: 7 } as Record<string, unknown>;
     const res = parseEvidenceRecord(input);
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      const rec = res.record as unknown as Record<string, unknown>;
-      expect(rec['future']).toBe(7);
-      expect(Object.prototype.hasOwnProperty.call(rec as object, 'polluted')).toBe(false);
-      expect(Object.getPrototypeOf(rec as object)).toBe(Object.prototype);
-    }
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.issues.map((entry) => entry.code)).toContain('unsafe_object_key');
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 
   it('preserves raw array order and observation ids losslessly through serialize-parse-serialize', () => {

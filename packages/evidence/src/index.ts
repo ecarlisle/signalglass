@@ -121,13 +121,15 @@ export type {
   ContextContribution,
   UsageValue,
   UsageRecord,
-  ClockBasis as ClockBasisType,
   CollectionPolicy,
 } from './types-base.js';
 export type {
   NativeByteFields,
   RequestEnvelope,
   ResponseEnvelope,
+  ResponseHeaderEnvelope,
+  ResponseChunkEnvelope,
+  ResponseMetadata,
   ContentLeaf,
   NormalizedContentPart,
   RequestMessage,

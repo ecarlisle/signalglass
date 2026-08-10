@@ -105,9 +105,6 @@ export type UsageRecord = {
   totalTokens?: UsageValue;
 };
 
-/** Declared monotonic clock basis for `durationMs` (§4.3). */
-export type ClockBasis = 'monotonic-performance-now-ms';
-
 /** Collection policy mirroring `docs/capture-profiles.md` (§2.2.11). */
 export type CollectionPolicy = {
   name: string;

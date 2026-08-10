@@ -35,24 +35,41 @@ export type RequestEnvelope = {
   providerNative?: unknown;
 } & NativeByteFields;
 
-/** Response envelope, including stream chunks and final usage. */
-export type ResponseEnvelope = {
+type ResponseEnvelopeCommon = {
   providerNativeFidelity: ProviderNativeFidelity;
+} & NativeByteFields;
+
+export type ResponseMetadata = {
+  statusCode: number;
+  contentType?: string;
+  contentEncoding?: string;
+};
+
+/** Metadata-only response envelope. `responseMeta` is optional only for
+ * genuine schema-1.0 records, whose type cannot be expressed separately. */
+export type ResponseHeaderEnvelope = ResponseEnvelopeCommon & {
+  responseMeta?: ResponseMetadata;
+  finishReason?: never;
+  providerNative?: never;
+  usage?: never;
+  chunkIndex?: never;
+  choiceIndex?: never;
+  deltaText?: never;
+};
+
+/** Streaming chunk response envelope. */
+export type ResponseChunkEnvelope = ResponseEnvelopeCommon & {
   finishReason?: string;
   providerNative?: unknown;
   usage?: unknown;
   chunkIndex?: number;
-  /** Response metadata: present on the first model_response event only (§13.3). */
-  responseMeta?: {
-    statusCode: number;
-    contentType?: string;
-    contentEncoding?: string;
-  };
-  /** Choice index identity: present on chunk events (§13.5). */
   choiceIndex?: number;
-  /** Delta text content: present on model_response_chunk events when retained (§13.5). */
   deltaText?: string;
-} & NativeByteFields;
+  responseMeta?: never;
+};
+
+/** Event-discriminated response envelope union. */
+export type ResponseEnvelope = ResponseHeaderEnvelope | ResponseChunkEnvelope;
 
 /** Leaf-level request message content (Spec 016 §8.7). Each message
  * is a content leaf with its own evidence status and declarations. */

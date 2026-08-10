@@ -315,7 +315,7 @@ export function agreeTrace(derived: unknown, serialized: unknown): boolean {
     if (!eq(derived[k], serialized[k])) return false;
   }
   if (!eq(derived['captureProfile'], serialized['captureProfile'])) return false;
-  if (!eq(derived['assembly'], serialized['assembly'])) return false;
+  if (!eq(derived['assembly'], stripUnknowns(serialized['assembly'], ASSEMBLY_SPEC))) return false;
   if (!eq(derived['finishedAt'], serialized['finishedAt'])) return false;
 
   const de = sortedEvents(derived['events']);

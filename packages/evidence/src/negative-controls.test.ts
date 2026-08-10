@@ -290,6 +290,11 @@ describe('Negative controls — Versions and discriminants', () => {
     expect(res.ok).toBe(true);
   });
 
+  it('accepts supported additive minor versions', () => {
+    const record = buildRecord(undefined, baseBoundary, { evidenceSchemaVersion: '1.1.0' });
+    expect(parseEvidenceRecord(record as unknown).ok).toBe(true);
+  });
+
   it('preserves unknown additive fields for compatible versions', () => {
     const record = buildRecord();
     const text = serializeEvidenceRecord(record);

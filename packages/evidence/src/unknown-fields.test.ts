@@ -176,7 +176,7 @@ describe('unknown additive fields at equivalent structural paths (§5.3)', () =>
 });
 
 describe('unknown-field boundary enforcement', () => {
-  it('never preserves prototype keys on the record root or trace root', () => {
+  it('rejects prototype keys on the record root or trace root', () => {
     const record = duplicateRecord();
     const json = jsonOf(record);
     const trace = json['trace'] as Record<string, unknown>;
@@ -186,16 +186,10 @@ describe('unknown-field boundary enforcement', () => {
     trace['constructor'] = { bad: 1 };
     json['prototype'] = { bad: 2 };
 
-    const parsed = parseOk(json);
-    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
-    expect(Object.getPrototypeOf(parsed.trace)).toBe(Object.prototype);
-    expect(Object.prototype.hasOwnProperty.call(parsed, 'polluted')).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(parsed.trace, 'polluted')).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(parsed.trace, 'constructor')).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(parsed, 'prototype')).toBe(false);
-    // The polluted value must not appear anywhere after round trip.
-    const again = reparse(serializeEvidenceRecord(parsed));
-    expect(JSON.stringify(again)).not.toContain('polluted');
+    const result = parseEvidenceRecord(json);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.issues.map((entry) => entry.code)).toContain('unsafe_object_key');
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 
   it('malformed owned fields still reject even when unknown fields are present', () => {
@@ -271,8 +265,8 @@ function twoGapRecord(): EvidenceRecord {
   ]);
 }
 
-describe('recursive unsafe-key exclusion in additive preservation', () => {
-  it('excludes __proto__, constructor, and prototype at every nesting depth of an unknown additive object', () => {
+describe('recursive unsafe-key refusal in additive preservation', () => {
+  it('rejects __proto__, constructor, and prototype at every nesting depth of an unknown additive object', () => {
     const record = duplicateRecord();
     const json = jsonOf(record);
     const evil: Record<string, unknown> = { harmless: 1, nested: { deep: { keep: true } } };
@@ -282,23 +276,10 @@ describe('recursive unsafe-key exclusion in additive preservation', () => {
     (evil['nested'] as Record<string, unknown>)['prototype'] = { y: 1 };
     json['futureRoot'] = evil;
 
-    const parsed = parseOk(json);
-    const v = extra<Record<string, unknown>>(parsed, 'futureRoot');
-    // Valid content survives; unsafe keys do not, at any depth.
-    expect(v['harmless']).toBe(1);
-    expect((v['nested'] as Record<string, unknown>)['deep']).toEqual({ keep: true });
-    expect(Object.getPrototypeOf(v)).toBe(Object.prototype);
-    expect(Object.getPrototypeOf(v['nested'])).toBe(Object.prototype);
-    expect(Object.prototype.hasOwnProperty.call(v, 'constructor')).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(v['nested'], 'prototype')).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(v['nested'], 'deepPolluted')).toBe(false);
-
-    // Neither parsing nor serialization leaves any unsafe key behind.
-    const out = JSON.stringify(JSON.parse(serializeEvidenceRecord(parsed)));
-    expect(out).not.toContain('deepPolluted');
-    expect(out).not.toContain('polluted');
-    expect(out).not.toContain('"constructor"');
-    expect(out).not.toContain('"prototype"');
+    const result = parseEvidenceRecord(json);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.issues.map((entry) => entry.code)).toContain('unsafe_object_key');
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 });
 
