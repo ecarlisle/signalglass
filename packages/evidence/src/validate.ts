@@ -108,7 +108,8 @@ export function normalizeEvidenceRecord(
     return fail([issue('unsupported_evidence_schema_version', 'evidenceSchemaVersion', `evidenceSchemaVersion '${String(evidenceSchemaVersion)}' is not supported (supported MAJOR: 1)`)]);
   }
   validateCaptureBoundary(captureBoundary, 'captureBoundary', issues, evidenceSchemaVersion);
-  const checked = validateObservationList(rawObservations, 'rawObservations', captureBoundary.streaming ? evidenceSchemaVersion : '1.0.0');
+  if (issues.length > 0) return fail(issues);
+  const checked = validateObservationList(rawObservations, 'rawObservations', evidenceSchemaVersion);
   issues.push(...checked.issues);
   if (issues.length > 0) return fail(issues);
 
@@ -129,17 +130,22 @@ export function normalizeEvidenceRecord(
 
   const analysis = buildAnalysis(collapsed);
   const completeness = deriveCompleteness(derived.trace, analysis, captureBoundary);
+  const record = {
+    rawObservations: observations,
+    trace: derived.trace,
+    analysis,
+    completeness,
+    evidenceSchemaVersion,
+    captureBoundary,
+  };
+  if (captureBoundary.streaming) {
+    validateStreamingRecordBudgets(record, observations, derived.trace, captureBoundary.streaming, issues);
+  }
+  if (issues.length > 0) return fail(issues);
 
   return {
     ok: true,
-    record: cloneJsonSafe({
-      rawObservations: observations,
-      trace: derived.trace,
-      analysis,
-      completeness,
-      evidenceSchemaVersion,
-      captureBoundary,
-    }) as EvidenceRecord,
+    record: cloneJsonSafe(record) as EvidenceRecord,
   };
 }
 
@@ -173,7 +179,7 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
   const captureBoundary = cloneJsonSafe(rawBoundary) as CaptureBoundary;
 
   // ---- Raw observations ----
-  const checked = validateObservationList(input['rawObservations'], 'rawObservations', captureBoundary.streaming ? evidenceSchemaVersion : '1.0.0');
+  const checked = validateObservationList(input['rawObservations'], 'rawObservations', evidenceSchemaVersion);
   issues.push(...checked.issues);
   if (issues.length > 0) return fail(issues);
   const observations = checked.observations!;

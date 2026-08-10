@@ -2,11 +2,10 @@
 
 ## Status
 
-**Accepted — revision 11 (narrow correction pass).** Proposed for
-acceptance and **accepted by human architectural review**; implementation
-is now permitted. No runtime code is produced by this PR. The proposed
-modules, contracts, and constants below are named but **not created**
-until an accepted implementation slice.
+**Accepted — revision 11 (narrow correction pass).** Accepted by human
+architectural review. The S1 schema-foundation slice is implemented in
+PR #24. The provider decoder, streaming parser/assembler, persistence-policy
+integration, and ingress wiring described by S2–S5 remain pending.
 
 Revision 11 (narrow correction pass) resolves three revision-10 defects
 without redesigning the terminal-suffix or Spec 014 collapse contracts:
@@ -432,9 +431,8 @@ Spec 014 collapse, or contradicted revision 9:
    actor/role/status/completeness result contradicts the normative
    transition (§9.3, §1.4).
 
-This spec is forecast-only in `docs/roadmap.md` (anticipated PR #23,
-documentation-only; the implementation slices are a later, accepted
-implementation PR).
+The accepted roadmap is implemented incrementally. PR #24 supplies only the
+S1 schema foundation; the later S2–S5 implementation slices remain pending.
 
 ## Purpose
 
@@ -3924,12 +3922,12 @@ reinterpretation.**
 **Decision 20 — implementation proceeds in five slices, each with a
 shippable, testable outcome; the 1.1 schema foundation lands first, policy
 second, parser third, decoder/assembler fourth, ingress wiring last; every
-slice builds against the fields it actually consumes; no slice is
-implemented in this docs-only spec.**
+slice builds against the fields it actually consumes. S1 is implemented in
+PR #24; S2–S5 remain pending.**
 
 | Slice | Scope | Outcome | Depends on |
 |---|---|---|---|
-| **S1** | 1.1 schema foundation in `@signalglass/evidence`: additive `captureBoundary.streaming` parse/validation (incl. `decoderDisposition`, phase-accurate `RequestBodyRetention`, loss booleans incl. `unrecognizedRoleObserved`/`sseMetadataObservedButNotRetained`, **exact `captureBoundary.streaming.budgets` validation §3.5/§13.4 — ranges AND the `maxRawObservations ≥ maxCanonicalEvents` cross-field invariant AND the state-dependent terminal-suffix reservation**), `responseEnvelope.deltaText`, the **closed leaf-level request-message shape (§8.7) with version-aware scope** (validated on ≥ 1.1.x records only; 1.0.x `messages` parses/round-trips unchanged — T133; additive `LeafRedactionDeclaration`/`LeafTruncationDeclaration` on the unchanged Spec 014 types), `record-budget-exceeded` as a closed `ObservationFailureCode`, version-aware MAJOR-1 validation, closed vocabularies, authority-model verification (deriveCompleteness recompute + disagreement failure, aggregate precedence + cross-validation incl. leaf-level rules §7.3.3) | `parseEvidenceRecord` accepts/validates 1.1 streaming records; tampering with derived fields fails parse; 1.0 records with arbitrary legacy `messages` unchanged | Spec 014/015 code (existing) |
+| **S1 — implemented in PR #24** | 1.1 schema foundation in `@signalglass/evidence`: additive `captureBoundary.streaming` parse/validation (incl. `decoderDisposition`, phase-accurate `RequestBodyRetention`, loss booleans incl. `unrecognizedRoleObserved`/`sseMetadataObservedButNotRetained`, **exact `captureBoundary.streaming.budgets` validation §3.5/§13.4 — ranges AND the `maxRawObservations ≥ maxCanonicalEvents` cross-field invariant**), `responseEnvelope.deltaText`, the **closed leaf-level request-message shape (§8.7) with version-aware scope** (validated on ≥ 1.1.x records only; 1.0.x `messages` parses/round-trips unchanged — T133; additive `LeafRedactionDeclaration`/`LeafTruncationDeclaration` on the unchanged Spec 014 types), `record-budget-exceeded` as a closed `ObservationFailureCode`, version-aware MAJOR-1 validation, closed vocabularies, authority-model verification (deriveCompleteness recompute + disagreement failure, aggregate precedence + cross-validation incl. leaf-level rules §7.3.3) | `parseEvidenceRecord` accepts/validates 1.1 streaming records; tampering with derived fields fails parse; 1.0 records with arbitrary legacy `messages` unchanged | Spec 014/015 code (existing) |
 | **S2** | `metadata-safe` v1.1.0 persistence policy (Rules 1–2 with the closed admitted paths §14.2, **inspecting each leaf's own status/declaration/path/length** — never the aggregate event status; cap exactly 240 code points; **v1.0.0 unchanged — whole-payload event-level authorization, `unknown-additive-field` refusal, no `ContentLeaf` interpretation; v1.1.0 delegating v1.0 admission/classification semantics for 1.0.x records with truthful v1.1.0 deciding-policy identity**) in `@signalglass/storage` + construction-time policy selection (Spec 015 model) + policy-version recording + leak-free `policy-failed` reasons (no `unknown-policy-version`) | persistence admits bounded captured content mechanically at closed paths; v1.0.0 unchanged; delegation status/code equivalent with truthful identity; policy chosen at construction | S1 (1.1 records exist, deltaText/messages leaf shapes) |
 | **S3** | `@signalglass/streaming`: L2 SSE parser (incremental, bounded, `[DONE]`-aware, deterministic post-terminal continuation, frame-overflow, **SSE-metadata fact `sseMetadataObservedButNotRetained` (openai-sse applicability only, §7.3) with comments-ignored-by-canonical-semantics §6.1**) | parser unit-tested (T01–T12, T131, T142); network-free | none |
 | **S4** | `@signalglass/streaming` assembler + `@signalglass/providers` L3 decoder (openai-sse contract): normalization, `choiceIndex` identity, closed-category unmapped fields, usage, terminalization, honest evidence statuses, explicit nondeterministic inputs, remainder knowledge, `deltaText` assembly, **leaf-level request-message assembly with role sentinel (§8.7), evidence-budget enforcement with the normative snapshot measurement (maximum over valid terminal-suffix alternatives), state-dependent terminal-suffix reservation, deterministic finalization inputs, atomic observation admission running actual Spec 014 collapse with structural rejection routed separately from budget exhaustion, first-terminal-wins, and classification-matrix exhaustiveness (§3.5, §9.3)** | decoder/assembler unit-tested (T13–T44, T49–T61, T72–T87, T101–T166); builds against S1 schema fields and S2 Rule 2 admitted-path contracts | S1 (schema fields), S2 (policy contracts as applicable), S3 |

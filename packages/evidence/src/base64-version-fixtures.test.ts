@@ -16,7 +16,7 @@ import {
   isArtifactKind,
 } from '@signalglass/evidence';
 import { serializeEvidenceRecord } from '@signalglass/evidence';
-import { minimalObservations, buildBoundary, buildRecord, PROFILE } from './fixtures.js';
+import { minimalObservations, minimalSchema11Observations, buildBoundary, buildRecord, PROFILE } from './fixtures.js';
 
 const V = '1.0.0';
 
@@ -136,7 +136,7 @@ describe('Version-compatibility fixture coverage (Spec 014 §5.3)', () => {
   });
 
   it('accepts compatible additive minor revision within supported MAJOR', () => {
-    const record = buildRecord(undefined, buildBoundary(), { evidenceSchemaVersion: '1.1.0' });
+    const record = buildRecord(minimalSchema11Observations(), buildBoundary(), { evidenceSchemaVersion: '1.1.0' });
     const res = parseEvidenceRecord(record as unknown);
     expect(res.ok).toBe(true);
   });

@@ -127,7 +127,11 @@ function withoutChunkTerminal(code: string, upstream: StreamingCaptureBoundary['
     clientResponse: upstream.outcome === 'response-completed' ? { outcome: 'local-error-flushed' } : { outcome: 'closed-before-completion' },
     decoderDisposition: disposition,
     remainder: { knowledge: upstream.outcome === 'response-completed' ? 'transport-eof-observed' : 'unknown', rawForwardedBytes: 0 },
-    losses: { ...base.losses, deltaContent: 'not-observed' },
+    losses: {
+      ...base.losses,
+      deltaContent: 'not-observed',
+      ...(['http-error-status', 'provider-error-frame'].includes(code) ? { providerErrorBody: 'not-retained' as const } : {}),
+    },
     assembly: {
       assembler: base.assembly.assembler,
       ...(disposition === 'openai-sse' ? { decoderContract: base.assembly.decoderContract } : {}),
@@ -305,6 +309,69 @@ describe('Spec 016 S1 schema foundation', () => {
     expect(normalizeEvidenceRecord(encodedSource, encodedBoundary, '1.1.0').ok).toBe(true);
   });
 
+  it('enforces status, content-type, decoder, and error-body facts for response-classification terminals', () => {
+    const setResponseMeta = (candidate: ReturnType<typeof withoutChunkTerminal>, statusCode: number, contentType?: string): void => {
+      const responseMeta = ((candidate.source[3]!.payload as any).responseEnvelope.responseMeta) as Record<string, unknown>;
+      responseMeta['statusCode'] = statusCode;
+      if (contentType === undefined) delete responseMeta['contentType'];
+      else responseMeta['contentType'] = contentType;
+    };
+    const expectRejected = (candidate: ReturnType<typeof withoutChunkTerminal>): void => {
+      const result = normalizeEvidenceRecord(candidate.source, candidate.boundary, '1.1.0');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.issues.map((entry) => entry.code)).toContain('streaming_terminal_disagrees');
+    };
+
+    for (const statusCode of [100, 199, 300, 599]) {
+      const candidate = withoutChunkTerminal('http-error-status', { outcome: 'response-completed' }, 'not-applicable');
+      setResponseMeta(candidate, statusCode, statusCode === 599 ? 'text/event-stream' : 'application/json');
+      expect(normalizeEvidenceRecord(candidate.source, candidate.boundary, '1.1.0').ok, `http-${statusCode}`).toBe(true);
+    }
+    for (const statusCode of [200, 299]) {
+      const candidate = withoutChunkTerminal('http-error-status', { outcome: 'response-completed' }, 'not-applicable');
+      setResponseMeta(candidate, statusCode, 'application/json');
+      expectRejected(candidate);
+    }
+    const httpWrongDecoder = withoutChunkTerminal('http-error-status', { outcome: 'response-completed' }, 'openai-sse');
+    setResponseMeta(httpWrongDecoder, 500, 'text/event-stream');
+    expectRejected(httpWrongDecoder);
+    const httpBodyNotApplicable = withoutChunkTerminal('http-error-status', { outcome: 'response-completed' }, 'not-applicable');
+    setResponseMeta(httpBodyNotApplicable, 500, 'application/json');
+    httpBodyNotApplicable.boundary.streaming!.losses.providerErrorBody = 'not-applicable';
+    expectRejected(httpBodyNotApplicable);
+
+    for (const [statusCode, contentType] of [[200, 'application/json'], [299, undefined]] as const) {
+      const candidate = withoutChunkTerminal('non-sse-response', { outcome: 'response-completed' }, 'not-applicable');
+      setResponseMeta(candidate, statusCode, contentType);
+      expect(normalizeEvidenceRecord(candidate.source, candidate.boundary, '1.1.0').ok, `non-sse-${statusCode}`).toBe(true);
+    }
+    for (const statusCode of [199, 300]) {
+      const candidate = withoutChunkTerminal('non-sse-response', { outcome: 'response-completed' }, 'not-applicable');
+      setResponseMeta(candidate, statusCode, 'application/json');
+      expectRejected(candidate);
+    }
+    const falselyNonSse = withoutChunkTerminal('non-sse-response', { outcome: 'response-completed' }, 'not-applicable');
+    setResponseMeta(falselyNonSse, 200, 'text/event-stream');
+    expectRejected(falselyNonSse);
+
+    for (const statusCode of [200, 299]) {
+      const candidate = withoutChunkTerminal('provider-error-frame', { outcome: 'response-completed' }, 'openai-sse');
+      setResponseMeta(candidate, statusCode, 'text/event-stream');
+      expect(normalizeEvidenceRecord(candidate.source, candidate.boundary, '1.1.0').ok, `provider-frame-${statusCode}`).toBe(true);
+    }
+    for (const [statusCode, contentType] of [[199, 'text/event-stream'], [300, 'text/event-stream'], [200, 'application/json']] as const) {
+      const candidate = withoutChunkTerminal('provider-error-frame', { outcome: 'response-completed' }, 'openai-sse');
+      setResponseMeta(candidate, statusCode, contentType);
+      expectRejected(candidate);
+    }
+    const providerFrameWrongDecoder = withoutChunkTerminal('provider-error-frame', { outcome: 'response-completed' }, 'not-applicable');
+    setResponseMeta(providerFrameWrongDecoder, 200, 'text/event-stream');
+    expectRejected(providerFrameWrongDecoder);
+    const providerFrameBodyNotApplicable = withoutChunkTerminal('provider-error-frame', { outcome: 'response-completed' }, 'openai-sse');
+    providerFrameBodyNotApplicable.boundary.streaming!.losses.providerErrorBody = 'not-applicable';
+    expectRejected(providerFrameBodyNotApplicable);
+  });
+
   it('rejects completed terminals without an observed SSE protocol terminal and accepts both valid delivery outcomes', () => {
     expect(normalizeEvidenceRecord(observations(), streamingBoundary(), '1.1.0').ok).toBe(true);
     const completedBeforeFlush = streamingBoundary({ clientResponse: { outcome: 'closed-before-completion' } });
@@ -336,9 +403,10 @@ describe('Spec 016 S1 schema foundation', () => {
     }
     for (const code of UPSTREAM_FAILURE_CODES) {
       const transport = ['connection-error', 'upstream-timeout', 'tls-failure'].includes(code);
-      const candidate = withoutChunkTerminal(code, { outcome: transport ? 'connection-failed' : 'response-completed' }, 'not-applicable');
+      const sseProviderError = code === 'provider-error-frame';
+      const candidate = withoutChunkTerminal(code, { outcome: transport ? 'connection-failed' : 'response-completed' }, sseProviderError ? 'openai-sse' : 'not-applicable');
       if (transport) candidate.source.splice(3, 1);
-      else {
+      else if (!sseProviderError) {
         ((candidate.source[3]!.payload as any).responseEnvelope.responseMeta.contentType) = 'application/json';
         if (code === 'http-error-status') ((candidate.source[3]!.payload as any).responseEnvelope.responseMeta.statusCode) = 500;
       }
@@ -391,10 +459,30 @@ describe('Spec 016 S1 schema foundation', () => {
       remainder: { knowledge: 'unknown' }, losses: { ...streamingBoundary().streaming!.losses, deltaContent: 'not-observed' },
     });
     expect(normalizeEvidenceRecord(cancelled, cancellationBoundary, '1.1.0').ok).toBe(true);
+    ((cancelled[4]!.payload as any).cancellation.requestedBy) = 'ingress';
+    cancellationBoundary.streaming!.upstream.cause = 'ingress-shutdown';
+    expect(normalizeEvidenceRecord(cancelled, cancellationBoundary, '1.1.0').ok).toBe(true);
     ((cancelled[4]!.payload as any).cancellation.requestedBy) = 'other';
     const invalidRequester = normalizeEvidenceRecord(cancelled, cancellationBoundary, '1.1.0');
     expect(invalidRequester.ok).toBe(false);
     if (!invalidRequester.ok) expect(invalidRequester.issues.map((entry) => entry.code)).toContain('cancellation_requester_invalid');
+  });
+
+  it('cross-validates provider-native retention against owned event payloads', () => {
+    const retainedSource = observations();
+    ((retainedSource[4]!.payload as any).responseEnvelope.providerNative) = { id: 'chunk-native' };
+    const retainedBoundary = streamingBoundary({ losses: { ...streamingBoundary().streaming!.losses, providerNative: 'retained' } });
+    expect(normalizeEvidenceRecord(retainedSource, retainedBoundary, '1.1.0').ok).toBe(true);
+
+    const retainedWithoutPayload = normalizeEvidenceRecord(observations(), retainedBoundary, '1.1.0');
+    expect(retainedWithoutPayload.ok).toBe(false);
+    if (!retainedWithoutPayload.ok) expect(retainedWithoutPayload.issues.map((entry) => entry.code)).toContain('completeness_disagrees_with_derivation');
+
+    const nonRetainedWithPayload = normalizeEvidenceRecord(retainedSource, streamingBoundary(), '1.1.0');
+    expect(nonRetainedWithPayload.ok).toBe(false);
+    if (!nonRetainedWithPayload.ok) expect(nonRetainedWithPayload.issues.map((entry) => entry.code)).toContain('completeness_disagrees_with_derivation');
+
+    expect(normalizeEvidenceRecord(observations(), streamingBoundary(), '1.1.0').ok).toBe(true);
   });
 
   it('T150 validates every budget range, feasibility, and record-owned size limits', () => {
@@ -426,6 +514,74 @@ describe('Spec 016 S1 schema foundation', () => {
       validateStreamingRecordBudgets(input, raw, traceValue, streaming, issues);
       expect(issues.map((entry) => entry.code), expected).toContain(expected);
     }
+  });
+
+  it('applies every streaming record-owned budget during normalization and serialization', () => {
+    const expectNormalizationIssue = (
+      expected: string,
+      source: readonly EvidenceObservation[],
+      boundary: CaptureBoundary = streamingBoundary(),
+    ): void => {
+      const result = normalizeEvidenceRecord(source, boundary, '1.1.0');
+      expect(result.ok, expected).toBe(false);
+      if (!result.ok) expect(result.issues.map((entry) => entry.code), expected).toContain(expected);
+    };
+
+    const oversizedId = observations();
+    oversizedId[0] = { ...oversizedId[0]!, observationId: 'x'.repeat(129) };
+    expectNormalizationIssue('evidence_id_budget_exceeded', oversizedId);
+
+    const oversizedRawPayload = observations();
+    oversizedRawPayload[0] = { ...oversizedRawPayload[0]!, payload: { padding: 'x'.repeat(1_048_577) } };
+    expectNormalizationIssue('raw_payload_budget_exceeded', oversizedRawPayload);
+
+    const oversizedRetainedContent = observations();
+    ((oversizedRetainedContent[2]!.payload as any).requestEnvelope.messages) = Array.from(
+      { length: 69 },
+      (_, index) => ({ role: 'user', name: `message-${index}`, content: { text: 'x'.repeat(240), evidenceStatus: 'captured' } }),
+    );
+    expectNormalizationIssue('retained_content_budget_exceeded', oversizedRetainedContent);
+
+    const excessiveEvents = observations();
+    const usageEvents = Array.from({ length: 994 }, (_, index) => obs({
+      observationId: `usage-observation-${index}`,
+      eventId: `usage-event-${index}`,
+      traceId: 'stream-trace',
+      seq: 0,
+      spanId: 'stream-span',
+      kind: 'model_usage',
+      capturedAt: T3,
+      rawCapturedAt: T3,
+      observationRole: 'provider_reported',
+      payload: { usage: { evidenceStatus: 'captured' } },
+    }));
+    excessiveEvents.splice(5, 0, ...usageEvents);
+    excessiveEvents.forEach((event, index) => { event.seq = index; });
+    expectNormalizationIssue('canonical_event_budget_exceeded', excessiveEvents);
+
+    const rawReplaySource = [
+      ...Array.from({ length: 2_001 }, (_, index) => ({ ...observations()[0]!, observationId: `replay-${index}` })),
+      ...observations().slice(1),
+    ];
+    expectNormalizationIssue('raw_observation_budget_exceeded', rawReplaySource);
+
+    const serializedSource = observations();
+    ((serializedSource[2]!.payload as any).requestEnvelope.providerNative) = { padding: 'x'.repeat(600_000) };
+    const retainedNativeLosses = { ...streamingBoundary().streaming!.losses, providerNative: 'retained' as const };
+    expectNormalizationIssue('serialized_evidence_budget_exceeded', serializedSource, streamingBoundary({ losses: retainedNativeLosses }));
+
+    const widenedBoundary = streamingBoundary({
+      losses: retainedNativeLosses,
+      budgets: { ...streamingBoundary().streaming!.budgets, maxSerializedEvidenceBytes: 67_108_864 },
+    });
+    const widened = normalizeEvidenceRecord(serializedSource, widenedBoundary, '1.1.0');
+    expect(widened.ok).toBe(true);
+    if (!widened.ok) return;
+    widened.record.captureBoundary.streaming!.budgets.maxSerializedEvidenceBytes = 1_048_576;
+    const reparsed = parseEvidenceRecord(widened.record);
+    expect(reparsed.ok).toBe(false);
+    if (!reparsed.ok) expect(reparsed.issues.map((entry) => entry.code)).toContain('serialized_evidence_budget_exceeded');
+    expect(() => serializeEvidenceRecord(widened.record)).toThrow(/serialized_evidence_budget_exceeded/);
   });
 
   it('T101/T117/T133 preserves genuine 1.0 messages and rejects 1.1-owned paths', () => {

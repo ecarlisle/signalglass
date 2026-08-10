@@ -181,14 +181,20 @@ describe('unknown-field boundary enforcement', () => {
     const json = jsonOf(record);
     const trace = json['trace'] as Record<string, unknown>;
     const polluted: Record<string, unknown> = { polluted: true };
-    Object.defineProperty(json, '__proto__', { value: polluted, enumerable: true });
-    Object.defineProperty(trace, '__proto__', { value: polluted, enumerable: true });
-    trace['constructor'] = { bad: 1 };
-    json['prototype'] = { bad: 2 };
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      Object.defineProperty(json, key, { value: polluted, enumerable: true, configurable: true });
+      Object.defineProperty(trace, key, { value: polluted, enumerable: true, configurable: true });
+    }
 
     const result = parseEvidenceRecord(json);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    const directRecord = result.record as unknown as Record<string, unknown>;
+    const directTrace = directRecord['trace'] as Record<string, unknown>;
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      expect(Object.hasOwn(directRecord, key)).toBe(false);
+      expect(Object.hasOwn(directTrace, key)).toBe(false);
+    }
     const serialized = jsonOf(result.record);
     const serializedTrace = serialized['trace'] as Record<string, unknown>;
     for (const key of ['__proto__', 'constructor', 'prototype']) {
@@ -276,22 +282,27 @@ describe('recursive unsafe-key exclusion in additive preservation', () => {
     const record = duplicateRecord();
     const json = jsonOf(record);
     const evil: Record<string, unknown> = { harmless: 1, nested: { deep: { keep: true } } };
-    Object.defineProperty(evil, '__proto__', { value: { polluted: 1 }, enumerable: true });
-    Object.defineProperty(evil['nested'] as Record<string, unknown>, '__proto__', { value: { deepPolluted: 1 }, enumerable: true });
-    evil['constructor'] = { x: 1 };
-    (evil['nested'] as Record<string, unknown>)['prototype'] = { y: 1 };
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      Object.defineProperty(evil, key, { value: { polluted: key }, enumerable: true, configurable: true });
+      Object.defineProperty(evil['nested'] as Record<string, unknown>, key, { value: { deepPolluted: key }, enumerable: true, configurable: true });
+    }
     json['futureRoot'] = evil;
 
     const result = parseEvidenceRecord(json);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    const directFutureRoot = (result.record as unknown as Record<string, unknown>)['futureRoot'] as Record<string, unknown>;
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      expect(Object.hasOwn(directFutureRoot, key)).toBe(false);
+      expect(Object.hasOwn(directFutureRoot['nested'] as object, key)).toBe(false);
+    }
     const futureRoot = (jsonOf(result.record)['futureRoot'] as Record<string, unknown>);
     expect(futureRoot['harmless']).toBe(1);
     expect((futureRoot['nested'] as Record<string, unknown>)['deep']).toEqual({ keep: true });
-    expect(Object.hasOwn(futureRoot, '__proto__')).toBe(false);
-    expect(Object.hasOwn(futureRoot, 'constructor')).toBe(false);
-    expect(Object.hasOwn(futureRoot['nested'] as object, '__proto__')).toBe(false);
-    expect(Object.hasOwn(futureRoot['nested'] as object, 'prototype')).toBe(false);
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      expect(Object.hasOwn(futureRoot, key)).toBe(false);
+      expect(Object.hasOwn(futureRoot['nested'] as object, key)).toBe(false);
+    }
     expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 });

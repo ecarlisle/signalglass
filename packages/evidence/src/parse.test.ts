@@ -12,6 +12,7 @@ import { serializeEvidenceRecord, serializeEvidenceExport } from './serialize.js
 import type { EvidenceObservation } from './types-trace.js';
 import {
   minimalObservations,
+  minimalSchema11Observations,
   buildBoundary,
   buildRecord,
   obs,
@@ -72,7 +73,7 @@ describe('parseEvidenceRecord', () => {
   });
 
   it('accepts a compatible additive minor revision within the supported MAJOR', () => {
-    const record = buildRecord(undefined, buildBoundary(), { evidenceSchemaVersion: '1.1.0' });
+    const record = buildRecord(minimalSchema11Observations(), buildBoundary(), { evidenceSchemaVersion: '1.1.0' });
     expect(parseEvidenceRecord(record as unknown).ok).toBe(true);
   });
 
@@ -142,6 +143,8 @@ describe('parseEvidenceRecord', () => {
     const res = parseEvidenceRecord(input);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
+    const parsedRecord = res.record as unknown as Record<string, unknown>;
+    for (const key of ['__proto__', 'constructor', 'prototype']) expect(Object.hasOwn(parsedRecord, key)).toBe(false);
     const serialized = JSON.parse(serializeEvidenceRecord(res.record)) as Record<string, unknown>;
     expect(serialized['future']).toBe(7);
     for (const key of ['__proto__', 'constructor', 'prototype']) expect(Object.hasOwn(serialized, key)).toBe(false);
@@ -290,6 +293,28 @@ describe('collision processing (§4.4)', () => {
 });
 
 describe('normalizeEvidenceRecord', () => {
+  it('returns validation issues instead of throwing for malformed capture boundaries', () => {
+    for (const boundary of [null, undefined, [], 42, 'invalid', true, {}]) {
+      expect(() => normalizeEvidenceRecord(minimalObservations(), boundary as never, V)).not.toThrow();
+      const result = normalizeEvidenceRecord(minimalObservations(), boundary as never, V);
+      expect(result.ok, String(boundary)).toBe(false);
+    }
+  });
+
+  it('selects observation validation from the declared schema even without streaming metadata', () => {
+    expect(normalizeEvidenceRecord(minimalObservations(), buildBoundary(), '1.0.0', { captureProfile: PROFILE }).ok).toBe(true);
+    expect(normalizeEvidenceRecord(minimalSchema11Observations(), buildBoundary(), '1.1.0', { captureProfile: PROFILE }).ok).toBe(true);
+
+    const legacyShapesUnder11 = normalizeEvidenceRecord(minimalObservations(), buildBoundary(), '1.1.0', { captureProfile: PROFILE });
+    expect(legacyShapesUnder11.ok).toBe(false);
+    if (!legacyShapesUnder11.ok) {
+      expect(legacyShapesUnder11.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
+        'content_leaf_invalid',
+        'closed_shape_unknown_key',
+      ]));
+    }
+  });
+
   it('rejects duplicate observation identities deterministically', () => {
     const base = minimalObservations();
     const dup = [{ ...base[0]! }, { ...base[0]!, observationId: 'o0-copy' }];

@@ -595,6 +595,15 @@ export function validateStreamingConsistency(trace: EvidenceTrace, streaming: St
   if (streaming.losses.deltaContent !== deltaAggregate) out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.deltaContent', 'delta-content fact disagrees with retained chunk text and declarations'));
   const redacted = requestStatuses.includes('redacted') || chunks.some((event) => event.evidenceStatus === 'redacted');
   if (streaming.losses.maskedContent !== redacted) out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.maskedContent', 'masked-content fact disagrees with owning declarations'));
+  const providerNativeEvents = trace.events.filter((event) =>
+    (event.kind === 'model_request' && event.requestEnvelope.providerNative !== undefined)
+    || (event.kind === 'model_response_chunk' && event.responseEnvelope.providerNative !== undefined),
+  );
+  const hasOwnedProviderNative = providerNativeEvents.some((event) =>
+    event.evidenceStatus === 'captured' || event.evidenceStatus === 'truncated' || event.evidenceStatus === 'redacted',
+  );
+  if (streaming.losses.providerNative === 'retained' && !hasOwnedProviderNative) out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.providerNative', 'retained provider-native evidence requires an owning retained payload'));
+  if (streaming.losses.providerNative !== 'retained' && providerNativeEvents.length > 0) out.push(issue('completeness_disagrees_with_derivation', 'captureBoundary.streaming.losses.providerNative', 'provider-native payloads require the authoritative retained loss fact'));
   if (trace.captureProfile.name !== streaming.captureProfile.name || trace.captureProfile.version !== streaming.captureProfile.version) out.push(issue('trace_capture_profile_disagrees', 'trace.captureProfile', 'trace capture profile disagrees with the authoritative streaming boundary'));
 }
 
@@ -626,8 +635,20 @@ function validateStreamingTerminal(trace: EvidenceTrace, streaming: StreamingCap
   const observerFailureShape = final.actor === 'capture' && final.lifecycleTarget === 'none' && final.lifecycleEffect === 'none';
   const malformedOutcome = streaming.upstream.outcome === 'response-completed' || streaming.upstream.outcome === 'stream-ended-prematurely';
   const transportOutcome = streaming.upstream.outcome === 'connection-failed' || streaming.upstream.outcome === 'stream-ended-prematurely';
+  const response = trace.events.find((event) => event.kind === 'model_response');
+  const responseMeta = response?.responseEnvelope.responseMeta;
+  const responseIs2xx = responseMeta !== undefined && responseMeta.statusCode >= 200 && responseMeta.statusCode <= 299;
+  const responseIsEventStream = responseMeta?.contentType === 'text/event-stream';
+  const responseCompleted = streaming.upstream.outcome === 'response-completed';
+  const providerErrorBodyApplicable = streaming.losses.providerErrorBody !== 'not-applicable';
   if (MALFORMED_STREAM_CODES_SET.has(code)) {
     if (!modelFailureShape || !malformedOutcome) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'malformed-stream terminal disagrees with the exact classification matrix'));
+  } else if (code === 'http-error-status') {
+    if (!modelFailureShape || !responseCompleted || responseMeta === undefined || responseIs2xx || streaming.decoderDisposition !== 'not-applicable' || !providerErrorBodyApplicable) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'HTTP-error terminal requires a completed non-2xx response, no SSE decoder, and applicable provider-error-body retention'));
+  } else if (code === 'non-sse-response') {
+    if (!modelFailureShape || !responseCompleted || !responseIs2xx || responseIsEventStream || streaming.decoderDisposition !== 'not-applicable') out.push(issue('streaming_terminal_disagrees', 'trace.events', 'non-SSE terminal requires a completed successful response whose content type is not text/event-stream'));
+  } else if (code === 'provider-error-frame') {
+    if (!modelFailureShape || !responseCompleted || !responseIs2xx || !responseIsEventStream || streaming.decoderDisposition !== 'openai-sse' || !providerErrorBodyApplicable) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'provider error frame requires a completed successful OpenAI SSE response and applicable provider-error-body retention'));
   } else if (UPSTREAM_FAILURE_CODES_SET.has(code)) {
     const outcomeMatches = TRANSPORT_FAILURE_CODES_SET.has(code) ? transportOutcome : streaming.upstream.outcome === 'response-completed';
     if (!modelFailureShape || !outcomeMatches) out.push(issue('streaming_terminal_disagrees', 'trace.events', 'upstream-failed terminal disagrees with the exact classification matrix'));
