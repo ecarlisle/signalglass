@@ -45,10 +45,21 @@ export type ResponseMetadata = {
   contentEncoding?: string;
 };
 
-/** Metadata-only response envelope. `responseMeta` is optional only for
- * genuine schema-1.0 records, whose type cannot be expressed separately. */
-export type ResponseHeaderEnvelope = ResponseEnvelopeCommon & {
-  responseMeta?: ResponseMetadata;
+/** Schema-1.0 response envelope. EventRecord is not schema-versioned, so
+ * both response event variants retain this legacy-compatible alternative. */
+export type LegacyResponseEnvelope = ResponseEnvelopeCommon & {
+  finishReason?: string;
+  providerNative?: unknown;
+  usage?: unknown;
+  chunkIndex?: number;
+  responseMeta?: never;
+  choiceIndex?: never;
+  deltaText?: never;
+};
+
+/** Schema-1.1 metadata-only response envelope. */
+export type StreamingResponseHeaderEnvelope = ResponseEnvelopeCommon & {
+  responseMeta: ResponseMetadata;
   finishReason?: never;
   providerNative?: never;
   usage?: never;
@@ -57,16 +68,22 @@ export type ResponseHeaderEnvelope = ResponseEnvelopeCommon & {
   deltaText?: never;
 };
 
-/** Streaming chunk response envelope. */
-export type ResponseChunkEnvelope = ResponseEnvelopeCommon & {
+/** Schema-1.1 streaming chunk response envelope. */
+export type StreamingResponseChunkEnvelope = ResponseEnvelopeCommon & {
   finishReason?: string;
   providerNative?: unknown;
   usage?: unknown;
   chunkIndex?: number;
-  choiceIndex?: number;
+  choiceIndex: number;
   deltaText?: string;
   responseMeta?: never;
 };
+
+/** Header-event envelope across the supported schema-1 versions. */
+export type ResponseHeaderEnvelope = LegacyResponseEnvelope | StreamingResponseHeaderEnvelope;
+
+/** Chunk-event envelope across the supported schema-1 versions. */
+export type ResponseChunkEnvelope = LegacyResponseEnvelope | StreamingResponseChunkEnvelope;
 
 /** Event-discriminated response envelope union. */
 export type ResponseEnvelope = ResponseHeaderEnvelope | ResponseChunkEnvelope;

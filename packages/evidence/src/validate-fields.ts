@@ -602,7 +602,13 @@ function validateStreamingTerminal(trace: EvidenceTrace, streaming: StreamingCap
   const final = trace.events[trace.events.length - 1];
   if (!final) return;
   if (final.kind === 'interaction_end') {
-    if (streaming.upstream.outcome !== 'response-completed') out.push(issue('streaming_terminal_disagrees', 'captureBoundary.streaming.upstream', 'completed observation requires a completed upstream response'));
+    if (
+      streaming.upstream.outcome !== 'response-completed'
+      || streaming.decoderDisposition !== 'openai-sse'
+      || streaming.remainder.knowledge !== 'protocol-terminal-observed'
+    ) {
+      out.push(issue('streaming_terminal_disagrees', 'captureBoundary.streaming', 'completed observation requires an observed OpenAI SSE protocol terminal on a completed upstream response'));
+    }
     return;
   }
   if (final.kind === 'cancelled') {

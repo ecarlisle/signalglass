@@ -132,13 +132,19 @@ describe('parseEvidenceRecord', () => {
     }
   });
 
-  it('rejects prototype-sensitive own keys instead of silently discarding them (regression)', () => {
+  it('accepts additive prototype-sensitive keys but excludes them from preservation (regression)', () => {
     const record = buildRecord();
     const base = JSON.parse(serializeEvidenceRecord(record)) as Record<string, unknown>;
-    const input = { ...base, '__proto__': { polluted: true }, constructor: { x: 1 }, future: 7 } as Record<string, unknown>;
+    const input = { ...base, future: 7 } as Record<string, unknown>;
+    Object.defineProperty(input, '__proto__', { value: { polluted: true }, enumerable: true });
+    input['constructor'] = { x: 1 };
+    input['prototype'] = { y: 1 };
     const res = parseEvidenceRecord(input);
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.issues.map((entry) => entry.code)).toContain('unsafe_object_key');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const serialized = JSON.parse(serializeEvidenceRecord(res.record)) as Record<string, unknown>;
+    expect(serialized['future']).toBe(7);
+    for (const key of ['__proto__', 'constructor', 'prototype']) expect(Object.hasOwn(serialized, key)).toBe(false);
     expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
   });
 

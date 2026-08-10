@@ -132,14 +132,14 @@ export function normalizeEvidenceRecord(
 
   return {
     ok: true,
-    record: {
+    record: cloneJsonSafe({
       rawObservations: observations,
       trace: derived.trace,
       analysis,
       completeness,
       evidenceSchemaVersion,
       captureBoundary,
-    },
+    }) as EvidenceRecord,
   };
 }
 
@@ -152,10 +152,6 @@ export function normalizeEvidenceRecord(
 export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
   if (!isRecord(input)) {
     return fail([issue('record_not_object', '$', 'evidence record must be a JSON object')]);
-  }
-  const unsafePath = findUnsafeOwnKey(input, '$');
-  if (unsafePath) {
-    return fail([issue('unsafe_object_key', unsafePath, 'object contains a prototype-sensitive own key')]);
   }
   const issues: ValidationIssue[] = [];
 
@@ -250,24 +246,7 @@ export function parseEvidenceRecord(input: unknown): EvidenceRecordParseResult {
     if (known.has(k) || k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
     (record as Record<string, unknown>)[k] = cloneJsonSafe(input[k]);
   }
-  return { ok: true, record: record as EvidenceRecord };
-}
-
-function findUnsafeOwnKey(value: unknown, path: string): string | null {
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index++) {
-      const found = findUnsafeOwnKey(value[index], `${path}[${index}]`);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (!isRecord(value)) return null;
-  for (const key of Object.keys(value)) {
-    if (key === '__proto__' || key === 'constructor' || key === 'prototype') return path;
-    const found = findUnsafeOwnKey(value[key], `${path}.${key}`);
-    if (found) return found;
-  }
-  return null;
+  return { ok: true, record: cloneJsonSafe(record) as EvidenceRecord };
 }
 
 function isSchema10(version: string): boolean {

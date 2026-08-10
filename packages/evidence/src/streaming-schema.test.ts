@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EvidenceObservation } from './types-trace.js';
+import type { EventRecord } from './types-event.js';
 import type { CaptureBoundary, StreamingCaptureBoundary, TraceCompleteness } from './types-record.js';
 import { normalizeEvidenceRecord, parseEvidenceRecord, validateStreamingRecordBudgets } from './validate.js';
 import { serializeEvidenceRecord } from './serialize.js';
@@ -17,6 +18,36 @@ const COMPLETE_STATUS_COUNTS: TraceCompleteness['eventsByStatus'] = {
 // @ts-expect-error Spec 014 keeps eventsByStatus closed to EvidenceStatus keys.
 const ARBITRARY_STATUS_COUNTS: TraceCompleteness['eventsByStatus'] = { ...COMPLETE_STATUS_COUNTS, arbitrary: 1 };
 void ARBITRARY_STATUS_COUNTS;
+
+const LEGACY_MODEL_RESPONSE_EVENT = {
+  eventId: 'legacy-response', traceId: 'legacy-trace', spanId: 'legacy-span', seq: 1,
+  kind: 'model_response', capturedAt: T0, evidenceStatus: 'captured', observationRole: 'provider_reported',
+  responseEnvelope: {
+    providerNativeFidelity: 'structurally_faithful', finishReason: 'stop',
+    providerNative: { id: 'legacy' }, usage: { total_tokens: 1 }, chunkIndex: 0,
+  },
+} satisfies Extract<EventRecord, { kind: 'model_response' }>;
+
+const STREAMING_MODEL_RESPONSE_EVENT = {
+  eventId: 'stream-response', traceId: 'stream-trace', spanId: 'stream-span', seq: 1,
+  kind: 'model_response', capturedAt: T0, evidenceStatus: 'captured', observationRole: 'provider_reported',
+  responseEnvelope: {
+    providerNativeFidelity: 'structurally_faithful',
+    responseMeta: { statusCode: 200, contentType: 'text/event-stream' },
+  },
+} satisfies Extract<EventRecord, { kind: 'model_response' }>;
+
+const STREAMING_MODEL_RESPONSE_CHUNK_EVENT = {
+  eventId: 'stream-chunk', traceId: 'stream-trace', spanId: 'stream-span', seq: 2,
+  kind: 'model_response_chunk', capturedAt: T0, evidenceStatus: 'captured', observationRole: 'provider_reported',
+  responseEnvelope: { providerNativeFidelity: 'structurally_faithful', choiceIndex: 0, deltaText: 'ok' },
+} satisfies Extract<EventRecord, { kind: 'model_response_chunk' }>;
+
+// @ts-expect-error Schema-1.1 response metadata cannot be combined with chunk-only fields.
+const INVALID_STREAMING_MODEL_RESPONSE_EVENT = { ...STREAMING_MODEL_RESPONSE_EVENT, responseEnvelope: { ...STREAMING_MODEL_RESPONSE_EVENT.responseEnvelope, finishReason: 'stop' } } satisfies Extract<EventRecord, { kind: 'model_response' }>;
+// @ts-expect-error Response metadata is never valid on a chunk event.
+const INVALID_STREAMING_MODEL_RESPONSE_CHUNK_EVENT = { ...STREAMING_MODEL_RESPONSE_CHUNK_EVENT, responseEnvelope: { ...STREAMING_MODEL_RESPONSE_CHUNK_EVENT.responseEnvelope, responseMeta: { statusCode: 200 } } } satisfies Extract<EventRecord, { kind: 'model_response_chunk' }>;
+void [LEGACY_MODEL_RESPONSE_EVENT, STREAMING_MODEL_RESPONSE_EVENT, STREAMING_MODEL_RESPONSE_CHUNK_EVENT, INVALID_STREAMING_MODEL_RESPONSE_EVENT, INVALID_STREAMING_MODEL_RESPONSE_CHUNK_EVENT];
 
 function streamingBoundary(overrides: Partial<StreamingCaptureBoundary> = {}): CaptureBoundary {
   const streaming: StreamingCaptureBoundary = {
@@ -274,6 +305,30 @@ describe('Spec 016 S1 schema foundation', () => {
     expect(normalizeEvidenceRecord(encodedSource, encodedBoundary, '1.1.0').ok).toBe(true);
   });
 
+  it('rejects completed terminals without an observed SSE protocol terminal and accepts both valid delivery outcomes', () => {
+    expect(normalizeEvidenceRecord(observations(), streamingBoundary(), '1.1.0').ok).toBe(true);
+    const completedBeforeFlush = streamingBoundary({ clientResponse: { outcome: 'closed-before-completion' } });
+    expect(normalizeEvidenceRecord(observations(), completedBeforeFlush, '1.1.0').ok).toBe(true);
+
+    const nonSseSource = observations().filter((event) => event.kind !== 'model_response_chunk');
+    ((nonSseSource.find((event) => event.kind === 'model_response')!.payload as any).responseEnvelope.responseMeta.contentType) = 'application/json';
+    const base = streamingBoundary().streaming!;
+    const nonSseBoundary = streamingBoundary({
+      decoderDisposition: 'not-applicable',
+      remainder: { knowledge: 'transport-eof-observed', rawForwardedBytes: 64 },
+      losses: { ...base.losses, deltaContent: 'not-observed' },
+      assembly: { assembler: base.assembly.assembler },
+    });
+    const nonSseResult = normalizeEvidenceRecord(nonSseSource, nonSseBoundary, '1.1.0');
+    expect(nonSseResult.ok).toBe(false);
+    if (!nonSseResult.ok) expect(nonSseResult.issues.map((entry) => entry.code)).toContain('streaming_terminal_disagrees');
+
+    const missingDoneBoundary = streamingBoundary({ remainder: { knowledge: 'transport-eof-observed', rawForwardedBytes: 64 } });
+    const missingDoneResult = normalizeEvidenceRecord(observations(), missingDoneBoundary, '1.1.0');
+    expect(missingDoneResult.ok).toBe(false);
+    if (!missingDoneResult.ok) expect(missingDoneResult.issues.map((entry) => entry.code)).toContain('streaming_terminal_disagrees');
+  });
+
   it('T165 accepts every malformed and upstream failure code only with its authoritative outcome', () => {
     for (const code of MALFORMED_STREAM_CODES) {
       const candidate = withoutChunkTerminal(code, { outcome: 'stream-ended-prematurely' });
@@ -383,6 +438,24 @@ describe('Spec 016 S1 schema foundation', () => {
     const roundTrip = parseEvidenceRecord(JSON.parse(serializeEvidenceRecord(legacy.record)));
     expect(roundTrip.ok).toBe(true);
     if (roundTrip.ok) expect((roundTrip.record.trace.events.find((event) => event.kind === 'model_request') as any).requestEnvelope.messages[0].content).toEqual({ arbitrary: ['legacy', { role: 'raw-secret-role' }] });
+
+    const unsafeLegacy = JSON.parse(serializeEvidenceRecord(legacy.record)) as Record<string, unknown>;
+    const unsafeNative = JSON.parse('{"safe":"retained","__proto__":{"polluted":true},"constructor":{"bad":1},"prototype":{"bad":2}}');
+    const rawLegacyResponse = (unsafeLegacy['rawObservations'] as any[]).find((event) => event.kind === 'model_response');
+    const traceLegacyResponse = ((unsafeLegacy['trace'] as any).events as any[]).find((event) => event.kind === 'model_response');
+    rawLegacyResponse.payload.responseEnvelope.providerNative = structuredClone(unsafeNative);
+    traceLegacyResponse.responseEnvelope.providerNative = structuredClone(unsafeNative);
+    const sanitizedLegacy = parseEvidenceRecord(unsafeLegacy);
+    expect(sanitizedLegacy.ok).toBe(true);
+    if (sanitizedLegacy.ok) {
+      const serialized = JSON.parse(serializeEvidenceRecord(sanitizedLegacy.record));
+      const rawNative = serialized.rawObservations.find((event: any) => event.kind === 'model_response').payload.responseEnvelope.providerNative;
+      const traceNative = serialized.trace.events.find((event: any) => event.kind === 'model_response').responseEnvelope.providerNative;
+      expect(rawNative).toEqual({ safe: 'retained' });
+      expect(traceNative).toEqual({ safe: 'retained' });
+      expect(({} as any).polluted).toBeUndefined();
+    }
+
     const bad = JSON.parse(serializeEvidenceRecord(legacy.record)) as Record<string, unknown>;
     (bad['captureBoundary'] as Record<string, unknown>)['streaming'] = streamingBoundary().streaming;
     expect(parseEvidenceRecord(bad).ok).toBe(false);
@@ -394,11 +467,11 @@ describe('Spec 016 S1 schema foundation', () => {
     (future['trace'] as any).evidenceSchemaVersion = '1.9.0';
     (future['trace'] as any).futureTrace = { retained: true };
     (future['trace'] as any).assembly.assembler.build = { retained: true };
-    (future['captureBoundary'] as any).streaming.futureBoundary = { retained: true };
+    (future['captureBoundary'] as any).streaming.futureBoundary = JSON.parse('{"retained":true,"nested":{"keep":"yes","constructor":{"bad":1},"prototype":{"bad":2}}}');
     const parsed = parseEvidenceRecord(future);
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
-      expect((parsed.record.captureBoundary.streaming as any).futureBoundary).toEqual({ retained: true });
+      expect((parsed.record.captureBoundary.streaming as any).futureBoundary).toEqual({ retained: true, nested: { keep: 'yes' } });
       expect((parsed.record.trace.assembly as any).assembler.build).toEqual({ retained: true });
       expect(JSON.parse(serializeEvidenceRecord(parsed.record)).trace.assembly.assembler.build).toEqual({ retained: true });
     }
@@ -431,7 +504,7 @@ describe('Spec 016 S1 schema foundation', () => {
         expect(Object.getPrototypeOf(value)).toBe(before);
         expect(({} as any).credential).toBeUndefined();
         if (!result.ok) {
-          expect(result.issues.map((entry) => entry.code)).toContain('unsafe_object_key');
+          expect(result.issues.map((entry) => entry.code)).toContain('closed_shape_unknown_key');
           expect(JSON.stringify(result.issues)).not.toContain('must-not-leak');
         }
       }
