@@ -2,7 +2,7 @@
 
 ## Status
 
-**Implemented — in review (PR #22).** The append-only evidence store is
+**Implemented (PR #22, merged to main).** The append-only evidence store is
 implemented in `packages/storage/src/evidenceStorage.ts` and its tests in
 `packages/storage/src/evidenceStorage.test.ts`. The implementation preserves
 the approved revision 6 technical contract: a mandatory non-bypassable
@@ -12,8 +12,7 @@ policy with field-level content classification, unspoofable reference-policy
 identity, bounded policy-version metadata validated on read, hardened
 runtime-validated policy decisions, exact-text idempotency/conflict
 resolution, read-integrity checks before version triage, and a dedicated WAL
-SQLite connection with atomic initialization and rollback. The PR is open
-for human review and must not be merged by the implementer.
+SQLite connection with atomic initialization and rollback.
 
 ## Purpose
 
@@ -2270,8 +2269,8 @@ this spec:
 - `docs/roadmap.md` and `specs/000-index.md` — status and slice registration.
 
 This implementation changes `specs/015-append-only-evidence-store.md`
-(status updated to Implemented — in review), `specs/000-index.md`
-(records Spec 015 as Implemented — in review), `docs/roadmap.md`
+(status updated to Implemented — merged to main in PR #22), `specs/000-index.md`
+(records Spec 015 as Implemented), `docs/roadmap.md`
 (Spec 015 marked implemented in PR #22), and introduces production code
 in `packages/storage/src/evidenceStorage.ts` and
 `packages/storage/src/evidenceStorage.test.ts` together with the
