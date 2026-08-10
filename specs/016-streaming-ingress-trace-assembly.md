@@ -2,7 +2,7 @@
 
 ## Status
 
-**Draft — revision 8 (focused correction pass).** Proposed for
+**Draft — revision 9 (focused correction pass).** Proposed for
 acceptance; **implementation is prohibited until this spec is Accepted**. No
 runtime code is produced by this PR. The proposed modules, contracts, and
 constants below are named but **not created** until an accepted
@@ -263,6 +263,62 @@ declarations, `evidenceStorage.ts` policy behavior):
    for redacted/truncated leaves; closed path + exact 240-cap + schema/
    profile/detector + gate for captured leaves) is a **new v1.1.0 rule**,
    never described as an unchanged v1.0 rule (§14.2, §14.3).
+
+Revision 9 resolves the four revision-8 mechanical contradictions — the
+contracts that were still pseudo-exact, impossible, or over-claimed:
+
+1. **One exact reference algorithm for the serialized-size budget**: the
+   pseudo-exact sum (canonical bytes + raw bytes + a second retained-content
+   byte term + an undefined `FINALIZATION_OVERHEAD_BYTES` constant) is
+   replaced by the **normative reference calculation** — construct the
+   candidate state transactionally, append a **budget-only worst-case
+   terminal** (actual allocated ids + closed maximum structural text) and
+   its raw observation when no terminal exists, derive trace/analysis/
+   completeness/boundary exactly, serialize the complete finalizable
+   snapshot with `serializeEvidenceRecord`, measure
+   `utf8Encode(serializedDocument).byteLength`, and accept only when that
+   exact value ≤ `maxSerializedEvidenceBytes`. Retained content is counted
+   once inside the serialized copies where it lives; the budget-only
+   terminal is measurement-only (not persisted unless exhaustion occurs);
+   incremental optimizations require an equivalence proof; the redundant
+   configurable `finalEventReservation` and `TERMINAL_WORST_CASE_BYTES`
+   are removed; `maxRetainedContentCodePoints` stays a separate semantic
+   content limit (§3.5, §13.4).
+2. **Feasible count budgets and atomic observation admission**: Spec 014
+   requires every canonical event to derive from ≥ 1 raw observation, so
+   `maxRawObservations ≥ maxCanonicalEvents` is a hard cross-field
+   invariant; defaults become 10,000 canonical / **20,000** raw, ranges
+   are aligned, and incompatible combinations are rejected at startup and
+   parse. Canonical events and raw observations are **one atomic surface**:
+   a tentative raw observation plus the canonical event it creates (or
+   replays) are tested together against raw count, canonical count, payload
+   bytes, retained content, and the finalizable snapshot — both effects
+   commit or neither. After a terminal no candidate is appended, so a
+   budget cannot "newly be hit after `[DONE]`"; the constant-space
+   post-terminal state word moves to `unknown` only on a later observer
+   failure (§3.5, §10.2, §6.6).
+3. **Exact pre-dispatch phase matrix**: `body-read-failure` is a transport
+   read failure only (zero-byte or mid-body — never fully-read); over-limit
+   is always a partial cutoff (Spec 006 does not parse trailing content);
+   fully read malformed JSON is `fully-observed-not-retained` with no
+   formed messages; **fully read valid JSON containing messages that was
+   rejected during structural/request validation is `omitted` +
+   `message-content-not-retained` — never `not-observed`** (message content
+   was observed); fully read valid JSON with no messages is
+   `not-observed`; unknown/unselectable model is `unroutable` only (the
+   stale "unknown model" comment in `invalid-request` is removed);
+   missing-key/key-unavailable/unroutable remain `omitted` + the declared
+   message loss. Facts follow bytes and message content actually observed,
+   never the failure code (§10.2, §7.3).
+4. **Honest policy-equivalence claims**: the revision-8 "byte-identical
+   outcomes" claim was false — for a 1.0 record, v1.1.0 delegates to the
+   unchanged v1.0 **admission/classification semantics** (equivalent
+   accept/reject status and non-policy rationale/code), but the
+   **deciding-policy identity truthfully differs** (`SaveOutcome.policy`;
+   `StorageManifest.persistencePolicy` records v1.1.0 when v1.1.0
+   decided), so complete `SaveOutcome` objects may legitimately differ;
+   comparisons use isolated stores/identities so `already-present` cannot
+   mask them (§14.2, §14.3).
 
 This spec is forecast-only in `docs/roadmap.md` (anticipated PR #23,
 documentation-only; the implementation slices are a later, accepted
@@ -837,26 +893,26 @@ The record is assembled in memory across the whole stream (§3.1); the
 spec therefore defines **named evidence budgets** — the stream's own chunk
 count is not a bound, and a provider can emit an arbitrarily long stream
 without `[DONE]`. Every budget is **exact and mechanically enforceable**: a
-hard limit uses an exact deterministic upper-bound calculation, never an
-esimate. Budgets are validated at ingress configuration (closed values;
-out-of-range configuration is refused at startup, never silently clamped),
-and the **exact limits that governed capture are serialized
-authoritatively under `captureBoundary.streaming.budgets`** (§13.4) — the
-record discloses the actual limits, it is not "recorded conceptually".
+hard limit is a **measured** exact value, never an estimate. Budgets are
+validated at ingress configuration (closed values and cross-field
+invariants; an out-of-range or impossible combination is refused at
+startup, never silently clamped), and the **exact limits that governed
+capture are serialized authoritatively under
+`captureBoundary.streaming.budgets`** (§13.4) — the record discloses the
+actual limits, it is not "recorded conceptually".
 `budgets` is a nested key of the existing additive path 1
 (`captureBoundary.streaming`), so the seven-path count is unchanged (§13.1).
 
-**Serialized budget shape** (closed; parse-validated: values within the
-declared ranges):
+**Serialized budget shape** (closed; parse-validated: every value within
+its declared range **and** the cross-field invariants of §3.5 hold):
 
 ```ts
 captureBoundary.streaming.budgets = {
   maxCanonicalEvents: number;              // count budget, per record (incl. control events)
-  maxRawObservations: number;              // count budget, per record
-  maxRawObservationPayloadBytes: number;   // byte budget, cumulative (exact, below)
-  maxRetainedContentCodePoints: number;    // code-point budget, cumulative (exact)
-  maxSerializedEvidenceBytes: number;      // byte budget, cumulative (exact deterministic upper bound)
-  finalEventReservation: number;           // bytes reserved for the terminal event (exact worst case)
+  maxRawObservations: number;              // count budget, per record; INVARIANT: >= maxCanonicalEvents
+  maxRawObservationPayloadBytes: number;   // byte budget, cumulative (exact serialized bytes, below)
+  maxRetainedContentCodePoints: number;    // SEMANTIC content limit, cumulative code points (not bytes)
+  maxSerializedEvidenceBytes: number;      // byte budget: exact measured finalizable-snapshot size (below)
   maxIdLengthBytes: number;                // assembler-generated id bound (exact, below)
 };
 ```
@@ -865,100 +921,180 @@ captureBoundary.streaming.budgets = {
 
 | Budget | Default | Valid range | Semantics / exact basis |
 |---|---|---|---|
-| `maxCanonicalEvents` | 10,000 | 1,000 – 1,000,000 | **count, per record** (canonical events incl. control events). One slot is reserved (§3.5 transactional accounting), so content may consume `maxCanonicalEvents − 1` events |
-| `maxRawObservations` | 2,000 | 200 – 200,000 | **count, per record** (raw observation payloads). One slot is reserved for the terminal-path raw observation |
+| `maxCanonicalEvents` | 10,000 | 1,000 – 1,000,000 | **count, per record** (canonical events incl. control events). One slot is reserved (§3.5 atomic admission), so content may consume `maxCanonicalEvents − 1` events |
+| `maxRawObservations` | 20,000 | 2,000 – 2,000,000 | **count, per record** (raw observation payloads). Default and range are ≥ the canonical budget's, so the cross-field invariant can hold; one slot is reserved for the terminal-path raw observation |
 | `maxRawObservationPayloadBytes` | 4 MiB | 1 MiB – 64 MiB | **byte, cumulative across raw observations**: the sum of each payload's exact serialized UTF-8 byte length (`JSON.stringify` bytes as stored). Each stored raw observation counts its actual serialized bytes — there is no dedup credit for canonical duplication (see below) |
-| `maxRetainedContentCodePoints` | 262,144 | 16,384 – 16,777,216 | **code points, cumulative**: total retained content (request `ContentLeaf.text` strings + `deltaText` strings), counted per leaf by code points (`countCodePoints`, Spec 015) |
-| `maxSerializedEvidenceBytes` | 16 MiB | 1 MiB – 64 MiB | **byte, cumulative, exact deterministic upper bound**: the sum over (a) each canonical event's exact serialized UTF-8 bytes as stored, (b) each raw observation's exact serialized UTF-8 bytes as stored (raw/canonical duplication counts **by actual serialized bytes of each stored copy** — the record stores both `rawObservations` and canonical events, so both copies count), (c) retained content bytes counted by their worst-case UTF-8 encoding, plus (d) `FINALIZATION_OVERHEAD_BYTES` (below). It is never an estimate of "growth" |
-| `finalEventReservation` | 4 KiB | 1 KiB – 64 KiB | **bytes, exact**: the deterministic worst-case serialized size of the terminal `observation-detached` informational `error` event, computed from the closed terminal shape (fixed vocabulary, `error.message` ≤ 200 chars, bounded ids, §8.4) plus the reserved slot overhead (below). It must be ≥ `TERMINAL_WORST_CASE_BYTES` at configuration validation (below) |
-| `maxIdLengthBytes` | 128 | 16 – 256 | **bytes, per id**: the explicit bound on assembler-generated opaque ids (event ids, observation ids, `traceId == interactionId`). Ids are generated within this bound (§12.6); `TERMINAL_WORST_CASE_BYTES` uses it, making the fixed reservation **provable** |
+| `maxRetainedContentCodePoints` | 262,144 | 16,384 – 16,777,216 | **code points, cumulative — a SEMANTIC content limit, never a serialized-byte count**: total retained content (request `ContentLeaf.text` strings + `deltaText` strings), counted per leaf by code points (`countCodePoints`, Spec 015). It is **not** counted again inside `maxSerializedEvidenceBytes` (the snapshot measurement below already contains the serialized text) |
+| `maxSerializedEvidenceBytes` | 16 MiB | 1 MiB – 64 MiB | **byte, exact, measured — never a sum of estimated parts**: the `utf8Encode(serializeEvidenceRecord(snapshot)).byteLength` of the complete finalizable snapshot constructed by the normative reference algorithm below. The snapshot already contains every retained serialized copy (canonical events, raw observations, retained content, and the derived trace/analysis/completeness/boundary fields), so no term is added by hand and nothing is double-counted |
+| `maxIdLengthBytes` | 128 | 16 – 256 | **bytes, per id**: the explicit bound on assembler-generated opaque ids (event ids, observation ids, `traceId == interactionId`). Ids are generated within this bound (§12.6); the bound participates in the closed maximum structural text of the budget-only terminal event (§3.5 reference algorithm step 2) |
 
-**Exact accounting rules:**
+**Cross-field invariants (validated at configuration AND at parse of the
+serialized `budgets`; incompatible combinations are refused, never
+clamped):**
 
-1. **UTF-8/serialization basis**: every byte budget counts the bytes of the
-   exact serialized JSON as it will be stored (UTF-8; JSON string escaping
-   counts actual escaped bytes — e.g. `\uXXXX` sequences count 6 bytes,
-   multibyte UTF-8 code points count their UTF-8 byte lengths). Tests cover
-   escaping and multibyte boundaries (T137).
-2. **Cumulative vs. per item**: count budgets (`maxCanonicalEvents`,
-   `maxRawObservations`) are per record; byte budgets
-   (`maxRawObservationPayloadBytes`, `maxSerializedEvidenceBytes`) and the
-   content budget (`maxRetainedContentCodePoints`) are cumulative across
-   the record.
-3. **Duplication**: raw/canonical duplication (e.g. the normalized
-   `messages` on the canonical `model_request` event and its raw
-   observation payload) counts **by actual serialized bytes of each stored
-   copy** — both are part of the stored record, so both count; there is no
-   dedup credit.
-4. **Derived fields**: the final record appends the derived
-   `trace`, `analysis`, `completeness`, and boundary-derivation fields at
-   finalization. Their serialized size has a deterministic upper bound
-   computable from the closed vocabularies, literal names/versions,
-   bounded ids, the closed loss-code list, and the closed event shapes;
-   the assembler computes `FINALIZATION_OVERHEAD_BYTES` (a defined
-   constant) as that exact worst case and it is reserved from
-   `maxSerializedEvidenceBytes` on every candidate check (T138).
-5. **Reserved slots, not just bytes**: exactly **one canonical-event slot**
-   and exactly **one raw-observation slot** are reserved for the terminal
-   path — content may consume `maxCanonicalEvents − 1` and
-   `maxRawObservations − 1`; the reserved slots are never consumed by
-   content (T134–T135).
-6. **Terminal reservation is provable**: assembler-generated ids are
-   explicitly bounded by `maxIdLengthBytes` (§12.6), so
-   `TERMINAL_WORST_CASE_BYTES` — the worst-case serialized size of the
-   informational terminal `error` plus its raw observation — is a
-   deterministic function of the closed shape, the id bound, and the
-   structural-text bound (§8.4). Configuration validation requires
-   `finalEventReservation ≥ TERMINAL_WORST_CASE_BYTES` and reserves it for
-   the terminal path (T139, T140).
-7. **Transactional candidate accounting**: an event or raw observation is
-   appended **only if** (candidate's exact serialized bytes) + (its share
-   of retained content code points) + `FINALIZATION_OVERHEAD_BYTES` +
-   `finalEventReservation` + the reserved-slot overhead still fit within
-   **every** applicable budget. If not, the candidate is rejected and the
-   budget-exhaustion path of §3.5 (below) runs. This makes finalization
-   always produce a record within the declared hard limits (T140).
+1. **Count feasibility**: `maxRawObservations ≥ maxCanonicalEvents`.
+   Spec 014 requires every canonical event to derive from at least one raw
+   observation, so a canonical budget larger than the raw budget is
+   unreachable; the ranges above (`1,000–1,000,000` canonical,
+   `2,000–2,000,000` raw) are aligned so valid combinations exist, and any
+   combination violating the invariant (e.g. 1,000,000 canonical with
+   2,000 raw) is rejected at startup and at parse (T150).
+2. **Range feasibility**: every budget's configured value is within its
+   declared range; defaults (10,000 canonical / 20,000 raw) satisfy the
+   count invariant with headroom for replay/duplicate observations
+   (replayed observations consume raw budget without creating canonical
+   events, T146).
+
+**Normative reference budget algorithm — the exact serialized-size
+measurement (blocker-1 resolution, revision 9):**
+
+`maxSerializedEvidenceBytes` is not a sum of estimated parts; it is the
+**measured byte length of the complete finalizable snapshot**, produced by
+one normative reference calculation built on the actual serializer
+(`serializeEvidenceRecord` + `utf8Encode`, the same functions the
+persistence path uses, Spec 015 §4.1/§5.8):
+
+1. **Construct the candidate state transactionally** — the candidate raw
+   observation (and, if it creates one, the candidate canonical event)
+   are added to a scratch copy of the current observation state. Nothing
+   is committed yet.
+2. **If no observation terminal exists yet**, append to the scratch state
+   a **budget-only worst-case terminal**: the informational `error`
+   (actor `capture`, `observation-detached`) with the **actual allocated
+   IDs** (the event id the terminal would receive, within
+   `maxIdLengthBytes`) and the **closed maximum structural text** (`§8.4`:
+   fixed vocabulary, `error.message` ≤ 200 chars, bounded ids) — plus its
+   one corresponding raw observation. The budget-only terminal is used
+   **for measurement only** and is **not persisted unless exhaustion
+   actually occurs** (in which case the same reserved slot and bytes are
+   spent on the real informational error, §3.5 behavior).
+3. **Derive the candidate trace, analysis, completeness, and boundary
+   exactly** — the derived fields (`trace`, `analysis`,
+   `completeness`, and the boundary-derivation artifacts) are produced
+   from the scratch state by the same deterministic derivations the
+   finalization path uses (`deriveTrace`/`deriveCompleteness`/…, Spec
+   013/014); their size therefore varies with observation count,
+   duplicate sets, identifiers, losses, and derivations exactly as the
+   real record's would. There is **no `FINALIZATION_OVERHEAD_BYTES`
+   constant and no "exact worst case" formula without a complete
+   normative computation** — the derivation is executed, not bounded by
+   hand (T144–T148).
+4. **Serialize that complete finalizable snapshot** — the scratch
+   state + derived fields as one `EvidenceRecord` document via
+   `serializeEvidenceRecord` (the identical serializer the save path
+   uses).
+5. **Measure** `utf8Encode(serializedDocument).byteLength`.
+6. **Accept the candidate only when that exact measured value ≤
+   `maxSerializedEvidenceBytes`** — and when every other applicable
+   budget passes (raw count, canonical count, payload bytes, retained
+   content; §3.5 atomic admission below).
+
+Because the measurement is the actual serialized document, retained
+content is counted **once** — inside the serialized canonical events /
+raw observations where it physically lives — and is **never added again
+as a separate term**; raw/canonical duplication counts **by the actual
+serialized bytes of each stored copy** (both copies are in the snapshot
+and both are measured); escaping and multibyte UTF-8 count their real
+serialized byte lengths (T144, T145). Configurable combinations cannot
+make the reservation impossible: there is no separately-configured
+reservation to conflict with — the budget-only terminal is part of every
+pre-terminal measurement (T148).
+
+**Equivalence for optimized implementations:** an implementation may
+replace the full snapshot measurement with an incremental counter only if
+a test-suite equivalence proof shows the counter equals the reference
+snapshot calculation for **every tested case** (escaping, multibyte text,
+duplicates, derivation growth, every terminal shape, boundary-plus-one;
+T144–T148). The reference calculation above remains normative.
+
+**Atomic observation admission (blocker-2 resolution, revision 9) —
+canonical events and raw observations are ONE surface, never two
+independently-appended ones:**
+
+Spec 014 requires every canonical event to derive from at least one raw
+observation; a raw observation may replay an existing canonical event
+(duplicate/replay, consuming raw budget only) or create a new one. A
+single observation is therefore admitted **atomically**:
+
+1. **Tentatively add one raw observation** to the scratch state.
+2. **Derive whether it creates or replays a canonical event** (Spec 014
+   derivation: same observation identity ⇒ replay; new normalized content
+   ⇒ new canonical event).
+3. **Test every applicable budget on the combined effect**: raw count
+   (`maxRawObservations`), canonical count (`maxCanonicalEvents`),
+   raw payload bytes (`maxRawObservationPayloadBytes`), retained content
+   (`maxRetainedContentCodePoints`), and the exact finalizable snapshot
+   measurement (`maxSerializedEvidenceBytes`, reference algorithm above).
+   The count tests use the reserved slots: content may consume
+   `maxCanonicalEvents − 1` canonical events and `maxRawObservations − 1`
+   raw observations; the two reserved slots together are what the
+   budget-only terminal (and later the real exhaustion terminal) occupy
+   (T149).
+4. **Commit both derived effects or neither** — if any test fails, the
+   tentative raw observation **and** any canonical event it would have
+   created are both discarded; there is no state where the raw
+   observation exists without its canonical event or vice versa (T149).
+5. **On failure the budget-exhaustion path below runs**; the scratch
+   state is untouched and no partial append is observable.
+
+Post-terminal clarity (blocker-2 resolution): **once the final canonical
+event exists, no event-count or raw-observation candidate is appended at
+all** — Spec 014 §4.7 and §10.2 make the terminal event the record's final
+applicable event. Therefore a canonical-event budget cannot "newly be hit
+after `[DONE]`": there are no post-terminal candidates to test. After a
+terminal, the constant-space post-terminal state word (`none-observed` |
+`observed-not-retained` | `unknown`, §6.6) may move to `unknown` only on a
+**later observer failure** (e.g. frame overflow or an internal capture
+error) — never because a budget was exhausted, and never by rewriting the
+terminal (T151).
 
 Behavior on exhaustion (closed, deterministic; **first-terminal-wins**,
 §3.5 + §10.2):
 
-1. **Before any observation terminal**: exhaustion detaches observation
-   with `record-budget-exceeded` (§9.2 — a closed member of
+1. **Before any observation terminal**: a rejected candidate detaches
+   observation with `record-budget-exceeded` (§9.2 — a closed member of
    `ObservationFailureCode`; §1.4 internal-observer failure). The reserved
-   canonical-event slot and `finalEventReservation` bytes are spent on the
-   informational `error` (actor `capture`) that finalizes the record; the
-   terminal becomes **`observation-detached`** (status `unknown`). The
-   detach is an observation decision, never a transport decision.
+   canonical-event slot and reserved raw-observation slot are spent on the
+   informational `error` (actor `capture`) and its raw observation, which
+   finalize the record; the terminal becomes **`observation-detached`**
+   (status `unknown`). The detach is an observation decision, never a
+   transport decision.
 2. **After an observation terminal was already observed** (e.g. `[DONE]`):
-   the terminal **remains unchanged** — first-terminal-wins — and **no
-   error event is appended after the final event** (Spec 014 §4.7: the
-   terminal declaration is the record's final applicable event). The loss
-   of further post-terminal accounting becomes an authoritative `unknown`
-   post-terminal/remainder fact only (`post-terminal-content-unknown`,
-   `remainderObservation: 'unknown'`, §6.6, §7.3) — the record is never
-   rewritten from `completed`/`failed`/`cancelled` into
-   `observation-detached`. Post-terminal bookkeeping is **constant-space**
-   (a single state word: `none-observed` | `observed-not-retained` |
-   `unknown`), so it cannot grow memory or rewrite the terminal (T134).
-3. **Stop accumulating evidence**: no further canonical events, no further
-   raw observation payloads, no further retained text (both cases).
+   no candidate is ever appended (atomic admission is closed), so
+   exhaustion **cannot occur** in this phase — the terminal **remains
+   unchanged**, no error event is appended after the final event (Spec 014
+   §4.7: the terminal declaration is the record's final applicable event),
+   and the loss of further post-terminal accounting becomes an
+   authoritative `unknown` post-terminal/remainder fact only
+   (`post-terminal-content-unknown`, `remainderObservation: 'unknown'`,
+   §6.6, §7.3) — the record is never rewritten from
+   `completed`/`failed`/`cancelled` into `observation-detached`.
+   Post-terminal bookkeeping is **constant-space** (a single state word:
+   `none-observed` | `observed-not-retained` | `unknown`), so it cannot
+   grow memory or rewrite the terminal; the state word moves to `unknown`
+   only on a later observer failure, never on a budget event (T151).
+3. **Stop accumulating evidence** (before-terminal case): no further
+   canonical events, no further raw observation payloads, no further
+   retained text.
 4. **Continue byte-transparent, backpressured client passthrough** — the
    client traffic is never cancelled, truncated, or mutated because
    observation filled its budget (§5).
 5. **Derive the honest losses**: before-terminal exhaustion derives
    `remainder-after-observation-detach-not-observed` (terminal
-   `observation-detached`); after-terminal exhaustion derives
-   `post-terminal-content-unknown` when the remainder is unknown — the
-   spec never asserts unobserved content was absent (§6.6, §7.3).
+   `observation-detached`); after-terminal unknown remainder derives
+   `post-terminal-content-unknown` — the spec never asserts unobserved
+   content was absent (§6.6, §7.3).
 6. **Still finalize and attempt the one canonical save** after the
    client-response path ends (§3.2): the budget-exhausted record takes the
    same persistence path as every other record (§16).
 
-Adversarial and boundary tests (T125–T127, T134–T140, §21.13) prove a
-never-ending or high-chunk-count stream cannot grow evidence memory beyond
-the declared hard limits, that the transport path is unaffected by budget
-exhaustion, and that every budget boundary (counts, bytes, escaping,
-multibyte, duplication, derived overhead, id length, finalization) is exact.
+Adversarial and boundary tests (T125–T127, T134–T153, §21.13–§21.15)
+prove a never-ending or high-chunk-count stream cannot grow evidence
+memory beyond the declared hard limits, that the transport path is
+unaffected by budget exhaustion, and that every budget boundary (counts,
+measured serialized bytes, escaping, multibyte, duplication, derivation
+growth, id length, every terminal shape, boundary-plus-one, atomic
+admission, and the count invariants) is exact.
 
 ---
 
@@ -1351,7 +1487,12 @@ Terminal rules (Spec 014 §4.7):
     (`none-observed` | `observed-not-retained` | `unknown`) — it never
     buffers trailing bytes, never accumulates memory with stream length,
     and can **never rewrite a completed/failed/cancelled terminal into
-    `observation-detached`** (§3.5 step 2, §10.2);
+    `observation-detached`** (§3.5, §10.2). No event-count or
+    raw-observation candidate is appended after the final event, so a
+    canonical/raw budget can never "newly be hit after `[DONE]`" — the
+    state word may move to `unknown` only on a **later observer failure**
+    (e.g. frame overflow), never on a budget event (§3.5 atomic
+    admission);
   - **are declared via the exact fact** — `post-terminal-content-not-retained`
     is derived **only** from `observed-not-retained`; an `unknown` post-
     terminal state derives the separate honest code
@@ -1540,17 +1681,21 @@ Assignment rules (applicability-aware):
   processing ended before any byte was observed (a body-read failure at the
   start); `'partially-observed-not-retained'` when body processing ended
   with only part of the body read (mid-body connection loss, the over-limit
-  cutoff) — the observed prefix was not retained, so the derived losses are
-  **both** `request-body-not-fully-observed` **and**
-  `request-body-not-retained` (§7.3.2); `'fully-observed-not-retained'`
+  cutoff — Spec 006 cuts the body off without parsing trailing content, so
+  over-limit is **always** partial) — the observed prefix was not retained,
+  so the derived losses are **both** `request-body-not-fully-observed`
+  **and** `request-body-not-retained` (§7.3.2); `'fully-observed-not-retained'`
   when the complete body was read and intentionally not retained — the
-  default for valid requests, and **also** for invalid-request /
-  body-read-failure / over-limit cases where the complete body was read
-  (bytes actually observed, never the validation result, §10.2);
-  `'retained'` never in the default profile. An over-limit body or a
-  connection failure partway through the body is **never** described as
-  "no body was read" — it is `'partially-observed-not-retained'` with the
-  derived wording "not fully observed" (§7.3.2).
+  default for valid requests, and **also** for a fully read body that then
+  failed parse or structural validation (malformed JSON, invalid fields;
+  bytes actually observed, never the validation result, §10.2). A
+  `body-read-failure` is **never** `'fully-observed-not-retained'`: once
+  the complete body was successfully read, a later parse/validation
+  failure is not a read failure; `'retained'` never in the default
+  profile. An over-limit body or a connection failure partway through the
+  body is **never** described as "no body was read" — it is
+  `'partially-observed-not-retained'` with the derived wording "not fully
+  observed" (§7.3.2).
 - `messageContent`/`deltaContent`: `'fully-retained'` when every retained
   representation is complete at the boundary; `'partially-retained'` when
   any representation was shortened by the boundary; `'omitted'` when
@@ -2145,11 +2290,12 @@ type UpstreamFailureCode =
   | NonSseResponseCode;           // 'non-sse-response'
 
 type ClientRequestFailureCode =
-  | 'invalid-request'             // 400-class: malformed body, invalid fields, unknown model, over-limit
+  | 'invalid-request'             // 400-class: malformed body or invalid non-message fields (NOT "unknown model"
+                                  //   — an unknown/unselectable model is 'unroutable', below)
   | 'missing-api-key'             // no API key env var configured
   | 'key-unavailable'             // key env var referenced but unset/unresolvable at dispatch
-  | 'unroutable'                  // no provider matches the requested model
-  | 'body-read-failure';          // the request body could not be read
+  | 'unroutable'                  // no provider matches the requested model (unknown/unselectable model)
+  | 'body-read-failure';          // the request body could not be read (transport read failure only)
 
 type ObservationFailureCode =      // internal observer failures (detach, §1.4)
   | 'frame-overflow'
@@ -2285,12 +2431,17 @@ waits on the client socket.
 
 - **First-terminal-wins on budget exhaustion**: the `observing-stream` →
   `observation-detached` transition for `record-budget-exceeded` applies
-  **only while no observation terminal has been observed**. Once a
-  terminal (`[DONE]` or any other) was observed, the machine is in a
-  terminal state and **never transitions again**: budget exhaustion
-  changes nothing about the terminal, appends **no** error event after the
-  final event (Spec 014 §4.7), and the loss becomes an authoritative
-  `unknown` post-terminal/remainder fact only (§3.5 step 2, §6.6).
+  **only while no observation terminal has been observed** — a rejected
+  atomic observation (a tentative raw observation and any canonical event
+  it would create, §3.5) detaches observation. Once a terminal (`[DONE]`
+  or any other) was observed, the machine is in a terminal state and
+  **never transitions again**: no event-count or raw-observation candidate
+  is appended after the final event (Spec 014 §4.7), so exhaustion
+  **cannot occur** in this phase — the terminal is unchanged, nothing is
+  appended, and the loss of further post-terminal accounting becomes an
+  authoritative `unknown` post-terminal/remainder fact only (§3.5, §6.6);
+  the constant-space state word may move to `unknown` on a later observer
+  failure, never on a budget event.
 
 - **Every pre-dispatch failure is reachable from `request-observed`** — the
   rev-4 table wrongly transitioned invalid/missing-key/over-limit/unroutable
@@ -2300,26 +2451,30 @@ waits on the client socket.
   model span, no `model_request`** (the canonical request was not observed at
   its declared boundary), and **no fabricated `interaction_end`** (Spec 014
   §4.7). The record parses: status `failed`, terminal `request-failed`.
-- **Pre-dispatch body/message stage matrix** (losses are phase-accurate,
-  §7.3):
+- **Pre-dispatch body/message phase matrix** (losses are phase-accurate,
+  §7.3; facts follow **bytes and message content actually observed**, never
+  the eventual failure code):
 
-  | Pre-dispatch path | Typical body observation fact | `messageContent` | Derived message-content loss |
+  | Observed phase | Body observation fact | `messageContent` | Derived message-content loss |
   |---|---|---|---|
-  | `invalid-request` (malformed JSON / invalid fields) | **`fully-observed-not-retained` when the complete body was read** (a malformed JSON document or structurally invalid body can be read completely before validation fails), `partially-observed-not-retained` (parse ended mid-body), or `no-bytes-observed` — the fact follows **bytes actually observed, never the validation result** (§7.3.1) | `not-observed` (no normalized messages were ever formed) | none (nothing existed) |
-  | `body-read-failure` | `no-bytes-observed` (zero bytes), `partially-observed-not-retained` (mid-body), or `fully-observed-not-retained` (complete body read before the read failed) | `not-observed` | none (nothing existed) |
-  | `over-limit` | `partially-observed-not-retained` (cutoff) or `fully-observed-not-retained` (complete body read then rejected) | `not-observed` | none (nothing existed) |
+  | zero-byte read failure | `no-bytes-observed` | `not-observed` (no bytes, no messages) | none (nothing existed) |
+  | mid-body read failure | `partially-observed-not-retained` (read ended mid-body) | `not-observed` | none (nothing existed) |
+  | over-limit cutoff | `partially-observed-not-retained` — Spec 006 cuts the body off **without parsing trailing content**, so it is partial, never fully-read-then-rejected | `not-observed` (only the untruncated prefix could have been parsed; messages are not formed from a partial body) | none (nothing existed) |
+  | fully read malformed JSON | `fully-observed-not-retained` (the malformed document was read completely before validation failed) | `not-observed` (no normalized messages were ever formed — parsing never produced messages) | none (nothing existed) |
+  | fully read valid JSON containing messages, rejected during structural/request validation | `fully-observed-not-retained` | **`omitted`** (message content **was** observed; no `model_request` is emitted, so no canonical representation is written — never `not-observed`) | **`message-content-not-retained`** |
+  | fully read valid JSON with **no** message content (e.g. empty/absent `messages`) | `fully-observed-not-retained` | `not-observed` (no message content existed) | none (nothing existed) |
   | `missing-api-key` (complete valid request read) | `fully-observed-not-retained` | **`omitted`** | **`message-content-not-retained`** |
   | `key-unavailable` (complete valid request read) | `fully-observed-not-retained` | **`omitted`** | **`message-content-not-retained`** |
-  | `unroutable` (complete valid request read) | `fully-observed-not-retained` | **`omitted`** | **`message-content-not-retained`** |
+  | `unroutable` — unknown/unselectable model (complete valid request read) | `fully-observed-not-retained` | **`omitted`** | **`message-content-not-retained`** |
 
-  The rule: `not-observed` means **no normalized messages were ever formed**
-  (invalid/partial/unreadable body); `omitted` means normalized message
-  content **was** observed on a valid request but no canonical
-  representation was written because no `model_request` is emitted on the
-  pre-dispatch path — never `not-observed` merely because the canonical
-  event was omitted (§7.3.1). The exact body fact is per actual observation
-  (T129 tests zero-byte, partial-body, fully parsed, and normalized-message
-  stages).
+  The rule: `not-observed` means **no message content was actually
+  observed** (zero bytes, partial body, malformed body, or valid body with
+  no messages); `omitted` means message content **was** observed but no
+  canonical representation was written because no `model_request` is
+  emitted on the pre-dispatch path — never `not-observed` merely because
+  normalization or event emission was skipped (§7.3.1). The exact body
+  fact is per actual observation (T152 is a table-driven test over every
+  phase above and proves no loss is normalized away).
 - Every terminal is reachable from defined states; no terminal is reachable
   from `initial` (a request that is never observed produces no record —
   nothing was observed, §3.1).
@@ -2636,10 +2791,11 @@ CompletenessSummary (assembler-internal; persisted projections listed in §13.4)
   observation time.
 - **Identifiers are explicitly bounded**: every assembler-generated opaque
   id (event ids, observation ids, `traceId == interactionId`) is generated
-  within `maxIdLengthBytes` (UTF-8 bytes, §3.5) — this is the bound that
-  makes `TERMINAL_WORST_CASE_BYTES` and the fixed
-  `finalEventReservation` **provable** (§3.5 rule 6). A generated id that
-  would exceed the bound is refused by the allocator (never truncated).
+  within `maxIdLengthBytes` (UTF-8 bytes, §3.5) — this bound participates
+  in the closed maximum structural text of the budget-only terminal event
+  (§3.5 reference algorithm step 2), keeping the terminal's measured size
+  deterministic. A generated id that would exceed the bound is refused by
+  the allocator (never truncated).
 - **No hidden nondeterminism**: the assembler contains no
   `Date.now()`, no `Math.random()`, no `crypto.randomUUID()`, no ambient
   clock reads. This is enforced by the package boundary tests (§21 T109)
@@ -2834,12 +2990,11 @@ captureBoundary.streaming = {
   captureProfile: { name: 'signalglass.collection.ingress-metadata-safe'; version: string },  // AUTHORITATIVE
   detector: { name: 'signalglass.collection.sensitive-detector'; version: string },           // AUTHORITATIVE
   budgets: {                          // AUTHORITATIVE — the exact limits that governed capture (§3.5)
-    maxCanonicalEvents: number;       // count budget
-    maxRawObservations: number;       // count budget
+    maxCanonicalEvents: number;       // count budget (one reserved slot)
+    maxRawObservations: number;       // count budget (one reserved slot); >= maxCanonicalEvents
     maxRawObservationPayloadBytes: number;
-    maxRetainedContentCodePoints: number;
-    maxSerializedEvidenceBytes: number;
-    finalEventReservation: number;
+    maxRetainedContentCodePoints: number;   // semantic content limit (code points, not bytes)
+    maxSerializedEvidenceBytes: number;     // measured finalizable-snapshot byte budget
     maxIdLengthBytes: number;
   },
   // NOTE: observationTerminal is intentionally ABSENT — derived from the final event (§13.2).
@@ -2891,12 +3046,15 @@ Parse-time validation (in addition to the field itself being additive):
   record's `RequestEnvelope.messages` value is arbitrary legacy data,
   parsed and round-tripped unchanged, never reinterpreted (§13.7, T133);
 - **budget validation**: `captureBoundary.streaming.budgets` is closed and
-  validated — every value within its declared range (§3.5),
-  `finalEventReservation ≥ TERMINAL_WORST_CASE_BYTES` computed from
-  `maxIdLengthBytes` and the closed terminal shape, and every byte/count
-  budget is exact (no estimates); a record whose serialized size exceeds
-  its own declared `maxSerializedEvidenceBytes` upper bound is a parse
-  failure (finalization is transactional, §3.5);
+  validated — every value within its declared range **and** the §3.5
+  cross-field invariants hold (`maxRawObservations ≥ maxCanonicalEvents`;
+  incompatible combinations are rejected at parse, never clamped);
+  `maxSerializedEvidenceBytes` is the measured finalizable-snapshot byte
+  budget (normative reference algorithm, §3.5) — a record whose
+  `utf8Encode(serializeEvidenceRecord(...)).byteLength` exceeds its own
+  declared `maxSerializedEvidenceBytes` is a parse failure (atomic
+  admission, §3.5); `maxRetainedContentCodePoints` is a semantic content
+  limit and is not recounted as serialized bytes;
 - **cross-checks**: derived `trace.assembly` must equal
   `captureBoundary.streaming.assembly`; derived `trace.captureProfile` must
   equal `captureBoundary.streaming.captureProfile` (name and version);
@@ -3126,9 +3284,9 @@ authorizes a **whole content-bearing payload** via the enclosing
     - the record's `evidenceSchemaVersion` is a MAJOR-1 version ≥ 1.1.0
       (a 1.1-owned field cannot ride on a 1.0.x record).
   - **v1.1.0 evaluating a 1.0.x record delegates to the unchanged v1.0
-    behavior**: a 1.0.x record has no 1.1-owned fields and no
-    `ContentLeaf`, so Rules 1–2 are vacuous and the whole-payload v1.0
-    evaluation applies unchanged (see the §14.3 matrix; T143).
+    admission/classification semantics**: a 1.0.x record has no 1.1-owned
+    fields and no `ContentLeaf`, so Rules 1–2 are vacuous and the
+    whole-payload v1.0 evaluation applies unchanged (§14.3; T153).
 - Rules 1–2 are **mechanical**: they inspect the submitted record (leaf
   status, leaf declarations, length, path, versions, gate result) — they
   never trust a provenance claim and never trust an aggregate event
@@ -3145,15 +3303,35 @@ authorizes a **whole content-bearing payload** via the enclosing
 ### 14.3 Version interplay (policy version ≠ schema version; policy chosen at construction)
 
 The **constructed** policy evaluates every save; the rows below are the
-complete interplay for the reference policy:
+complete interplay for the reference policy. For a 1.0.x record under
+v1.1.0 the **admission/classification semantics** delegate to the unchanged
+v1.0 evaluation, but the **deciding-policy identity is always the actual
+constructed policy** — v1.0.0 and v1.1.0 can therefore legitimately
+produce **different complete `SaveOutcome` objects for the same record**
+(e.g. `policy: { name, version }` on `policy-rejected`/`policy-failed`,
+and `StorageManifest.persistencePolicy` on `stored`):
 
 | Constructed policy | Record schema (MAJOR 1) | Outcome |
 |---|---|---|
-| `metadata-safe` v1.0.0 | 1.0.x, no 1.1-owned fields | **unchanged v1.0.0 evaluation**: whole-payload event-level `redacted`/`truncated` admission; `captured` content-bearing fields → `policy-rejected` `captured-content`; no `ContentLeaf` anywhere |
-| `metadata-safe` v1.0.0 | ≥ 1.1.x with 1.1-owned fields | unchanged v1.0.0 evaluation; every 1.1-owned field (`ContentLeaf`, leaf declarations, `deltaText`, …) → `policy-rejected` `unknown-additive-field` (no silent discard, no interpretation of `ContentLeaf`, §13.7) |
-| `metadata-safe` v1.1.0 | 1.0.x, no 1.1-owned fields | **delegates to the unchanged v1.0 behavior**: Rules 1–2 are vacuous (no 1.1-owned fields, no `ContentLeaf`); the record is evaluated exactly as v1.0.0 would evaluate it — outcomes are byte-identical to the v1.0.0 × 1.0.x row (T143) |
-| `metadata-safe` v1.1.0 | ≥ 1.1.x with 1.1-owned fields | v1.1.0 rules (Rule 1 per-leaf declared admission + Rule 2 bounded-captured admission) |
+| `metadata-safe` v1.0.0 | 1.0.x, no 1.1-owned fields | unchanged v1.0.0 evaluation: whole-payload event-level `redacted`/`truncated` admission; `captured` content-bearing fields → `policy-rejected` `captured-content`; no `ContentLeaf` anywhere; deciding-policy identity = v1.0.0 |
+| `metadata-safe` v1.0.0 | ≥ 1.1.x with 1.1-owned fields | unchanged v1.0.0 evaluation; every 1.1-owned field (`ContentLeaf`, leaf declarations, `deltaText`, …) → `policy-rejected` `unknown-additive-field` (no silent discard, no interpretation of `ContentLeaf`, §13.7); deciding-policy identity = v1.0.0 |
+| `metadata-safe` v1.1.0 | 1.0.x, no 1.1-owned fields | **delegation**: Rules 1–2 are vacuous (no 1.1-owned fields, no `ContentLeaf`); the record is evaluated with the unchanged v1.0 admission/classification semantics — accept/reject **status** and **non-policy rationale/code** are equivalent to the v1.0.0 × 1.0.x row; **deciding-policy identity = v1.1.0** (T153) |
+| `metadata-safe` v1.1.0 | ≥ 1.1.x with 1.1-owned fields | v1.1.0 rules (Rule 1 per-leaf declared admission + Rule 2 bounded-captured admission); deciding-policy identity = v1.1.0 |
 
+**Honest equivalence invariant (blocker-4 resolution, revision 9):**
+
+- For a 1.0.x record, v1.1.0 delegates to the **unchanged v1.0
+  admission/classification semantics**; the accept/reject **status** and the
+  **non-policy rationale/code** are equivalent across the two constructed
+  policies — this is what the tests assert (T153).
+- The **deciding-policy identity remains truthful and may differ**: v1.0.0
+  records `{ name: 'signalglass.storage.metadata-safe', version: '1.0.0' }`
+  wherever the `SaveOutcome` carries policy identity;
+  v1.1.0 records its own version even when it delegated for a 1.0.x
+  record. The revision-8 claim that outcomes are "byte-identical" is
+  **false and is corrected here** — complete `SaveOutcome` objects may
+  legitimately differ in their policy identity fields (and stored
+  manifests record v1.1.0 when v1.1.0 made the decision).
 - **v1.0.0 is never weakened or reinterpreted**: records that were
   admissible under v1.0.0 remain admissible; the v1.0.0 policy text is
   unchanged; v1.0.0 never evaluates per leaf and never interprets
@@ -3163,7 +3341,8 @@ complete interplay for the reference policy:
 - **v1.1.0 is never silently downgraded**: if storage is constructed with
   v1.1.0, that policy evaluates the save — it is not swapped for v1.0.0
   based on the record; for a 1.0.x record it **delegates** to the
-  unchanged v1.0 behavior (same outcome, same rationale, §14.2).
+  unchanged v1.0 semantics (same status, same non-policy rationale,
+  same code; truthful v1.1.0 identity, §14.2).
 - **No record-side policy selection**: a capture profile never chooses
   the policy; the policy is the constructed one (§14.1).
 - **Unknown/unavailable policy version is a constructor/configuration
@@ -3440,8 +3619,8 @@ reinterpretation.**
   and in `specs/000-index.md` (Spec 015 row: Implemented, merged).
 - This draft (Spec 016) remains a **docs-only, Draft, unmerged** PR; it
   proposes modules it does not create (§11).
-- Version-number corrections: this revision is **revision 8** of the draft
-  (revisions 2, 3, 4, 5, 6, 7, and 8 recorded in the index).
+- Version-number corrections: this revision is **revision 9** of the draft
+  (revisions 2, 3, 4, 5, 6, 7, 8, and 9 recorded in the index).
 - The roadmap row for #23 stays "Draft spec 016".
 
 ### 19.2 Honest crash / no-record reporting
@@ -3500,11 +3679,11 @@ implemented in this docs-only spec.**
 
 | Slice | Scope | Outcome | Depends on |
 |---|---|---|---|
-| **S1** | 1.1 schema foundation in `@signalglass/evidence`: additive `captureBoundary.streaming` parse/validation (incl. `decoderDisposition`, phase-accurate `RequestBodyRetention`, loss booleans incl. `unrecognizedRoleObserved`/`sseMetadataObservedButNotRetained`, **exact `captureBoundary.streaming.budgets` validation §3.5/§13.4**), `responseEnvelope.deltaText`, the **closed leaf-level request-message shape (§8.7) with version-aware scope** (validated on ≥ 1.1.x records only; 1.0.x `messages` parses/round-trips unchanged — T133; additive `LeafRedactionDeclaration`/`LeafTruncationDeclaration` on the unchanged Spec 014 types), `record-budget-exceeded` as a closed `ObservationFailureCode`, version-aware MAJOR-1 validation, closed vocabularies, authority-model verification (deriveCompleteness recompute + disagreement failure, aggregate precedence + cross-validation incl. leaf-level rules §7.3.3) | `parseEvidenceRecord` accepts/validates 1.1 streaming records; tampering with derived fields fails parse; 1.0 records with arbitrary legacy `messages` unchanged | Spec 014/015 code (existing) |
-| **S2** | `metadata-safe` v1.1.0 persistence policy (Rules 1–2 with the closed admitted paths §14.2, **inspecting each leaf's own status/declaration/path/length** — never the aggregate event status; cap exactly 240 code points; **v1.0.0 unchanged — whole-payload event-level authorization, `unknown-additive-field` refusal, no `ContentLeaf` interpretation; v1.1.0 delegating to v1.0 behavior for 1.0.x records**) in `@signalglass/storage` + construction-time policy selection (Spec 015 model) + policy-version recording + leak-free `policy-failed` reasons (no `unknown-policy-version`) | persistence admits bounded captured content mechanically at closed paths; v1.0.0 outcomes identical before/after v1.1.0; policy chosen at construction | S1 (1.1 records exist, deltaText/messages leaf shapes) |
+| **S1** | 1.1 schema foundation in `@signalglass/evidence`: additive `captureBoundary.streaming` parse/validation (incl. `decoderDisposition`, phase-accurate `RequestBodyRetention`, loss booleans incl. `unrecognizedRoleObserved`/`sseMetadataObservedButNotRetained`, **exact `captureBoundary.streaming.budgets` validation §3.5/§13.4 — ranges AND the `maxRawObservations ≥ maxCanonicalEvents` cross-field invariant**), `responseEnvelope.deltaText`, the **closed leaf-level request-message shape (§8.7) with version-aware scope** (validated on ≥ 1.1.x records only; 1.0.x `messages` parses/round-trips unchanged — T133; additive `LeafRedactionDeclaration`/`LeafTruncationDeclaration` on the unchanged Spec 014 types), `record-budget-exceeded` as a closed `ObservationFailureCode`, version-aware MAJOR-1 validation, closed vocabularies, authority-model verification (deriveCompleteness recompute + disagreement failure, aggregate precedence + cross-validation incl. leaf-level rules §7.3.3) | `parseEvidenceRecord` accepts/validates 1.1 streaming records; tampering with derived fields fails parse; 1.0 records with arbitrary legacy `messages` unchanged | Spec 014/015 code (existing) |
+| **S2** | `metadata-safe` v1.1.0 persistence policy (Rules 1–2 with the closed admitted paths §14.2, **inspecting each leaf's own status/declaration/path/length** — never the aggregate event status; cap exactly 240 code points; **v1.0.0 unchanged — whole-payload event-level authorization, `unknown-additive-field` refusal, no `ContentLeaf` interpretation; v1.1.0 delegating v1.0 admission/classification semantics for 1.0.x records with truthful v1.1.0 deciding-policy identity**) in `@signalglass/storage` + construction-time policy selection (Spec 015 model) + policy-version recording + leak-free `policy-failed` reasons (no `unknown-policy-version`) | persistence admits bounded captured content mechanically at closed paths; v1.0.0 unchanged; delegation status/code equivalent with truthful identity; policy chosen at construction | S1 (1.1 records exist, deltaText/messages leaf shapes) |
 | **S3** | `@signalglass/streaming`: L2 SSE parser (incremental, bounded, `[DONE]`-aware, deterministic post-terminal continuation, frame-overflow, **SSE-metadata fact `sseMetadataObservedButNotRetained` (openai-sse applicability only, §7.3) with comments-ignored-by-canonical-semantics §6.1**) | parser unit-tested (T01–T12, T131, T142); network-free | none |
-| **S4** | `@signalglass/streaming` assembler + `@signalglass/providers` L3 decoder (openai-sse contract): normalization, `choiceIndex` identity, closed-category unmapped fields, usage, terminalization, honest evidence statuses, explicit nondeterministic inputs, remainder knowledge, `deltaText` assembly, **leaf-level request-message assembly with role sentinel (§8.7), evidence-budget enforcement with exact accounting and first-terminal-wins (§3.5)** | decoder/assembler unit-tested (T13–T44, T49–T61, T72–T87, T101–T143); builds against S1 schema fields and S2 Rule 2 admitted-path contracts | S1 (schema fields), S2 (policy contracts as applicable), S3 |
-| **S5** | `apps/ingress` wiring: streaming path on the existing route, passthrough pipeline + backpressure, bounded decoder tee, client-response orchestration (Spec 006 error-envelope semantics preserved), **evidence-budget configuration and validation at startup (§3.5)**, save-after-response-end, observability projection, **projection-matrix and parity rows in `@signalglass/core` updated for the new canonical fields** (deltaText, normalized leaf messages, decoderDisposition) | e2e tests (T62–T71, T98–T100, T125–T127) + parity/projection updates + integration with the existing suite | S2, S4 |
+| **S4** | `@signalglass/streaming` assembler + `@signalglass/providers` L3 decoder (openai-sse contract): normalization, `choiceIndex` identity, closed-category unmapped fields, usage, terminalization, honest evidence statuses, explicit nondeterministic inputs, remainder knowledge, `deltaText` assembly, **leaf-level request-message assembly with role sentinel (§8.7), evidence-budget enforcement with the normative snapshot measurement, atomic observation admission, and first-terminal-wins (§3.5)** | decoder/assembler unit-tested (T13–T44, T49–T61, T72–T87, T101–T153); builds against S1 schema fields and S2 Rule 2 admitted-path contracts | S1 (schema fields), S2 (policy contracts as applicable), S3 |
+| **S5** | `apps/ingress` wiring: streaming path on the existing route, passthrough pipeline + backpressure, bounded decoder tee, client-response orchestration (Spec 006 error-envelope semantics preserved), **evidence-budget configuration and validation at startup (§3.5) including the count-budget cross-field invariants**, save-after-response-end, observability projection, **projection-matrix and parity rows in `@signalglass/core` updated for the new canonical fields** (deltaText, normalized leaf messages, decoderDisposition) | e2e tests (T62–T71, T98–T100, T125–T127, T150) + parity/projection updates + integration with the existing suite | S2, S4 |
 
 Each slice runs the full validation sequence before commit (AGENTS.md):
 `pnpm test`, `pnpm build`, evidence-example validation, projection-matrix
@@ -3514,11 +3693,11 @@ verification, `git diff --check`, Fallow checks.
 
 ## 21. Test groups
 
-**Decision 21 — 143 test groups (T01–T143) map to the 61 acceptance
+**Decision 21 — 153 test groups (T01–T153) map to the 67 acceptance
 criteria (§22) through the many-to-many mapping in §23. Tests live with the
 slice that implements them (unit tests for parser/assembler/decoder/policy;
 smoke tests for report generation; e2e for ingress wiring). Contract and
-serialized-shape groups (T101–T143) assert the exact 1.1 shapes.**
+serialized-shape groups (T101–T153) assert the exact 1.1 shapes.**
 
 ### 21.1 SSE parser (L2) — T01–T12
 
@@ -3838,17 +4017,16 @@ serialized-shape groups (T101–T143) assert the exact 1.1 shapes.**
 - **T125** Evidence budgets — canonical-event count: a stream exceeding
   `maxCanonicalEvents` **before any terminal** detaches with
   `record-budget-exceeded`; the reserved informational `error` event
-  finalizes the record; terminal is `observation-detached`; passthrough
-  continues byte-transparent and the record still saves once after the
-  response path ends (§3.5).
-- **T126** Evidence budgets — raw-observation slot exhaustion and byte
-  accounting: `maxRawObservations` count (with the one reserved slot) and
-  `maxRawObservationPayloadBytes` cumulative bytes are exact; retained
-  content is bounded by `maxRetainedContentCodePoints`;
-  `maxSerializedEvidenceBytes` (raw/canonical duplication counted by
-  actual serialized bytes, derived fields via
-  `FINALIZATION_OVERHEAD_BYTES`) and `finalEventReservation`
-  (`≥ TERMINAL_WORST_CASE_BYTES`) are exact (§3.5).
+  (and its raw observation) finalize the record; terminal is
+  `observation-detached`; passthrough continues byte-transparent and the
+  record still saves once after the response path ends (§3.5).
+- **T126** Evidence budgets — raw-observation count and byte accounting:
+  `maxRawObservations` count (with the one reserved slot) and
+  `maxRawObservationPayloadBytes` cumulative exact bytes are enforced;
+  retained content is bounded by `maxRetainedContentCodePoints` (a
+  **semantic** code-point limit, never recounted as serialized bytes);
+  `maxSerializedEvidenceBytes` is the **measured** finalizable-snapshot
+  byte budget (§3.5 reference algorithm) (§3.5).
 - **T127** Adversarial: a never-ending / high-chunk-count stream (no
   `[DONE]`) cannot grow evidence memory beyond the budgets; transport
   remains unaffected and completes for the client (§3.5).
@@ -3856,15 +4034,13 @@ serialized-shape groups (T101–T143) assert the exact 1.1 shapes.**
   full-body observations map to the exact `RequestBodyRetention` values;
   a partial body derives **both** `request-body-not-fully-observed` and
   `request-body-not-retained`; zero bytes derives only the former (§7.3).
-- **T129** Pre-dispatch stage matrix: every pre-dispatch failure tested at
-  zero-byte, partial-body, fully parsed, and normalized-message stages;
-  `invalid-request`/`body-read-failure`/`over-limit` include
-  `fully-observed-not-retained` whenever the complete body was read
-  (bytes observed, never the validation result); `messageContent` is
-  `not-observed` when no messages were formed and **`omitted`** +
-  `message-content-not-retained` on valid pre-dispatch paths (missing key
-  / key-unavailable / unroutable) where content was observed but no
-  `model_request` is emitted (§10.2).
+- **T129** Pre-dispatch phase matrix: every pre-dispatch failure tested at
+  zero-byte, mid-body, over-limit-cutoff, fully-read-malformed, and
+  fully-read-valid stages; facts follow **bytes and message content
+  actually observed, never the failure code** — fully read valid JSON
+  with messages rejected during validation is `omitted` +
+  `message-content-not-retained`, never `not-observed` (§10.2; the
+  table-driven T152 supersedes the older stage naming).
 - **T130** Excerpt cap determinism: the v1.0.0 profile cap is exactly 240
   code points; no runtime-configurable range exists; parsers and policies
   know the cap from the profile identity alone; a different cap requires
@@ -3893,62 +4069,145 @@ serialized-shape groups (T101–T143) assert the exact 1.1 shapes.**
 
 - **T134** First-terminal-wins, event-count exhaustion: a stream hitting
   `maxCanonicalEvents` before any terminal → informational `error`
-  (reserved slot) finalizes the record, terminal `observation-detached`;
-  a stream that hits the budget **after** `[DONE]` keeps the `[DONE]`
-  terminal unchanged, appends **no** error after the final event, and
-  derives only the `unknown` post-terminal/remainder fact
-  (`post-terminal-content-unknown`); the terminal is never rewritten
-  (§3.5, §10.2, §6.6).
+  (reserved slot) + its raw observation finalize the record, terminal
+  `observation-detached`; **after** `[DONE]` no event-count or
+  raw-observation candidate is appended at all (atomic admission is
+  closed), so a budget can never "newly be hit after `[DONE]`" — the
+  terminal stays unchanged, no error is appended, and only the `unknown`
+  post-terminal/remainder fact (`post-terminal-content-unknown`) may be
+  derived; the terminal is never rewritten (§3.5, §10.2, §6.6).
 - **T135** Raw-observation slot exhaustion: exactly one raw-observation
   slot is reserved; content never consumes it; the reserved terminal-path
   raw observation is emitted on the `record-budget-exceeded` terminal
   (§3.5).
-- **T136** Exact byte boundaries: a candidate whose exact serialized UTF-8
-  bytes exceed the remaining `maxRawObservationPayloadBytes` /
-  `maxSerializedEvidenceBytes` is rejected; the boundary byte is
+- **T136** Exact byte boundaries: a candidate whose measured
+  finalizable-snapshot size exceeds the remaining `maxRawObservationPayloadBytes`
+  / `maxSerializedEvidenceBytes` is rejected; the boundary size is
   accepted, the boundary-plus-one is rejected; no estimate anywhere
-  (§3.5).
-- **T137** JSON escaping and multibyte UTF-8: `\uXXXX` escapes count 6
-  bytes, multibyte code points count their UTF-8 byte lengths, in both
-  raw observations and canonical events (§3.5).
-- **T138** Raw/canonical duplication + derived overhead: the stored
+  (§3.5; the snapshot-equality tests T144–T148 include boundary-plus-one
+  cases).
+- **T137** JSON escaping and multibyte UTF-8: `\uXXXX` escapes and
+  multibyte code points count their **actual serialized byte lengths in
+  the measured snapshot** (reference algorithm step 5) — never a
+  hand-added formula — in both raw observations and canonical events
+  (§3.5; snapshot-equality T144).
+- **T138** Raw/canonical duplication + derivation growth: the stored
   `rawObservations` copy and the canonical event copy each count their
-  actual serialized bytes (no dedup credit); `FINALIZATION_OVERHEAD_BYTES`
-  covers the derived trace/analysis/completeness/boundary fields
-  deterministically; a record whose serialized size exceeds its declared
-  `maxSerializedEvidenceBytes` fails parse (§3.5, §13.4).
+  actual serialized bytes (no dedup credit); derived
+  trace/analysis/completeness/boundary size varies with observation
+  count, duplicate sets, identifiers, losses, and derivations — the
+  snapshot measurement captures it exactly; there is **no
+  `FINALIZATION_OVERHEAD_BYTES` constant**; a record whose measured
+  snapshot size exceeds its declared `maxSerializedEvidenceBytes` fails
+  parse (§3.5, §13.4; T146).
 - **T139** Long valid assembler ids: ids up to `maxIdLengthBytes` (e.g.
-  128-byte opaque ids) serialize within the reserved terminal budget;
-  an id that would exceed the bound is refused by the allocator, never
-  truncated (§12.6, §3.5).
-- **T140** Finalization always fits: transactional candidate accounting —
-  append only if candidate + `FINALIZATION_OVERHEAD_BYTES` +
-  `finalEventReservation` + reserved-slot overhead fit; every resulting
-  record is within its own declared hard limits (§3.5, §13.4).
-- **T141** Body-observation representation matrix: invalid-request /
-  body-read-failure / over-limit at zero-byte, partial-body, and
-  fully-read stages map to `no-bytes-observed` /
-  `partially-observed-not-retained` / `fully-observed-not-retained`
-  **by bytes observed, never by validation result**; a malformed JSON
-  document read completely is `fully-observed-not-retained` (§10.2,
-  §7.3.1).
+  128-byte opaque ids) serialize within the budget-only terminal
+  measurement (closed maximum structural text, §8.4); an id that would
+  exceed the bound is refused by the allocator, never truncated (§12.6,
+  §3.5).
+- **T140** Finalization always fits: every candidate is measured as the
+  complete finalizable snapshot (including the budget-only terminal when
+  none exists); every resulting record is within its own declared hard
+  limits (§3.5, §13.4).
+- **T141** Body-observation representation matrix: zero-byte read
+  failure, mid-body read failure, over-limit cutoff, fully read malformed
+  JSON, and fully read valid JSON map to `no-bytes-observed` /
+  `partially-observed-not-retained` / `fully-observed-not-retained` **by
+  bytes actually observed, never by validation result**; a fully read
+  body that then failed parse/validation is `fully-observed-not-retained`;
+  a `body-read-failure` is never fully-observed (§10.2, §7.3.1; the
+  table-driven T152 covers every phase).
 - **T142** SSE-metadata applicability: `sseMetadataObservedButNotRetained`
   is `true` only when `decoderDisposition === 'openai-sse'`; under
   `unsupported-encoding` the fact is never set (the parser could not
   decode SSE fields); the fact is a validated authoritative boundary
   fact — parse checks shape/applicability only and never attempts to
   reconstruct the omitted source values (§7.3.1, §7.3.3).
-- **T143** v1.0.0 vs v1.1.0 policy: the same 1.0.x record produces
-  **identical outcomes** under constructed v1.0.0 and v1.1.0 (delegation);
-  v1.0.0 refuses every 1.1-owned field (`ContentLeaf`, leaf declarations,
-  `deltaText`) as `unknown-additive-field` on ≥ 1.1.x records and never
-  interprets `ContentLeaf`; per-leaf admission exists only under v1.1.0
-  (§14.2, §14.3).
+- **T143** v1.0.0 vs v1.1.0 policy: for a 1.0.x record, v1.1.0 delegates
+  to the unchanged v1.0 **admission/classification semantics** —
+  accept/reject **status** and **non-policy rationale/code** are
+  equivalent — while the **deciding-policy identity truthfully differs**
+  (`policy: { name, version }` on `policy-rejected`/`policy-failed`;
+  `StorageManifest.persistencePolicy` records v1.1.0 when v1.1.0 decided);
+  complete `SaveOutcome` objects may therefore legitimately differ;
+  comparison uses **isolated stores/identities** so idempotent
+  `already-present` cannot mask the comparison; v1.0.0 refuses every
+  1.1-owned field (`ContentLeaf`, leaf declarations, `deltaText`) as
+  `unknown-additive-field` on ≥ 1.1.x records and never interprets
+  `ContentLeaf`; per-leaf admission exists only under v1.1.0 (§14.2,
+  §14.3).
+
+### 21.15 Revision-9 exact-budget, atomic-admission, phase, and policy-identity corrections — T144–T153
+
+- **T144** Exact serializer-snapshot equality (escaping + multibyte): the
+  reference measurement
+  (`utf8Encode(serializeEvidenceRecord(snapshot)).byteLength`) equals the
+  actual stored document's byte length for bodies with `\uXXXX` escapes,
+  astral/multibyte code points, and mixed text — retained content is
+  counted once, inside the serialized copies where it lives, never added
+  again as a separate term (§3.5).
+- **T145** Boundary-plus-one: a candidate whose complete finalizable
+  snapshot measures exactly `maxSerializedEvidenceBytes` is accepted; a
+  candidate measuring boundary+1 byte is rejected (atomic admission
+  rolls back); `maxRawObservationPayloadBytes` behaves identically for
+  raw payloads (§3.5).
+- **T146** Duplicates/replay: a raw observation that replays an existing
+  canonical event consumes raw budget only — canonical count and
+  canonical bytes are unchanged; the measured snapshot reflects both
+  stored copies (no dedup credit) and derivation growth from the larger
+  duplicate set (§3.5).
+- **T147** Derivation growth: analysis/completeness/trace/boundary size
+  varies with observation count, duplicate sets, identifiers, losses, and
+  derivations; the snapshot measurement captures the real finalizable
+  document — **no `FINALIZATION_OVERHEAD_BYTES` constant and no
+  hand-computed "exact worst case" exists anywhere in the spec** (§3.5,
+  T138).
+- **T148** Every terminal shape within budget: the budget-only worst-case
+  terminal (fixed vocabulary, `error.message` ≤ 200 chars, ids at
+  `maxIdLengthBytes`, §8.4/§12.6) is measured as part of every
+  pre-terminal snapshot; all closed terminal shapes (`completed`,
+  `upstream-failed`, `malformed-stream`, `request-failed`,
+  `client-cancelled`, `ingress-cancelled`, `observation-detached`)
+  finalize within `maxSerializedEvidenceBytes`; the budget-only terminal
+  is not persisted unless exhaustion occurs (§3.5).
+- **T149** Atomic observation admission: tentative raw observation +
+  derived canonical event (create or replay) are tested together against
+  raw count, canonical count, payload bytes, retained content, and the
+  finalizable snapshot; both effects commit or **neither** — no partial
+  state (raw without canonical or canonical without raw) is observable
+  (§3.5).
+- **T150** Count-budget invariants: defaults are 10,000 canonical /
+  20,000 raw with `maxRawObservations ≥ maxCanonicalEvents`; ranges are
+  aligned (canonical 1,000–1,000,000; raw 2,000–2,000,000); incompatible
+  combinations (e.g. 1,000,000 canonical with 2,000 raw) are rejected at
+  configuration **and** at parse of the serialized `budgets` — never
+  clamped; one canonical slot and one raw slot are reserved together
+  (§3.5, §13.4).
+- **T151** Post-terminal no-candidate: after the final event, no
+  event-count or raw-observation candidate is appended; a canonical/raw
+  budget cannot be hit after `[DONE]`; the constant-space state word may
+  move to `unknown` only on a later observer failure (e.g. frame
+  overflow), never on a budget event; the terminal is never rewritten
+  (§3.5, §6.6, §10.2).
+- **T152** Pre-dispatch phase matrix (table-driven): every phase —
+  zero-byte read failure, mid-body read failure, over-limit cutoff,
+  fully read malformed JSON, fully read valid JSON with messages rejected
+  during validation, fully read valid JSON with no messages,
+  missing-api-key, key-unavailable, unroutable — maps to the exact body
+  fact and `messageContent` per §10.2; **no loss is normalized away**: a
+  fully read valid body with observed messages is `omitted` +
+  `message-content-not-retained`, never `not-observed` (§10.2, §7.3).
+- **T153** Policy identity honesty: the same 1.0.x record under
+  constructed v1.0.0 and v1.1.0 yields equivalent accept/reject status
+  and non-policy rationale/code, while the deciding-policy identity
+  differs (v1.0.0 vs v1.1.0 in `SaveOutcome.policy` and, on `stored`,
+  in `StorageManifest.persistencePolicy`); the comparison uses **isolated
+  stores/identities** so `already-present` cannot mask it (§14.2, §14.3).
 ---
 
 ## 22. Acceptance criteria
 
-**Decision 22 — 61 acceptance criteria (AC1–AC61). A spec is Implemented
+**Decision 22 — 67 acceptance criteria (AC1–AC67). A spec is Implemented
 only when every criterion is covered by tests, `pnpm test` passes, and
 `pnpm build` passes (AGENTS.md).**
 
@@ -4147,13 +4406,13 @@ only when every criterion is covered by tests, `pnpm test` passes, and
 
 - **AC45** — Versioning rules are normative: literal names, semver
   validation, and the version-bump table.
-- **AC46** — All criteria are covered by tests (143 groups, §21); `pnpm
+- **AC46** — All criteria are covered by tests (153 groups, §21); `pnpm
   test` and `pnpm build` pass on the implementation branch.
 - **AC47** — This spec is docs-only: modules are named and specified, not
   created.
 - **AC48** — Factual claims are correct: PR #22 (Spec 015 implementation,
   commit `f18a153a`) is **merged**; `specs/000-index.md` reflects that
-  (Implemented, merged) and records Spec 016 as revision 8, Draft.
+  (Implemented, merged) and records Spec 016 as revision 9, Draft.
 - **AC49** — Every retained request-content leaf serializes its own
   `evidenceStatus` and its own **additive** declarations
   (`LeafRedactionDeclaration`/`LeafTruncationDeclaration`, built on the
@@ -4170,30 +4429,33 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   is derived; the spec never claims closed roles while preserving
   arbitrary strings (§8.7, §7.3, T124).
 - **AC51** — The in-memory evidence record is bounded by named evidence
-  budgets with decided defaults, exact UTF-8/serialization basis,
-  cumulative/per-item semantics, raw/canonical duplication counted by
-  actual serialized bytes, one reserved canonical-event slot and one
-  reserved raw-observation slot, a terminal reservation derived from
-  explicit id bounds + the worst-case closed terminal shape, and
-  transactional candidate accounting; the exact limits are serialized
-  under `captureBoundary.streaming.budgets`; exhaustion detaches with
-  `record-budget-exceeded` **before any terminal** (first-terminal-wins),
-  stops accumulating evidence, never cancels or truncates client traffic,
-  derives honest unknown-remainder and detachment losses, and still
-  finalizes and saves once after the response path ends (§3.5, §13.4,
-  T125–T127, T134–T140).
+  budgets with decided defaults and **cross-field invariants**
+  (`maxRawObservations ≥ maxCanonicalEvents`, rejected at configuration
+  and parse), a **normative reference budget algorithm** that measures the
+  complete finalizable snapshot
+  (`utf8Encode(serializeEvidenceRecord(...)).byteLength`), one reserved
+  canonical-event slot and one reserved raw-observation slot, atomic
+  observation admission (raw + derived canonical effects commit together
+  or not at all), and `maxRetainedContentCodePoints` as a separate
+  semantic content limit never recounted as serialized bytes; the exact
+  limits are serialized under `captureBoundary.streaming.budgets`;
+  exhaustion detaches with `record-budget-exceeded` **before any
+  terminal** (first-terminal-wins), stops accumulating evidence, never
+  cancels or truncates client traffic, derives honest unknown-remainder
+  and detachment losses, and still finalizes and saves once after the
+  response path ends (§3.5, §13.4, T125–T127, T134–T153).
 - **AC52** — Request-body losses are phase-accurate
   (`no-bytes-observed | partially-observed-not-retained |
   fully-observed-not-retained | retained`) with distinct "not fully
   observed" vs. "observed but not retained" wording — a partial body
-  derives **both** codes, and invalid-request / body-read-failure /
-  over-limit include `fully-observed-not-retained` whenever the complete
-  body was read (bytes observed, never the validation result);
-  pre-dispatch paths classify `messageContent` per stage — `omitted` +
-  `message-content-not-retained` on valid pre-dispatch paths where content
-  was observed but no `model_request` was emitted, never `not-observed`
-  merely because the canonical event was omitted (§7.3, §10.2,
-  T128–T129, T141).
+  derives **both** codes; the **exact phase matrix** maps zero-byte read
+  failure, mid-body read failure, over-limit cutoff (always partial),
+  fully read malformed JSON, and fully read valid JSON (with or without
+  observed message content) by **bytes and message content actually
+  observed, never the failure code** — a fully read valid body with
+  messages rejected during validation is `omitted` +
+  `message-content-not-retained`, never `not-observed` (§7.3, §10.2,
+  T128–T129, T141, T152).
 - **AC53** — The excerpt cap is deterministic: exactly 240 code points for
   `signalglass.collection.ingress-metadata-safe` v1.0.0; no
   runtime-configurable range; a different cap requires a future
@@ -4217,28 +4479,33 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   unchanged and is never reinterpreted; a future minor still receives all
   known 1.1 validation (§13.7, T133).
 - **AC57** — First-terminal-wins on budget exhaustion: before any
-  observation terminal, exhaustion emits the reserved informational error
-  and the terminal becomes `observation-detached`; after a terminal was
-  already observed, the terminal is unchanged and **no error event is
-  appended after the final event** — the loss becomes an authoritative
-  `unknown` post-terminal/remainder fact only, and post-terminal
-  bookkeeping is constant-space (§3.5, §10.2, §6.6, T134).
-- **AC58** — Budget accounting is exact and mechanical: exact UTF-8/serialized
-  bytes (escaping and multibyte), cumulative vs. per-item semantics, one
-  reserved canonical-event slot and one reserved raw-observation slot,
-  raw/canonical duplication counted by actual serialized bytes of each
-  stored copy, deterministic `FINALIZATION_OVERHEAD_BYTES` for derived
-  fields, terminal reservation `finalEventReservation ≥
-  TERMINAL_WORST_CASE_BYTES` from explicit id bounds, and transactional
-  candidate accounting so finalization always fits; limits are serialized
-  authoritatively under `captureBoundary.streaming.budgets` (§3.5, §13.4,
-  T135–T140).
-- **AC59** — Request-body representation is honest: `RequestBodyRetention`
-  follows bytes actually observed, never the validation result — a
-  malformed JSON document read completely is
-  `fully-observed-not-retained`; a partial body derives both
+  observation terminal, a rejected atomic observation emits the reserved
+  informational error (and its raw observation) and the terminal becomes
+  `observation-detached`; after a terminal was already observed, **no
+  event-count or raw-observation candidate is appended at all** — the
+  terminal is unchanged, no error event follows the final event, and only
+  the authoritative `unknown` post-terminal/remainder fact may be derived;
+  post-terminal bookkeeping is constant-space and moves to `unknown` only
+  on a later observer failure, never on a budget event (§3.5, §10.2,
+  §6.6, T134, T151).
+- **AC58** — Budget accounting is exact and mechanical: the **normative
+  reference budget algorithm** measures the complete finalizable snapshot
+  (`serializeEvidenceRecord` + `utf8Encode`, including the budget-only
+  worst-case terminal and its raw observation when none exists, and the
+  derived trace/analysis/completeness/boundary fields); retained content
+  is counted once inside the serialized copies where it lives; raw/canonical
+  duplication counts by actual serialized bytes of each stored copy; there
+  is **no `FINALIZATION_OVERHEAD_BYTES` constant and no `finalEventReservation`
+  / `TERMINAL_WORST_CASE_BYTES`**; boundary and boundary-plus-one are
+  exact; limits are serialized authoritatively under
+  `captureBoundary.streaming.budgets` (§3.5, §13.4, T135–T148).
+- **AC59** — Request-body representation is honest: the exact phase matrix
+  follows bytes actually observed, never the validation result — a fully
+  read malformed body is `fully-observed-not-retained`; a `body-read-failure`
+  is never fully-observed; an over-limit cutoff is always
+  `partially-observed-not-retained`; a partial body derives both
   `request-body-not-fully-observed` and `request-body-not-retained`;
-  zero bytes derives only the former (§7.3.1, §10.2, T141).
+  zero bytes derives only the former (§7.3.1, §10.2, T141, T152).
 - **AC60** — `sseMetadataObservedButNotRetained` is an authoritative
   validated boundary fact with applicability
   `decoderDisposition === 'openai-sse'` only — never under
@@ -4249,8 +4516,52 @@ only when every criterion is covered by tests, `pnpm test` passes, and
   never reinterpreted: whole-payload event-level authorization, refusal
   of 1.1-owned fields as `unknown-additive-field`, no `ContentLeaf`
   interpretation; v1.1.0 evaluating a 1.0 record delegates to the
-  unchanged v1.0 behavior (identical outcomes); per-leaf admission is a
-  new v1.1.0 rule only (§14.2, §14.3, T143).
+  unchanged v1.0 admission/classification semantics (equivalent status
+  and non-policy rationale/code; **deciding-policy identity truthfully
+  differs**); per-leaf admission is a new v1.1.0 rule only (§14.2, §14.3,
+  T143, T153).
+- **AC62** — `maxSerializedEvidenceBytes` is the **measured** byte length
+  of the complete finalizable snapshot by the normative reference
+  algorithm (candidate state + budget-only terminal when none exists +
+  derived fields, serialized by `serializeEvidenceRecord`, measured by
+  `utf8Encode(...).byteLength`); retained content is counted once inside
+  the serialized copies, never added again; there is no
+  `FINALIZATION_OVERHEAD_BYTES` constant and no hand-computed worst-case
+  formula; the budget-only terminal is not persisted unless exhaustion
+  occurs; incremental optimizations require an equivalence proof
+  (§3.5, T144–T148).
+- **AC63** — Count-budget defaults and invariants are feasible:
+  `maxCanonicalEvents` 10,000 / `maxRawObservations` 20,000 with
+  `maxRawObservations ≥ maxCanonicalEvents` (Spec 014: every canonical
+  event derives from ≥ 1 raw observation); ranges are aligned and
+  incompatible combinations are rejected at configuration **and** at
+  parse of the serialized `budgets`; one canonical slot and one raw slot
+  are reserved together (§3.5, §13.4, T150).
+- **AC64** — Observation admission is **atomic**: one tentative raw
+  observation plus the canonical event it creates (or replays) are tested
+  together against raw count, canonical count, payload bytes, retained
+  content, and the finalizable snapshot; both effects commit or neither;
+  canonical events and raw observations are one surface, never
+  independently appended (§3.5, T149).
+- **AC65** — Post-terminal behavior is exact: once the final event exists,
+  no event-count or raw-observation candidate is appended, so a budget
+  cannot be hit after `[DONE]`; the constant-space state word may move to
+  `unknown` only on a later observer failure, never on a budget event
+  (§3.5, §6.6, §10.2, T151).
+- **AC66** — The pre-dispatch phase matrix is exact and table-driven:
+  zero-byte read failure, mid-body read failure, over-limit cutoff (always
+  partial), fully read malformed JSON, fully read valid JSON with observed
+  messages (→ `omitted` + `message-content-not-retained` even when
+  rejected during validation), fully read valid JSON with no messages,
+  missing-key, key-unavailable, and unroutable (unknown model — never
+  also `invalid-request`); facts follow bytes and message content actually
+  observed, and no loss is normalized away (§10.2, §7.3, T152).
+- **AC67** — Policy-equivalence claims are honest: v1.1.0 delegating for a
+  1.0 record yields equivalent accept/reject status and non-policy
+  rationale/code, but the deciding-policy identity truthfully differs;
+  complete `SaveOutcome` objects may differ; stored manifests record
+  v1.1.0 when v1.1.0 decided; comparisons use isolated stores/identities
+  so `already-present` cannot mask them (§14.2, §14.3, T153).
 
 ---
 
@@ -4278,7 +4589,7 @@ every test group tied to ≥ 1 AC.**
 | AC15 | T33–T43, T109 | AC39 | T87, T112 |
 | AC16 | T27, T29, T44 | AC40 | T98, T99 |
 | AC17 | T43, T46 | AC41 | T72–T74, T87, T95 |
-| AC18 | T30 | AC42 | T12, T71, T125–T127, T134–T140 |
+| AC18 | T30 | AC42 | T12, T71, T125–T127, T134–T153 |
 | AC19 | T26, T81–T84, T113, T114, T118–T120 | AC43 | T66–T70, T115, T132 |
 | AC20 | T26, T111, T130 | AC44 | T78, T79, T87 |
 | AC21 | T72–T74, T80, T114, T119 | AC45 | T102, T107, T111 |
@@ -4287,13 +4598,16 @@ every test group tied to ≥ 1 AC.**
 | AC24 | T32, T109 | AC48 | §19.1, index row |
 | AC49 | T118–T123 | AC53 | T130 |
 | AC50 | T124 | AC54 | T131, T142 |
-| AC51 | T125–T127, T134–T140 | AC55 | T132 |
-| AC52 | T128, T129, T141 | AC56 | T133 |
-| AC57 | T134 | AC60 | T142 |
-| AC58 | T135–T140 | AC61 | T143 |
-| AC59 | T141 | | |
+| AC51 | T125–T127, T134–T153 | AC55 | T132 |
+| AC52 | T128, T129, T141, T152 | AC56 | T133 |
+| AC57 | T134, T151 | AC60 | T142 |
+| AC58 | T135–T148 | AC61 | T143, T153 |
+| AC59 | T141, T152 | AC62 | T144–T148 |
+| AC63 | T150 | AC65 | T151 |
+| AC64 | T149 | AC66 | T152 |
+| | | AC67 | T153 |
 
-Coverage: every AC (1–61) appears above; every test group T01–T143 appears
+Coverage: every AC (1–67) appears above; every test group T01–T153 appears
 at least once.
 
 ---
@@ -4402,6 +4716,52 @@ behavior):
    interprets `ContentLeaf`; v1.1.0 evaluating a 1.0 record delegates to
    the unchanged v1.0 behavior; per-leaf admission is a new v1.1.0 rule
    (§14.2, §14.3, T143).
+
+The revision-9 pass resolved the four revision-8 mechanical
+contradictions — the contracts that were still pseudo-exact, impossible,
+or over-claimed:
+
+1. (resolved) **One exact reference budget algorithm**: the pseudo-exact
+   serialized-size formula (a second retained-content byte term plus an
+   undefined `FINALIZATION_OVERHEAD_BYTES` constant) is replaced by the
+   normative reference calculation — transactional candidate state, a
+   budget-only worst-case terminal (actual allocated ids, closed maximum
+   structural text) with its raw observation when no terminal exists,
+   exact derivation of trace/analysis/completeness/boundary,
+   `serializeEvidenceRecord` on the complete finalizable snapshot,
+   `utf8Encode(...).byteLength` measurement, accept iff ≤
+   `maxSerializedEvidenceBytes`. The budget-only terminal is measurement-
+   only; incremental optimizations need an equivalence proof;
+   `finalEventReservation`/`TERMINAL_WORST_CASE_BYTES` are removed;
+   `maxRetainedContentCodePoints` remains a separate semantic limit,
+   never recounted as bytes (§3.5, §13.4, T144–T148).
+2. (resolved) **Feasible count budgets and atomic admission**: the
+   impossible defaults (10,000 canonical > 2,000 raw) are corrected to
+   10,000 canonical / 20,000 raw with the hard invariant
+   `maxRawObservations ≥ maxCanonicalEvents` (every canonical event
+   derives from ≥ 1 raw observation, Spec 014), aligned ranges, and
+   startup/parse rejection of incompatible combinations; observation
+   admission is atomic (tentative raw + derived canonical create/replay
+   commit together or not at all); after a terminal no candidate is
+   appended, so a budget cannot be hit after `[DONE]` (§3.5, §10.2,
+   §6.6, T149–T151).
+3. (resolved) **Exact pre-dispatch phase matrix**: body-read-failure is
+   transport-read only; over-limit is always a partial cutoff; fully read
+   malformed JSON is `fully-observed-not-retained` with no formed
+   messages; fully read valid JSON with observed messages rejected during
+   validation is `omitted` + `message-content-not-retained` (never
+   `not-observed`); fully read valid JSON with no messages is
+   `not-observed`; unknown model is `unroutable` only; missing-key /
+   key-unavailable / unroutable stay `omitted` + the declared loss; facts
+   follow bytes and message content observed, never the failure code
+   (§10.2, §7.3, T152).
+4. (resolved) **Honest policy-equivalence claims**: "byte-identical
+   outcomes" was false — v1.1.0 delegating for a 1.0 record yields
+   equivalent accept/reject status and non-policy rationale/code, but the
+   deciding-policy identity truthfully differs (complete `SaveOutcome`
+   objects may differ; stored manifests record v1.1.0 when v1.1.0
+   decided); comparisons use isolated stores/identities (§14.2, §14.3,
+   T153).
 
 ---
 
