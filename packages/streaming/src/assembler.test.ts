@@ -341,6 +341,102 @@ describe('Spec 016 S4 assembler', () => {
     expect(result.boundary.streaming?.losses.providerErrorBody).toBe('not-retained');
   });
 
+  it('uses the effective provider-error terminal for exact candidate admission and rollback finalization', () => {
+    const providerNative = { padding: 'x'.repeat(1_050_000) };
+    const candidate: EvidenceObservation = {
+      observationId: 'provider-error-large-observation',
+      eventId: 'provider-error-large-event',
+      traceId: 'trace-s4',
+      spanId: 'span-model',
+      seq: 4,
+      kind: 'model_response_chunk',
+      capturedAt: '2026-08-11T12:00:04.000Z',
+      evidenceStatus: 'captured',
+      observationRole: 'provider_reported',
+      payload: {
+        responseEnvelope: {
+          providerNativeFidelity: 'structurally_faithful',
+          providerNative,
+          choiceIndex: 0,
+          chunkIndex: 0,
+          deltaText: 'x',
+        },
+      },
+      rawCapturedAt: '2026-08-11T12:00:04.000Z',
+    };
+    const base = options();
+    const roomyOptions = options({
+      decodedEvents: [{ kind: 'provider-error', code: 'provider-error-frame', description: 'not retained' }],
+      terminal: { kind: 'completed' },
+      additionalRawObservations: [candidate],
+      boundaryFacts: {
+        ...base.boundaryFacts,
+        losses: { ...base.boundaryFacts.losses, deltaContent: 'fully-retained', providerNative: 'retained' },
+      },
+      evidenceBudgets: {
+        ...DEFAULT_EVIDENCE_BUDGETS,
+        maxRawObservationPayloadBytes: 67_108_864,
+        maxSerializedEvidenceBytes: 67_108_864,
+      },
+    });
+    const roomy = assembleTrace(roomyOptions);
+    expect(roomy.budgetMeasurements.terminalAlternatives).toContainEqual(expect.objectContaining({
+      terminal: { kind: 'upstream-failed', code: 'provider-error-frame' },
+      boundary: roomy.boundary,
+    }));
+    const exactSerialized = roomy.budgetMeasurements.maximumFinalizableSnapshotBytes;
+    const exactRaw = roomy.budgetMeasurements.preterminalRawObservationPayloadBytes
+      + roomy.budgetMeasurements.maximumFinalizableRawPayloadBytes;
+    const preliminaryBudgets = {
+      ...DEFAULT_EVIDENCE_BUDGETS,
+      maxRawObservationPayloadBytes: exactRaw,
+      maxSerializedEvidenceBytes: exactSerialized,
+    };
+    const preliminary = assembleTrace({ ...roomyOptions, evidenceBudgets: preliminaryBudgets });
+    const stableRaw = preliminary.budgetMeasurements.preterminalRawObservationPayloadBytes
+      + preliminary.budgetMeasurements.maximumFinalizableRawPayloadBytes;
+    const stableSerialized = preliminary.budgetMeasurements.maximumFinalizableSnapshotBytes;
+    const exactBudgets = {
+      ...DEFAULT_EVIDENCE_BUDGETS,
+      maxRawObservationPayloadBytes: stableRaw,
+      maxSerializedEvidenceBytes: stableSerialized,
+    };
+    const exact = assembleTrace({ ...roomyOptions, evidenceBudgets: exactBudgets });
+    expect(exact.warnings).not.toContain('candidate-budget-rejected');
+    expect(exact.trace.events.at(-1)).toMatchObject({ error: { type: 'provider-error-frame' } });
+    expect(exact.budgetMeasurements.maximumFinalizableSnapshotBytes).toBe(stableSerialized);
+    expect(exact.budgetMeasurements.actualSerializedEvidenceBytes).toBeLessThanOrEqual(stableSerialized);
+
+    const minimallyOver = assembleTrace({
+      ...roomyOptions,
+      evidenceBudgets: { ...exactBudgets, maxSerializedEvidenceBytes: stableSerialized - 1 },
+    });
+    expect(minimallyOver.warnings).toContain('candidate-budget-rejected');
+    expect(minimallyOver.record.rawObservations.some((observation) =>
+      observation.observationId === candidate.observationId)).toBe(false);
+    expect(minimallyOver.trace.events.at(-1)).toMatchObject({ error: { type: 'record-budget-exceeded' } });
+    expect(minimallyOver.budgetMeasurements.actualSerializedEvidenceBytes).toBeLessThan(stableSerialized);
+
+    const rejected = assembleTrace({
+      ...roomyOptions,
+      evidenceBudgets: exactBudgets,
+      additionalRawObservations: [candidate, {
+        ...candidate,
+        observationId: 'provider-error-over-budget-observation',
+        eventId: 'provider-error-over-budget-event',
+        seq: 5,
+        rawCapturedAt: '2026-08-11T12:00:05.000Z',
+      }],
+    });
+    expect(rejected.warnings).toContain('candidate-budget-rejected');
+    expect(rejected.trace.events.at(-1)).toMatchObject({ error: { type: 'record-budget-exceeded' } });
+    expect(rejected.record.rawObservations.some((observation) =>
+      observation.observationId === 'provider-error-over-budget-observation')).toBe(false);
+    expect(rejected.boundary.streaming?.losses.providerNative).toBe('retained');
+    expect(rejected.budgetMeasurements.actualSerializedEvidenceBytes).toBeLessThanOrEqual(stableSerialized);
+    expect(rejected.budgetMeasurements.rawObservationPayloadBytes).toBeLessThanOrEqual(stableRaw);
+  }, 30_000);
+
   it('admits an exact Spec 014 replay as raw-only duplicate evidence', () => {
     const baseline = assembleTrace(options());
     const original = baseline.record.rawObservations[4]!;
@@ -850,6 +946,113 @@ describe('Spec 016 S4 assembler', () => {
       .toThrow(/span-closed initial state/);
     expect(() => assembleTrace(resumedOptions(baseline.record.rawObservations, 'span-closed', { finalizationBundle: closedBundle })))
       .toThrow(/span-closed initial state/);
+  });
+
+  it('rejects mislabeled, open, and contradictory span-closed lifecycle states', () => {
+    const baseline = assembleTrace(options());
+    const closed = baseline.record.rawObservations.slice(0, -1);
+    const finalSpanEnd = closed.at(-1)!;
+    const prefix = closed.slice(0, -1);
+    const closedBundle = [
+      { eventId: 'adversarial-state-event-0', observationId: 'adversarial-state-observation-0', capturedAt: '2026-08-11T19:04:00.000Z' },
+      { eventId: 'adversarial-state-event-1', observationId: 'adversarial-state-observation-1', capturedAt: '2026-08-11T19:04:01.000Z' },
+    ] as const;
+    const withFinalSeq = (seq: number): EvidenceObservation => ({ ...finalSpanEnd, seq });
+    const lifecycleObservation = (
+      kind: 'span_start' | 'span_end' | 'error',
+      spanId: string,
+      seq: number,
+      suffix: string,
+      payload: Record<string, unknown>,
+    ): EvidenceObservation => ({
+      observationId: `adversarial-observation-${suffix}`,
+      eventId: `adversarial-event-${suffix}`,
+      traceId: 'trace-s4',
+      spanId,
+      seq,
+      kind,
+      capturedAt: `2026-08-11T19:03:${String(seq).padStart(2, '0')}.000Z`,
+      evidenceStatus: 'captured',
+      observationRole: kind === 'error' ? 'provider_reported' : null,
+      payload,
+      rawCapturedAt: `2026-08-11T19:03:${String(seq).padStart(2, '0')}.000Z`,
+    });
+
+    const mislabeled = closed.map((observation) => observation.kind === 'span_start'
+      ? { ...observation, payload: { span: { kind: 'tool', name: 'not-model', parentSpanId: null } } }
+      : observation);
+    expect(() => assembleTrace(resumedOptions(mislabeled, 'span-closed', { finalizationBundle: closedBundle })))
+      .toThrow(/span-closed initial state/);
+
+    const openSibling = [
+      ...prefix,
+      lifecycleObservation('span_start', 'span-open', finalSpanEnd.seq, 'open-start', {
+        span: { kind: 'tool', name: 'open-tool', parentSpanId: null },
+      }),
+      withFinalSeq(finalSpanEnd.seq + 1),
+    ];
+    expect(() => assembleTrace(resumedOptions(openSibling, 'span-closed', { finalizationBundle: closedBundle })))
+      .toThrow(/span-closed initial state/);
+
+    const duplicateStart = [
+      ...prefix,
+      lifecycleObservation('span_start', 'span-model', finalSpanEnd.seq, 'duplicate-start', {
+        span: { kind: 'model', name: 'duplicate-model', parentSpanId: null },
+      }),
+      withFinalSeq(finalSpanEnd.seq + 1),
+    ];
+    expect(() => assembleTrace(resumedOptions(duplicateStart, 'span-closed', { finalizationBundle: closedBundle })))
+      .toThrow(/span-closed initial state/);
+
+    const contradictory = [
+      ...prefix,
+      lifecycleObservation('error', 'span-model', finalSpanEnd.seq, 'contradiction', {
+        actor: 'model', lifecycleTarget: 'span', lifecycleEffect: 'fail',
+        error: { type: 'provider-error', message: 'closed before span_end' },
+      }),
+      withFinalSeq(finalSpanEnd.seq + 1),
+    ];
+    expect(() => assembleTrace(resumedOptions(contradictory, 'span-closed', { finalizationBundle: closedBundle })))
+      .toThrow(/span-closed initial state/);
+  });
+
+  it('accepts a span-closed state with legitimate fully closed multi-span history', () => {
+    const baseline = assembleTrace(options());
+    const closed = baseline.record.rawObservations.slice(0, -1);
+    const finalSpanEnd = closed.at(-1)!;
+    const prefix = closed.slice(0, -1);
+    const supplemental = (kind: 'span_start' | 'span_end', seq: number): EvidenceObservation => ({
+      observationId: `closed-tool-observation-${kind}`,
+      eventId: `closed-tool-event-${kind}`,
+      traceId: 'trace-s4',
+      spanId: 'span-tool',
+      seq,
+      kind,
+      capturedAt: `2026-08-11T19:05:0${seq}.000Z`,
+      evidenceStatus: 'captured',
+      observationRole: null,
+      payload: kind === 'span_start'
+        ? { span: { kind: 'tool', name: 'completed-tool', parentSpanId: null } }
+        : {},
+      rawCapturedAt: `2026-08-11T19:05:0${seq}.000Z`,
+    });
+    const multiSpan = [
+      ...prefix,
+      supplemental('span_start', finalSpanEnd.seq),
+      supplemental('span_end', finalSpanEnd.seq + 1),
+      { ...finalSpanEnd, seq: finalSpanEnd.seq + 2 },
+    ];
+    const result = assembleTrace(resumedOptions(multiSpan, 'span-closed', {
+      finalizationBundle: [
+        { eventId: 'multi-span-end', observationId: 'multi-span-end-observation', capturedAt: '2026-08-11T19:06:00.000Z' },
+        { eventId: 'multi-span-unused', observationId: 'multi-span-unused-observation', capturedAt: '2026-08-11T19:06:01.000Z' },
+      ],
+    }));
+    expect(result.trace.spans).toEqual(expect.arrayContaining([
+      expect.objectContaining({ spanId: 'span-model', kind: 'model', status: 'completed' }),
+      expect.objectContaining({ spanId: 'span-tool', kind: 'tool', status: 'completed' }),
+    ]));
+    expect(result.trace.events.at(-1)).toMatchObject({ kind: 'interaction_end' });
   });
 
   it('T160-T164 admits new canonical content and preserves the exact prior prefix on rejection', () => {

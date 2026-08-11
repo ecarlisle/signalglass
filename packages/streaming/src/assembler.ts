@@ -238,6 +238,20 @@ type TerminalPreviewMaximum = {
   rawPayloadBytes: number;
 };
 
+type FinalizationPlan = {
+  terminal: AssemblyTerminal;
+  boundary: CaptureBoundary;
+  boundaryMode: 'explicit' | 'rollback-detachment';
+};
+
+type CandidateAdmission =
+  | { verdict: 'accepted'; preview: TerminalPreviewMaximum }
+  | {
+      verdict: 'structural' | 'budget';
+      preview?: TerminalPreviewMaximum;
+      rejectionSnapshot: TerminalSnapshot;
+    };
+
 export function reservedTerminalSuffixCount(state: TerminalReservationState): 1 | 2 {
   return state === 'completion-possible' ? 2 : 1;
 }
@@ -275,13 +289,13 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
   const normalizedRequest = normalizeRequestMessages(options.requestMessages);
   const warnings: AssemblyWarning[] = [];
   const retained: EvidenceObservation[] = [...(options.initialState?.observations ?? [])];
-  if (options.initialState !== undefined) assertInitialState(retained, budgets, options);
   let ordinaryIdPosition = 0;
   let terminal = options.terminal;
   const state: AssemblerState = options.initialState?.state ?? 'completion-possible';
   let detachedCode: ObservationFailureCode | InternalDecoderFailureCode | undefined;
   let admissionStopped = false;
   let rejectedCandidatePreview: TerminalPreviewMaximum | undefined;
+  let forcedFinalization: TerminalSnapshot | undefined;
   const requestContentCodePoints = options.initialState === undefined
     ? normalizedRequest.retainedCodePoints
     : retainedRequestContentCodePoints(retained);
@@ -365,16 +379,19 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
     effectiveBoundaryFacts = withUnknownRemainder(options.boundaryFacts);
   }
   let boundary = buildBoundary(effectiveBoundaryFacts, lossFacts, budgets);
+  if (options.initialState !== undefined) assertInitialState(retained, budgets, options, boundary);
 
   const admitMany = (observations: readonly EvidenceObservation[]): ObservationFailureCode | undefined => {
     const admission = admitCandidate(
-      retained, observations, boundary, options, budgets, requestContentCodePoints, state,
+      retained, observations, boundary, options, budgets, requestContentCodePoints, state, terminal,
     );
     if (admission.verdict === 'structural') {
+      forcedFinalization = admission.rejectionSnapshot;
       warnings.push('candidate-structurally-rejected');
       return 'internal-capture-error';
     }
     if (admission.verdict === 'budget') {
+      forcedFinalization = admission.rejectionSnapshot;
       rejectedCandidatePreview = admission.preview;
       warnings.push('candidate-budget-rejected');
       return 'record-budget-exceeded';
@@ -424,14 +441,19 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
 
   if (detachedCode !== undefined) {
     terminal = { kind: 'observation-detached', code: detachedCode };
-    boundary = boundaryAfterObservationDetachment(boundary, retained);
+    if (forcedFinalization === undefined) {
+      boundary = boundaryAfterObservationDetachment(boundary, retained);
+    }
   }
 
-  const previews = maximumFinalizableSnapshot(retained, boundary, options, state);
-  const actual = finalizeTerminalSnapshot(retained, boundary, options, terminal, state, budgets, true);
+  const previews = maximumFinalizableSnapshot(retained, boundary, options, state, terminal);
+  const actual = forcedFinalization
+    ?? constructFinalizationSnapshot(retained, { terminal, boundary, boundaryMode: 'explicit' }, options, state, budgets, true);
   if (actual === undefined) {
     throw new Error('assembleTrace could not construct a valid terminal snapshot');
   }
+  terminal = actual.terminal;
+  boundary = actual.boundary;
   if (actual.serializedBytes > budgets.maxSerializedEvidenceBytes) {
     throw new RangeError('reserved terminal suffix exceeds maxSerializedEvidenceBytes');
   }
@@ -557,31 +579,43 @@ function admitCandidate(
   budgets: EvidenceBudgets,
   requestContentCodePoints: number,
   state: AssemblerState,
-): { verdict: 'accepted' | 'structural' | 'budget'; preview?: TerminalPreviewMaximum } {
+  effectiveTerminal: AssemblyTerminal,
+): CandidateAdmission {
+  const reject = (
+    verdict: 'structural' | 'budget',
+    preview?: TerminalPreviewMaximum,
+  ): CandidateAdmission => ({
+    verdict,
+    ...(preview === undefined ? {} : { preview }),
+    rejectionSnapshot: rejectionFinalizationSnapshot(
+      current, boundary, options, state, budgets, effectiveTerminal,
+      verdict === 'structural' ? 'internal-capture-error' : 'record-budget-exceeded',
+    ),
+  });
   const observationIds = new Set(current.map((observation) => observation.observationId));
   const reservedIds = new Set(options.finalizationBundle.flatMap((value) => [value.eventId, value.observationId]));
   for (const candidate of candidates) {
-    if (observationIds.has(candidate.observationId)) return { verdict: 'structural' };
-    if (reservedIds.has(candidate.eventId) || reservedIds.has(candidate.observationId)) return { verdict: 'structural' };
+    if (observationIds.has(candidate.observationId)) return reject('structural');
+    if (reservedIds.has(candidate.eventId) || reservedIds.has(candidate.observationId)) return reject('structural');
     observationIds.add(candidate.observationId);
-    if (!idWithinBudget(candidate.eventId, budgets) || !idWithinBudget(candidate.observationId, budgets)) return { verdict: 'structural' };
+    if (!idWithinBudget(candidate.eventId, budgets) || !idWithinBudget(candidate.observationId, budgets)) return reject('structural');
   }
   const scratch = [...current, ...candidates];
   const collapse = collapseObservations(scratch, 'rawObservations');
-  if (!collapse.ok) return { verdict: 'structural' };
-  if (!countBudgetAllows(collapse.events.length, scratch.length, budgets, state)) return { verdict: 'budget' };
+  if (!collapse.ok) return reject('structural');
+  if (!countBudgetAllows(collapse.events.length, scratch.length, budgets, state)) return reject('budget');
   const rawBytes = scratch.reduce((sum, observation) => sum + rawPayloadBytes(observation), 0);
   const deltaCodePoints = collapse.events.reduce((sum, event) => {
     if (event.kind !== 'model_response_chunk') return sum;
     return sum + countCodePoints(event.responseEnvelope.deltaText ?? '');
   }, 0);
-  if (requestContentCodePoints + deltaCodePoints > budgets.maxRetainedContentCodePoints) return { verdict: 'budget' };
-  const maximum = maximumFinalizableSnapshot(scratch, boundary, options, state);
-  if (maximum.snapshots.length === 0) return { verdict: 'structural' };
-  if (rawBytes + maximum.rawPayloadBytes > budgets.maxRawObservationPayloadBytes) return { verdict: 'budget', preview: maximum };
+  if (requestContentCodePoints + deltaCodePoints > budgets.maxRetainedContentCodePoints) return reject('budget');
+  const maximum = maximumFinalizableSnapshot(scratch, boundary, options, state, effectiveTerminal);
+  if (maximum.snapshots.length === 0) return reject('structural');
+  if (rawBytes + maximum.rawPayloadBytes > budgets.maxRawObservationPayloadBytes) return reject('budget', maximum);
   return maximum.serializedBytes <= budgets.maxSerializedEvidenceBytes
     ? { verdict: 'accepted', preview: maximum }
-    : { verdict: 'budget', preview: maximum };
+    : reject('budget', maximum);
 }
 
 export function measureFinalizableSnapshotBytes(record: EvidenceRecord): number {
@@ -593,28 +627,40 @@ function maximumFinalizableSnapshot(
   boundary: CaptureBoundary,
   options: AssemblerOptions,
   state: AssemblerState,
+  effectiveTerminal: AssemblyTerminal,
 ): TerminalPreviewMaximum {
   const snapshots: TerminalSnapshot[] = [];
-  const alternatives = [
-    { terminal: options.terminal, boundary },
+  const alternatives: FinalizationPlan[] = [
+    { terminal: effectiveTerminal, boundary, boundaryMode: 'explicit' },
+    ...(state === 'completion-possible' ? [
+      {
+        terminal: { kind: 'observation-detached', code: 'record-budget-exceeded' } as const,
+        boundary,
+        boundaryMode: 'rollback-detachment' as const,
+      },
+      {
+        terminal: { kind: 'observation-detached', code: 'internal-capture-error' } as const,
+        boundary,
+        boundaryMode: 'rollback-detachment' as const,
+      },
+    ] : []),
     ...options.terminalBoundaryPreviews.map((preview) => ({
       terminal: preview.terminal,
       boundary: buildBoundary(preview.boundaryFacts, preview.boundaryFacts.losses, options.evidenceBudgets ?? DEFAULT_EVIDENCE_BUDGETS),
+      boundaryMode: 'explicit' as const,
     })),
   ];
   const seen = new Set<string>();
-  for (const { terminal, boundary: alternativeBoundary } of alternatives) {
-    const identity = JSON.stringify({ terminal, boundary: alternativeBoundary });
+  for (const alternative of alternatives) {
+    const effectiveBoundary = alternative.boundaryMode === 'rollback-detachment'
+      ? boundaryAfterObservationDetachment(alternative.boundary, observations)
+      : alternative.boundary;
+    const identity = JSON.stringify({ terminal: alternative.terminal, boundary: effectiveBoundary });
     if (seen.has(identity)) continue;
     seen.add(identity);
-    if (state === 'span-closed' && terminal.kind !== 'completed') continue;
-    const snapshot = finalizeTerminalSnapshot(
-      observations,
-      alternativeBoundary,
-      options,
-      terminal,
-      state,
-      options.evidenceBudgets ?? DEFAULT_EVIDENCE_BUDGETS,
+    if (state === 'span-closed' && alternative.terminal.kind !== 'completed') continue;
+    const snapshot = constructFinalizationSnapshot(
+      observations, alternative, options, state, options.evidenceBudgets ?? DEFAULT_EVIDENCE_BUDGETS,
     );
     if (snapshot !== undefined) snapshots.push(snapshot);
   }
@@ -623,6 +669,48 @@ function maximumFinalizableSnapshot(
     serializedBytes: Math.max(0, ...snapshots.map((snapshot) => snapshot.serializedBytes)),
     rawPayloadBytes: Math.max(0, ...snapshots.map((snapshot) => snapshot.rawPayloadBytes)),
   };
+}
+
+function constructFinalizationSnapshot(
+  observations: readonly EvidenceObservation[],
+  plan: FinalizationPlan,
+  options: AssemblerOptions,
+  state: AssemblerState,
+  budgets: EvidenceBudgets,
+  diagnose = false,
+): TerminalSnapshot | undefined {
+  const effectiveBoundary = plan.boundaryMode === 'rollback-detachment'
+    ? boundaryAfterObservationDetachment(plan.boundary, observations)
+    : plan.boundary;
+  return finalizeTerminalSnapshot(
+    observations, effectiveBoundary, options, plan.terminal, state, budgets, diagnose,
+  );
+}
+
+function rejectionFinalizationSnapshot(
+  observations: readonly EvidenceObservation[],
+  boundary: CaptureBoundary,
+  options: AssemblerOptions,
+  state: AssemblerState,
+  budgets: EvidenceBudgets,
+  effectiveTerminal: AssemblyTerminal,
+  code: 'internal-capture-error' | 'record-budget-exceeded',
+): TerminalSnapshot {
+  const plan: FinalizationPlan = state === 'span-closed'
+    ? { terminal: effectiveTerminal, boundary, boundaryMode: 'explicit' }
+    : {
+      terminal: { kind: 'observation-detached', code },
+      boundary,
+      boundaryMode: 'rollback-detachment',
+    };
+  const snapshot = constructFinalizationSnapshot(observations, plan, options, state, budgets, true);
+  if (snapshot === undefined
+    || snapshot.serializedBytes > budgets.maxSerializedEvidenceBytes
+    || observations.reduce((sum, observation) => sum + rawPayloadBytes(observation), 0)
+      + snapshot.rawPayloadBytes > budgets.maxRawObservationPayloadBytes) {
+    throw new RangeError('previously admitted state cannot fit its exact rejection finalization');
+  }
+  return snapshot;
 }
 
 // fallow-ignore-next-line complexity -- closed state-dependent terminal finalization matrix
@@ -863,7 +951,7 @@ function boundaryAfterObservationDetachment(
       : current.losses.messageContent === 'not-observed' ? 'not-observed' : 'omitted',
     deltaContent: retainedDeltas.length > 0
       ? retainedDeltas.some((event) => event.evidenceStatus === 'truncated') ? 'partially-retained' : 'fully-retained'
-      : current.losses.deltaContent === 'not-observed' ? 'not-observed' : 'omitted',
+      : 'not-observed',
     providerErrorBody: 'not-applicable',
     providerNative: retainedProviderNative
       ? 'retained'
@@ -971,6 +1059,7 @@ function assertInitialState(
   observations: readonly EvidenceObservation[],
   budgets: EvidenceBudgets,
   options: AssemblerOptions,
+  boundary: CaptureBoundary,
 ): void {
   const ids = new Set<string>();
   for (const observation of observations) {
@@ -988,10 +1077,22 @@ function assertInitialState(
     throw new RangeError('initial state events must belong to the assembler trace');
   }
   if (options.initialState?.state === 'span-closed') {
+    const derived = deriveTrace(collapse.events, observations, {
+      evidenceSchemaVersion: '1.1.0',
+      captureProfile: { name: CAPTURE_PROFILE_NAME, version: CAPTURE_PROFILE_VERSION },
+      captureBoundary: boundary,
+    });
     const matchingStarts = collapse.events.filter((event) =>
       event.kind === 'span_start' && event.spanId === options.modelSpanId);
     const matchingEnds = collapse.events.filter((event) =>
       event.kind === 'span_end' && event.spanId === options.modelSpanId);
+    const spanEndCounts = new Map<string, number>();
+    for (const event of collapse.events) {
+      if (event.kind === 'span_end' && event.spanId !== null) {
+        spanEndCounts.set(event.spanId, (spanEndCounts.get(event.spanId) ?? 0) + 1);
+      }
+    }
+    const modelSpan = derived.trace.spans.find((span) => span.spanId === options.modelSpanId);
     const final = collapse.events.at(-1);
     const hasTraceTerminal = collapse.events.some((event) =>
       event.kind === 'interaction_end'
@@ -999,8 +1100,14 @@ function assertInitialState(
       || (event.kind === 'cancelled' && event.lifecycleTarget === 'trace'));
     if (
       options.terminal.kind !== 'completed'
+      || derived.issues.length !== 0
       || matchingStarts.length !== 1
       || matchingEnds.length !== 1
+      || modelSpan?.kind !== 'model'
+      || modelSpan.status !== 'completed'
+      || modelSpan.endSeq !== matchingEnds[0]?.seq
+      || [...spanEndCounts.values()].some((count) => count !== 1)
+      || derived.trace.spans.some((span) => span.status === 'unknown')
       || final?.kind !== 'span_end'
       || final.spanId !== options.modelSpanId
       || hasTraceTerminal
