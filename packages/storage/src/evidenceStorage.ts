@@ -115,6 +115,7 @@ const CORRUPT_CODES = [
 const REFERENCE_POLICY_NAME = 'signalglass.persistence.metadata-safe';
 const REFERENCE_POLICY_VERSIONS = ['1.0.0', '1.1.0'] as const;
 const DEFAULT_REFERENCE_POLICY_VERSION = '1.0.0';
+const METADATA_SAFE_V11_MAX_CONTENT_CODE_POINTS = 240;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -1366,7 +1367,7 @@ function isValidLeafTruncation(value: unknown, retainedCodePoints: number): bool
   if (!isRecord(value)) return false;
   const keys = Object.keys(value).sort();
   if (keys.join(',') !== 'maxLength,originalLength,retainedLength') return false;
-  return value['maxLength'] === 240
+  return value['maxLength'] === METADATA_SAFE_V11_MAX_CONTENT_CODE_POINTS
     && Number.isInteger(value['originalLength'])
     && (value['originalLength'] as number) > retainedCodePoints
     && value['retainedLength'] === retainedCodePoints;
@@ -1527,7 +1528,7 @@ class MetadataSafeV11Inspector {
       if (
         redaction !== undefined
         || truncation !== undefined
-        || retainedCodePoints > 240
+        || retainedCodePoints > METADATA_SAFE_V11_MAX_CONTENT_CODE_POINTS
         || !this.pedigree.captureProfileMatches
         || !this.pedigree.detectorMatches
       ) {
