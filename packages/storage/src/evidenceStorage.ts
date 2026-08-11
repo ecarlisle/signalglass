@@ -113,7 +113,9 @@ const CORRUPT_CODES = [
 ] as const;
 
 const REFERENCE_POLICY_NAME = 'signalglass.persistence.metadata-safe';
-const REFERENCE_POLICY_VERSION = '1.0.0';
+const REFERENCE_POLICY_VERSIONS = ['1.0.0', '1.1.0'] as const;
+const DEFAULT_REFERENCE_POLICY_VERSION = '1.0.0';
+const METADATA_SAFE_V11_MAX_CONTENT_CODE_POINTS = 240;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -124,6 +126,8 @@ export type StorageSafetyCode = (typeof STORAGE_SAFETY_CODES)[number];
 export type PolicyRejectionCode = (typeof POLICY_REJECTION_CODES)[number];
 
 export type PolicyFailureReason = 'exception' | 'malformed-decision';
+
+export type MetadataSafePolicyVersion = (typeof REFERENCE_POLICY_VERSIONS)[number];
 
 export type CorruptCode = (typeof CORRUPT_CODES)[number];
 
@@ -216,11 +220,7 @@ export interface EvidenceStorageConfig {
 // Internal brand for the reference policy so plain-object spoofing fails.
 // ---------------------------------------------------------------------------
 
-const REFERENCE_POLICY_BRAND = Symbol('signalglass.referencePolicy');
-
-interface ReferencePolicyInternal extends PersistencePolicy {
-  [REFERENCE_POLICY_BRAND]: true;
-}
+const REFERENCE_POLICIES = new WeakSet<object>();
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -363,13 +363,9 @@ function validatePolicyIdentity(policy: PersistencePolicy): void {
   }
   validatePolicyName(policy.name);
   validatePolicyVersion(policy.version);
-  // Enforce reserved reference-policy identity: only the genuine branded policy can use the reserved name
+  // Enforce reserved reference-policy identity: only a factory-created object can use the reserved name.
   if (policy.name === REFERENCE_POLICY_NAME) {
-    const brand = guardedGet(policy as unknown as Record<string | symbol, unknown>, REFERENCE_POLICY_BRAND);
-    if (typeof brand === 'object' && brand !== null && 'threw' in brand) {
-      throw new StorageConfigError('policy brand check failed');
-    }
-    if (brand !== true) {
+    if (!REFERENCE_POLICIES.has(policy)) {
       throw new StorageConfigError(`policy name '${REFERENCE_POLICY_NAME}' is reserved for the storage-shipped reference policy`);
     }
   }
@@ -1304,8 +1300,12 @@ class PolicyClassifier {
   }
 }
 
-function metadataSafeDecide(record: EvidenceRecord): PersistencePolicyDecision {
+function metadataSafeV10Decide(record: EvidenceRecord): PersistencePolicyDecision {
   // The safety gate has already run; M0 is satisfied by contract.
+  // Spec 016 S2 keeps v1.0.0 intentionally unaware of every 1.1-owned field.
+  if (isSchemaAtLeast11(record.evidenceSchemaVersion) && hasKnown11OwnedFields(record)) {
+    return { accept: false, code: 'unknown-additive-field' };
+  }
   const classifier = new PolicyClassifier();
   classifier.classify(record);
   if (classifier.issues.length === 0) {
@@ -1315,14 +1315,317 @@ function metadataSafeDecide(record: EvidenceRecord): PersistencePolicyDecision {
   return { accept: false, code: classifier.issues[0].code };
 }
 
-export function createMetadataSafePolicy(): PersistencePolicy {
-  const policy: ReferencePolicyInternal = {
-    name: REFERENCE_POLICY_NAME,
-    version: REFERENCE_POLICY_VERSION,
-    decide: metadataSafeDecide,
-    [REFERENCE_POLICY_BRAND]: true,
+function hasKnown11OwnedFields(record: EvidenceRecord): boolean {
+  if (record.captureBoundary.streaming !== undefined
+    || record.trace.assembly !== undefined
+    || record.completeness.lifecycle !== undefined
+    || record.completeness.declaredLosses !== undefined) {
+    return true;
+  }
+  // fallow-ignore-next-line complexity
+  const hasInEnvelope = (event: EvidenceObservation | EventRecord): boolean => {
+    if (event.kind === 'model_request') {
+      const envelope = 'payload' in event
+        ? (isRecord(event.payload) && isRecord(event.payload['requestEnvelope']) ? event.payload['requestEnvelope'] : null)
+        : event.requestEnvelope as unknown as Record<string, unknown>;
+      return envelope?.['messages'] !== undefined;
+    }
+    if (event.kind !== 'model_response' && event.kind !== 'model_response_chunk') return false;
+    const payload = 'payload' in event && isRecord(event.payload) ? event.payload : null;
+    const envelope = payload
+      ? (isRecord(payload['responseEnvelope']) ? payload['responseEnvelope'] : null)
+      : (event as unknown as Record<string, unknown>)['responseEnvelope'] as Record<string, unknown>;
+    return envelope?.['responseMeta'] !== undefined
+      || envelope?.['choiceIndex'] !== undefined
+      || envelope?.['deltaText'] !== undefined
+      || (payload?.['redaction'] !== undefined)
+      || (payload?.['truncation'] !== undefined)
+      || (!('payload' in event) && ('redaction' in event || 'truncation' in event));
   };
-  return policy;
+  return record.rawObservations.some(hasInEnvelope) || record.trace.events.some(hasInEnvelope);
+}
+
+function isSchemaAtLeast11(version: string): boolean {
+  const [major, minor] = version.split('.').map(Number);
+  return major === 1 && Number.isInteger(minor) && minor >= 1;
+}
+
+function isValidLeafRedaction(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  if (keys.join(',') !== 'maskedCodePoints,policy,reasons,spanCount') return false;
+  return typeof value['policy'] === 'string'
+    && Array.isArray(value['reasons'])
+    && value['reasons'].every((reason) => typeof reason === 'string')
+    && Number.isInteger(value['spanCount'])
+    && (value['spanCount'] as number) >= 1
+    && Number.isInteger(value['maskedCodePoints'])
+    && (value['maskedCodePoints'] as number) >= (value['spanCount'] as number);
+}
+
+function isValidLeafTruncation(value: unknown, retainedCodePoints: number): boolean {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  if (keys.join(',') !== 'maxLength,originalLength,retainedLength') return false;
+  return value['maxLength'] === METADATA_SAFE_V11_MAX_CONTENT_CODE_POINTS
+    && Number.isInteger(value['originalLength'])
+    && (value['originalLength'] as number) > retainedCodePoints
+    && value['retainedLength'] === retainedCodePoints;
+}
+
+interface MetadataSafeV11Pedigree {
+  captureProfileMatches: boolean;
+  detectorMatches: boolean;
+}
+
+class MetadataSafeV11Inspector {
+  readonly issues: PolicyIssue[] = [];
+  private readonly pedigree: MetadataSafeV11Pedigree;
+
+  constructor(private readonly record: EvidenceRecord) {
+    const streaming = record.captureBoundary.streaming;
+    this.pedigree = {
+      captureProfileMatches: streaming?.captureProfile.name === 'signalglass.collection.ingress-metadata-safe'
+        && streaming.captureProfile.version === '1.0.0',
+      detectorMatches: streaming?.detector.name === 'signalglass.collection.sensitive-detector'
+        && streaming.detector.version === '1.0.0',
+    };
+  }
+
+  // fallow-ignore-next-line complexity
+  inspect(): void {
+    this.inspectStreamingMetadata();
+    for (let index = 0; index < this.record.rawObservations.length; index++) {
+      const observation = this.record.rawObservations[index];
+      if (observation.kind === 'model_request') {
+        const payload = isRecord(observation.payload) ? observation.payload : {};
+        const envelope = isRecord(payload['requestEnvelope']) ? payload['requestEnvelope'] : {};
+        this.inspectMessages(envelope['messages'], `rawObservations[${index}].payload.requestEnvelope.messages`);
+      }
+      if (observation.kind === 'model_response_chunk') {
+        const payload = isRecord(observation.payload) ? observation.payload : {};
+        const envelope = isRecord(payload['responseEnvelope']) ? payload['responseEnvelope'] : {};
+        this.inspectDelta(
+          envelope['deltaText'],
+          observation.evidenceStatus,
+          payload['redaction'],
+          payload['truncation'],
+          `rawObservations[${index}].payload.responseEnvelope.deltaText`,
+        );
+      }
+    }
+    for (let index = 0; index < this.record.trace.events.length; index++) {
+      const event = this.record.trace.events[index];
+      if (event.kind === 'model_request') {
+        this.inspectMessages(event.requestEnvelope.messages, `trace.events[${index}].requestEnvelope.messages`);
+      }
+      if (event.kind === 'model_response_chunk') {
+        this.inspectDelta(
+          event.responseEnvelope.deltaText,
+          event.evidenceStatus,
+          event.redaction,
+          event.truncation,
+          `trace.events[${index}].responseEnvelope.deltaText`,
+        );
+      }
+    }
+  }
+
+  private reject(code: PolicyRejectionCode, path: string): void {
+    this.issues.push({ code, path });
+  }
+
+  private inspectStreamingMetadata(): void {
+    const streaming = this.record.captureBoundary.streaming;
+    if (!streaming) return;
+    const allowed = new Set([
+      'upstream', 'clientResponse', 'decoderDisposition', 'remainder', 'losses',
+      'assembly', 'captureProfile', 'detector', 'budgets',
+    ]);
+    for (const key of Object.keys(streaming)) {
+      if (!allowed.has(key) && (streaming as unknown as Record<string, unknown>)[key] !== null) {
+        this.reject('unknown-additive-field', `captureBoundary.streaming.${key}`);
+      }
+    }
+  }
+
+  private inspectMessages(value: unknown, path: string): void {
+    if (value === undefined) return;
+    if (!Array.isArray(value)) {
+      this.reject('captured-content', path);
+      return;
+    }
+    value.forEach((message, messageIndex) => {
+      if (!isRecord(message)) {
+        this.reject('captured-content', `${path}[${messageIndex}]`);
+        return;
+      }
+      if (message['name'] !== undefined && !isValidLabel(message['name'])) {
+        this.reject('unbounded-label', `${path}[${messageIndex}].name`);
+      }
+      const content = message['content'];
+      if (!Array.isArray(content)) {
+        this.inspectLeaf(content, `${path}[${messageIndex}].content.text`);
+        return;
+      }
+      content.forEach((part, partIndex) => {
+        if (!isRecord(part)) {
+          this.reject('captured-content', `${path}[${messageIndex}].content[${partIndex}]`);
+          return;
+        }
+        const partPath = `${path}[${messageIndex}].content[${partIndex}]`;
+        switch (part['kind']) {
+          case 'text':
+            this.inspectLeaf(part['text'], `${partPath}.text.text`);
+            break;
+          case 'tool_call':
+            if (!isValidLabel(part['id']) || !isValidLabel(part['name'])) {
+              this.reject('unbounded-label', partPath);
+            }
+            this.inspectLeaf(part['arguments'], `${partPath}.tool_call.arguments.text`);
+            break;
+          case 'tool_result':
+            if (!isValidLabel(part['toolCallId'])) this.reject('unbounded-label', partPath);
+            this.inspectLeaf(part['content'], `${partPath}.tool_result.content.text`);
+            break;
+          case 'image_url':
+            this.inspectLeaf(part['url'], `${partPath}.image_url.url.text`);
+            break;
+          default:
+            this.reject('captured-content', partPath);
+        }
+      });
+    });
+  }
+
+  private inspectDelta(
+    text: unknown,
+    status: unknown,
+    redaction: unknown,
+    truncation: unknown,
+    path: string,
+  ): void {
+    if (text === undefined) {
+      if (redaction !== undefined || truncation !== undefined) {
+        this.reject('unknown-additive-field', path);
+      }
+      return;
+    }
+    this.inspectLeaf({ text, evidenceStatus: status, redaction, truncation }, path);
+  }
+
+  // fallow-ignore-next-line complexity
+  private inspectLeaf(value: unknown, path: string): void {
+    if (!isRecord(value) || typeof value['text'] !== 'string') {
+      this.reject('captured-content', path);
+      return;
+    }
+    const retainedCodePoints = countCodePoints(value['text']);
+    const status = value['evidenceStatus'];
+    const redaction = value['redaction'];
+    const truncation = value['truncation'];
+    if (status === 'captured') {
+      if (
+        redaction !== undefined
+        || truncation !== undefined
+        || retainedCodePoints > METADATA_SAFE_V11_MAX_CONTENT_CODE_POINTS
+        || !this.pedigree.captureProfileMatches
+        || !this.pedigree.detectorMatches
+      ) {
+        this.reject('captured-content', path);
+      }
+      return;
+    }
+    if (status === 'redacted') {
+      if (!isValidLeafRedaction(redaction)) {
+        this.reject('captured-content', path);
+        return;
+      }
+      if (truncation !== undefined && !isValidLeafTruncation(truncation, retainedCodePoints)) {
+        this.reject('captured-content', path);
+      }
+      return;
+    }
+    if (status === 'truncated') {
+      if (redaction !== undefined || !isValidLeafTruncation(truncation, retainedCodePoints)) {
+        this.reject('captured-content', path);
+      }
+      return;
+    }
+    this.reject('captured-content', path);
+  }
+}
+
+// fallow-ignore-next-line complexity
+function legacyClassificationView(record: EvidenceRecord): EvidenceRecord {
+  const view = structuredClone(record) as EvidenceRecord;
+  delete (view.captureBoundary as unknown as Record<string, unknown>)['streaming'];
+  delete (view.trace as unknown as Record<string, unknown>)['assembly'];
+  delete (view.completeness as unknown as Record<string, unknown>)['lifecycle'];
+  delete (view.completeness as unknown as Record<string, unknown>)['declaredLosses'];
+
+  for (const observation of view.rawObservations) {
+    if (!isRecord(observation.payload)) continue;
+    if (observation.kind === 'model_request' && isRecord(observation.payload['requestEnvelope'])) {
+      delete observation.payload['requestEnvelope']['messages'];
+    }
+    if (observation.kind === 'model_response' || observation.kind === 'model_response_chunk') {
+      const envelope = isRecord(observation.payload['responseEnvelope'])
+        ? observation.payload['responseEnvelope']
+        : null;
+      if (envelope) {
+        delete envelope['responseMeta'];
+        delete envelope['choiceIndex'];
+        delete envelope['deltaText'];
+      }
+      delete observation.payload['redaction'];
+      delete observation.payload['truncation'];
+    }
+  }
+  for (const event of view.trace.events) {
+    if (event.kind === 'model_request') {
+      delete (event.requestEnvelope as Record<string, unknown>)['messages'];
+    }
+    if (event.kind === 'model_response' || event.kind === 'model_response_chunk') {
+      const envelope = event.responseEnvelope as Record<string, unknown>;
+      delete envelope['responseMeta'];
+      delete envelope['choiceIndex'];
+      delete envelope['deltaText'];
+      delete (event as unknown as Record<string, unknown>)['redaction'];
+      delete (event as unknown as Record<string, unknown>)['truncation'];
+    }
+  }
+  return view;
+}
+
+function metadataSafeV11Decide(record: EvidenceRecord): PersistencePolicyDecision {
+  if (!isSchemaAtLeast11(record.evidenceSchemaVersion)) {
+    return metadataSafeV10Decide(record);
+  }
+  const inspector = new MetadataSafeV11Inspector(record);
+  inspector.inspect();
+  if (inspector.issues.length > 0) {
+    return { accept: false, code: inspector.issues[0].code };
+  }
+  const classifier = new PolicyClassifier();
+  classifier.classify(legacyClassificationView(record));
+  if (classifier.issues.length === 0) return { accept: true };
+  return { accept: false, code: classifier.issues[0].code };
+}
+
+export function createMetadataSafePolicy(
+  version: MetadataSafePolicyVersion = DEFAULT_REFERENCE_POLICY_VERSION,
+): PersistencePolicy {
+  if (!REFERENCE_POLICY_VERSIONS.includes(version)) {
+    throw new StorageConfigError('unsupported metadata-safe policy version');
+  }
+  const policy: PersistencePolicy = {
+    name: REFERENCE_POLICY_NAME,
+    version,
+    decide: version === '1.0.0' ? metadataSafeV10Decide : metadataSafeV11Decide,
+  };
+  REFERENCE_POLICIES.add(policy);
+  return Object.freeze(policy);
 }
 
 export function isMetadataSafePolicy(policy: PersistencePolicy): boolean {
@@ -1330,7 +1633,7 @@ export function isMetadataSafePolicy(policy: PersistencePolicy): boolean {
     return false;
   }
   try {
-    return (policy as unknown as Record<string | symbol, unknown>)[REFERENCE_POLICY_BRAND] === true;
+    return REFERENCE_POLICIES.has(policy);
   } catch {
     return false;
   }

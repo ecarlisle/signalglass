@@ -112,7 +112,7 @@ Providers depend only on `@signalglass/core` and must not leak provider shapes i
 Persists canonical evidence records (append-only) beside the legacy trace storage.
 
 Responsibilities:
-- **Append-only evidence store** ([Spec 015](../specs/015-append-only-evidence-store.md)): save and retrieve canonical `EvidenceRecord`s in their own SQLite schema (`evidence_records`, `evidence_storage_meta`, namespaced indices) beside the legacy `traces` / `trace_events` tables. Saves are transactional with exact-text idempotency and structured conflict classification, a mandatory storage-safety gate, the `metadata-safe` reference persistence policy, and read-integrity verification before trust.
+- **Append-only evidence store** ([Spec 015](../specs/015-append-only-evidence-store.md)): save and retrieve canonical `EvidenceRecord`s in their own SQLite schema (`evidence_records`, `evidence_storage_meta`, namespaced indices) beside the legacy `traces` / `trace_events` tables. Saves are transactional with exact-text idempotency and structured conflict classification, a mandatory storage-safety gate, explicit `metadata-safe` v1.0.0/v1.1.0 reference-policy selection (Spec 016 S2), and read-integrity verification before trust.
 - **Legacy trace storage**: SQLite schema for traces and timeline events; query and export APIs (list traces, fetch trace, convert trace to `AgentRun`).
 - Apply capture and retention policies before writing.
 

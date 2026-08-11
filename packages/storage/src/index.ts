@@ -20,6 +20,7 @@ export type {
   PersistencePolicyDecision,
   PolicyRejectionCode,
   PolicyFailureReason,
+  MetadataSafePolicyVersion,
   StorageSafetyCode,
   ReadonlyEvidenceRecord,
 } from './evidenceStorage.js';
