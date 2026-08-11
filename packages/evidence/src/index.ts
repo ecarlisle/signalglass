@@ -206,7 +206,14 @@ export { isContentHash, isContentType, isJsonContentType, isSemanticVersion, maj
 export { isTimestamp } from './time.js';
 
 // Runtime validation and parse/serialize
-export { parseEvidenceRecord, normalizeEvidenceRecord } from './validate.js';
+export {
+  EVIDENCE_BUDGET_VALIDATION_CODES,
+  isEvidenceBudgetValidationIssue,
+} from './validation-issues.js';
+export {
+  parseEvidenceRecord,
+  normalizeEvidenceRecord,
+} from './validate.js';
 export type { NormalizeOptions } from './validate.js';
 export { serializeEvidenceRecord, serializeEvidenceExport } from './serialize.js';
 

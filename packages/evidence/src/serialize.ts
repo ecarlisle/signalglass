@@ -11,6 +11,7 @@ import type { CaptureBoundary, TraceCompleteness } from './types-record.js';
 import type { EvidenceTrace } from './types-trace.js';
 import type { EvidenceStructuralAnalysis } from './types-analysis.js';
 import { parseEvidenceRecord } from './validate.js';
+import { isEvidenceBudgetValidationIssue } from './validation-issues.js';
 import { toJsonView } from './normalize.js';
 
 const RECORD_KEYS = [
@@ -29,18 +30,12 @@ const RECORD_KEYS = [
  * surfaced through `parseEvidenceRecord`, not here), so this throws.
  */
 type EvidenceSerializationOptions = {
-  /** S4 terminal previews must serialize a hypothetical snapshot before its
-   * declared budgets can be tested. All non-budget validation still applies. */
+  /** Narrow S4 measurement capability: a hypothetical snapshot must be
+   * serialized before its declared budgets can be tested. Only the evidence
+   * package's closed magnitude-only issue class is ignored; normal persistence
+   * serialization remains strict and every non-budget issue still blocks. */
   allowBudgetExcess?: boolean;
 };
-
-const BUDGET_EXCESS_CODES = new Set([
-  'canonical_event_budget_exceeded',
-  'raw_observation_budget_exceeded',
-  'raw_payload_budget_exceeded',
-  'retained_content_budget_exceeded',
-  'serialized_evidence_budget_exceeded',
-]);
 
 export function serializeEvidenceRecord(
   record: EvidenceRecord,
@@ -49,7 +44,7 @@ export function serializeEvidenceRecord(
   const parsed = parseEvidenceRecord(record as unknown);
   const blockingIssues = parsed.ok
     ? []
-    : parsed.issues.filter((entry) => !options.allowBudgetExcess || !BUDGET_EXCESS_CODES.has(entry.code));
+    : parsed.issues.filter((entry) => !options.allowBudgetExcess || !isEvidenceBudgetValidationIssue(entry));
   if (blockingIssues.length > 0) {
     const codes = blockingIssues.map((i) => i.code).join(', ');
     throw new Error(`serializeEvidenceRecord: invalid evidence record (${codes})`);

@@ -50,7 +50,14 @@ detect-then-retain policy and 240-code-point leaf cap, admits raw/canonical
 observations atomically through the Spec 014 collapse rules, and reserves the
 complete terminal suffix while enforcing the serialized evidence budgets with
 the canonical evidence serializer. Terminal previews and actual finalization
-share one constructor and apply terminal-specific authoritative boundary facts.
+share one constructor. The real terminal always preserves the caller's explicit
+authoritative boundary facts; preview-only terminal/boundary alternatives come
+from the caller's preallocated exhaustive `terminalBoundaryPreviews` bundle, so
+delivery outcomes are measured rather than inferred from an observation
+terminal. Magnitude-only validation issues never remove an otherwise valid
+preview, even when its derived serialized record exceeds the 64 MiB configurable
+ceiling. Finalization event and observation IDs form a reserved namespace across
+ordinary, resumed, and additional observations.
 The completed path transitions through a real span-closed state, where the
 reservation drops from two slots to the one remaining `interaction_end` slot.
 `EvidenceRecord` remains authoritative; `trace` is its deterministic derived

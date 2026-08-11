@@ -23,6 +23,7 @@ import {
   measureFinalizableSnapshotBytes,
   type AssemblerOptions,
   type AssemblyTerminal,
+  type TerminalBoundaryPreview,
 } from './index.js';
 
 const BASE_LOSSES: StreamingLossFacts = {
@@ -45,9 +46,102 @@ const BASE_LOSSES: StreamingLossFacts = {
   sseMetadataObservedButNotRetained: false,
 };
 
+function previewFacts(
+  losses: StreamingLossFacts,
+  overrides: Partial<AssemblerOptions['boundaryFacts']>,
+): AssemblerOptions['boundaryFacts'] {
+  return {
+    upstream: { outcome: 'response-completed' },
+    clientResponse: { outcome: 'flushed' },
+    decoderDisposition: 'openai-sse',
+    remainder: { knowledge: 'protocol-terminal-observed', lastObservedFramePosition: 3, rawForwardedBytes: 48 },
+    losses,
+    ...overrides,
+  };
+}
+
+function terminalBoundaryPreviews(losses: StreamingLossFacts): readonly TerminalBoundaryPreview[] {
+  const sse = (terminal: AssemblyTerminal, overrides: Partial<AssemblerOptions['boundaryFacts']> = {}): TerminalBoundaryPreview => ({
+    terminal,
+    boundaryFacts: previewFacts(losses, overrides),
+  });
+  const detached = (code: typeof OBSERVATION_FAILURE_CODES[number] | 'decode-error'): TerminalBoundaryPreview =>
+    sse({ kind: 'observation-detached', code }, { remainder: { knowledge: 'unknown', lastObservedFramePosition: 3, rawForwardedBytes: 48 } });
+  return [
+    sse({ kind: 'completed' }),
+    sse({ kind: 'completed' }, { clientResponse: { outcome: 'closed-before-completion' } }),
+    ...UPSTREAM_FAILURE_CODES.flatMap((code): TerminalBoundaryPreview[] => {
+      if (code === 'http-error-status') return [sse({ kind: 'upstream-failed', code }, {
+        clientResponse: { outcome: 'local-error-flushed' }, decoderDisposition: 'not-applicable',
+        remainder: { knowledge: 'transport-eof-observed' },
+        losses: { ...losses, providerErrorBody: 'not-retained' },
+      })];
+      if (code === 'non-sse-response') return [sse({ kind: 'upstream-failed', code }, {
+        decoderDisposition: 'not-applicable', remainder: { knowledge: 'transport-eof-observed' },
+      })];
+      if (code === 'provider-error-frame') return [sse({ kind: 'upstream-failed', code }, {
+        losses: { ...losses, providerErrorBody: 'not-retained' },
+      })];
+      return [
+        sse({ kind: 'upstream-failed', code }, {
+          upstream: { outcome: 'connection-failed' }, clientResponse: { outcome: 'local-error-flushed' },
+          decoderDisposition: 'not-applicable', remainder: { knowledge: 'unknown' },
+        }),
+        sse({ kind: 'upstream-failed', code }, {
+          upstream: { outcome: 'stream-ended-prematurely' }, clientResponse: { outcome: 'closed-before-completion' },
+          remainder: { knowledge: 'unknown', lastObservedFramePosition: 3, rawForwardedBytes: 48 },
+        }),
+      ];
+    }),
+    ...MALFORMED_STREAM_CODES.flatMap((code): TerminalBoundaryPreview[] => [
+      sse({ kind: 'malformed-stream', code }, {
+        remainder: { knowledge: code === 'sse-partial-frame-at-eof' || code === 'sse-eof-without-done'
+          ? 'transport-eof-observed' : 'protocol-terminal-observed' },
+      }),
+      sse({ kind: 'malformed-stream', code }, {
+        clientResponse: { outcome: 'closed-before-completion' },
+        remainder: { knowledge: code === 'sse-partial-frame-at-eof' || code === 'sse-eof-without-done'
+          ? 'transport-eof-observed' : 'protocol-terminal-observed' },
+      }),
+    ]),
+    ...CLIENT_REQUEST_FAILURE_CODES.flatMap((code): TerminalBoundaryPreview[] => [
+      sse({ kind: 'request-failed', code }, {
+        upstream: { outcome: 'not-started' }, clientResponse: { outcome: 'not-started' },
+        decoderDisposition: 'not-applicable', remainder: { knowledge: 'not-applicable' },
+        losses: { ...losses, messageContent: 'omitted', deltaContent: 'not-observed', providerNative: 'not-applicable', providerErrorBody: 'not-applicable', wireBytes: 'not-applicable', unmappedDeltaFields: [], sseMetadataObservedButNotRetained: false, contentTypeParametersDropped: false },
+      }),
+      sse({ kind: 'request-failed', code }, {
+        upstream: { outcome: 'not-started' }, clientResponse: { outcome: 'local-error-flushed' },
+        decoderDisposition: 'not-applicable', remainder: { knowledge: 'not-applicable' },
+        losses: { ...losses, messageContent: 'omitted', deltaContent: 'not-observed', providerNative: 'not-applicable', providerErrorBody: 'not-applicable', wireBytes: 'not-applicable', unmappedDeltaFields: [], sseMetadataObservedButNotRetained: false, contentTypeParametersDropped: false },
+      }),
+    ]),
+    sse({ kind: 'client-cancelled' }, {
+      upstream: { outcome: 'cancelled-by-ingress', cause: 'client-disconnect' }, clientResponse: { outcome: 'not-started' },
+      decoderDisposition: 'not-applicable', remainder: { knowledge: 'unknown' },
+    }),
+    sse({ kind: 'client-cancelled' }, {
+      upstream: { outcome: 'cancelled-by-ingress', cause: 'client-disconnect' }, clientResponse: { outcome: 'closed-before-completion' },
+      remainder: { knowledge: 'unknown', lastObservedFramePosition: 3, rawForwardedBytes: 48 },
+    }),
+    ...(['ingress-shutdown', 'configured-limit'] as const).flatMap((cause): TerminalBoundaryPreview[] => [
+      sse({ kind: 'ingress-cancelled' }, {
+        upstream: { outcome: 'cancelled-by-ingress', cause }, clientResponse: { outcome: 'not-started' },
+        decoderDisposition: 'not-applicable', remainder: { knowledge: 'unknown' },
+      }),
+      sse({ kind: 'ingress-cancelled' }, {
+        upstream: { outcome: 'cancelled-by-ingress', cause }, clientResponse: { outcome: 'closed-before-completion' },
+        remainder: { knowledge: 'unknown', lastObservedFramePosition: 3, rawForwardedBytes: 48 },
+      }),
+    ]),
+    ...OBSERVATION_FAILURE_CODES.map(detached),
+    ...INTERNAL_DECODER_FAILURE_CODES.map(detached),
+  ];
+}
+
 function options(overrides: Partial<AssemblerOptions> = {}): AssemblerOptions {
   const values = Array.from({ length: 32 }, (_, index) => index);
-  return {
+  const base: Omit<AssemblerOptions, 'terminalBoundaryPreviews'> = {
     traceId: 'trace-s4', interactionId: 'trace-s4', modelSpanId: 'span-model',
     provider: 'openai', model: 'gpt-test', requestMessages: [{ role: 'user', content: 'hello' }],
     responseMeta: { statusCode: 200, contentType: 'text/event-stream' },
@@ -69,7 +163,21 @@ function options(overrides: Partial<AssemblerOptions> = {}): AssemblerOptions {
       { eventId: 'terminal-event-2', observationId: 'terminal-observation-2', capturedAt: '2026-08-11T12:01:01.000Z' },
     ],
     evidenceBudgets: DEFAULT_EVIDENCE_BUDGETS,
-    ...overrides,
+  };
+  const merged = { ...base, ...overrides } as Omit<AssemblerOptions, 'terminalBoundaryPreviews'>;
+  const decodedDeltas = merged.decodedEvents.filter((event) => event.kind === 'chunk' && event.delta !== null);
+  const previewLosses: StreamingLossFacts = merged.initialState !== undefined || decodedDeltas.length === 0
+    ? merged.boundaryFacts.losses
+    : {
+      ...merged.boundaryFacts.losses,
+      deltaContent: decodedDeltas.some((event) => retainText(event.delta!).truncated)
+        ? 'partially-retained'
+        : 'fully-retained',
+    };
+  return {
+    ...merged,
+    terminalBoundaryPreviews: overrides.terminalBoundaryPreviews
+      ?? terminalBoundaryPreviews(previewLosses),
   };
 }
 
@@ -415,7 +523,20 @@ describe('Spec 016 S4 assembler', () => {
   });
 
   it('T148/T156/T157 measures each applicable real terminal snapshot and lets the maximum govern', () => {
-    const completed = assembleTrace(options());
+    const base = options();
+    const cancellationBoundary = base.terminalBoundaryPreviews.find((preview) =>
+      preview.terminal.kind === 'client-cancelled'
+      && preview.boundaryFacts.clientResponse.outcome === 'closed-before-completion')!.boundaryFacts;
+    const paddedCancellation = {
+      terminal: { kind: 'client-cancelled' as const },
+      boundaryFacts: {
+        ...cancellationBoundary,
+        futureBoundaryPadding: 'x'.repeat(4_096),
+      } as AssemblerOptions['boundaryFacts'],
+    };
+    const completed = assembleTrace(options({
+      terminalBoundaryPreviews: [...base.terminalBoundaryPreviews, paddedCancellation],
+    }));
     const previews = completed.budgetMeasurements.terminalAlternatives;
     expect(previews.length).toBeGreaterThan(7);
     expect(previews.some((preview) => preview.terminal.kind === 'completed' && preview.suffixCount === 2)).toBe(true);
@@ -424,24 +545,114 @@ describe('Spec 016 S4 assembler', () => {
     expect(previews.some((preview) => preview.terminal.kind === 'observation-detached' && preview.suffixCount === 1)).toBe(true);
     expect(previews.some((preview) => preview.terminal.kind === 'observation-detached'
       && preview.terminal.code === 'decode-error')).toBe(true);
+    expect(new Set(previews.filter((preview) => preview.terminal.kind === 'completed')
+      .map((preview) => preview.boundary.streaming?.clientResponse.outcome))).toEqual(
+      new Set(['flushed', 'closed-before-completion']),
+    );
+    expect(new Set(previews.filter((preview) => preview.terminal.kind === 'client-cancelled')
+      .map((preview) => preview.boundary.streaming?.clientResponse.outcome))).toEqual(
+      new Set(['closed-before-completion']),
+    );
+    expect(new Set(previews.filter((preview) => preview.terminal.kind === 'ingress-cancelled')
+      .map((preview) => preview.boundary.streaming?.upstream.cause))).toEqual(
+      new Set(['ingress-shutdown', 'configured-limit']),
+    );
     expect(completed.budgetMeasurements.maximumFinalizableSnapshotBytes).toBe(
       Math.max(...previews.map((preview) => preview.serializedBytes)),
     );
+    const byteWorst = previews.find((preview) =>
+      preview.serializedBytes === completed.budgetMeasurements.maximumFinalizableSnapshotBytes)!;
+    expect(byteWorst.terminal.kind).toBe('client-cancelled');
+    expect(byteWorst.suffixCount).toBe(1);
     for (const preview of previews) {
       const streaming = preview.boundary.streaming!;
       const actual = assembleTrace(options({
         terminal: preview.terminal,
-        boundaryFacts: {
-          upstream: streaming.upstream,
-          clientResponse: streaming.clientResponse,
-          decoderDisposition: streaming.decoderDisposition,
-          remainder: streaming.remainder,
-          losses: streaming.losses,
-        },
+        boundaryFacts: streaming as AssemblerOptions['boundaryFacts'],
       }));
       expect(actual.budgetMeasurements.actualSerializedEvidenceBytes).toBe(preview.serializedBytes);
     }
   }, 30_000);
+
+  it('T145/T148 keeps a structurally valid over-64-MiB preview measurable and rejects it as capacity', () => {
+    const baseline = assembleTrace(options());
+    const preterminal = baseline.record.rawObservations.slice(0, -2);
+    const candidate: EvidenceObservation = {
+      observationId: 'oversized-preview-observation',
+      eventId: 'oversized-preview-event',
+      traceId: 'trace-s4',
+      spanId: 'span-model',
+      seq: preterminal.length,
+      kind: 'model_response_chunk',
+      capturedAt: '2026-08-11T18:30:00.000Z',
+      evidenceStatus: 'captured',
+      observationRole: 'provider_reported',
+      payload: {
+        responseEnvelope: {
+          providerNativeFidelity: 'structurally_faithful',
+          choiceIndex: 0,
+          chunkIndex: 99,
+          providerNative: { padding: 'x'.repeat(34 * 1024 * 1024) },
+        },
+      },
+      rawCapturedAt: '2026-08-11T18:30:00.000Z',
+    };
+    const result = assembleTrace(resumedOptions(preterminal, 'completion-possible', {
+      additionalRawObservations: [candidate],
+      boundaryFacts: {
+        ...options().boundaryFacts,
+        losses: { ...options().boundaryFacts.losses, deltaContent: 'fully-retained', providerNative: 'retained' },
+      },
+      evidenceBudgets: {
+        ...DEFAULT_EVIDENCE_BUDGETS,
+        maxRawObservationPayloadBytes: 67_108_864,
+        maxSerializedEvidenceBytes: 67_108_864,
+      },
+      // This regression isolates magnitude-only validation. Exhaustive
+      // terminal/boundary enumeration is exercised separately with a small
+      // record so the >64 MiB fixture remains bounded and deterministic.
+      terminalBoundaryPreviews: [],
+    }));
+    const rejectedPreview = result.budgetMeasurements.rejectedCandidatePreview!;
+    expect(rejectedPreview.maximumSerializedBytes).toBeGreaterThan(67_108_864);
+    expect(rejectedPreview.terminalAlternatives.length).toBeGreaterThan(0);
+    expect(rejectedPreview.terminalAlternatives.some((preview) => preview.serializedBytes > 67_108_864)).toBe(true);
+    expect(result.warnings).toContain('candidate-budget-rejected');
+    expect(result.warnings).not.toContain('candidate-structurally-rejected');
+    expect(result.trace.events.at(-1)).toMatchObject({ error: { type: 'record-budget-exceeded' } });
+    expect(result.record.rawObservations.some((observation) => observation.observationId === candidate.observationId)).toBe(false);
+    expect(result.record.rawObservations.slice(0, -1)).toEqual(preterminal);
+    expect(result.budgetMeasurements.actualSerializedEvidenceBytes).toBeLessThanOrEqual(67_108_864);
+  }, 30_000);
+
+  it('T148/T157 covers cancellation preview boundaries before and after response headers', () => {
+    const baseline = assembleTrace(options());
+    const beforeHeaders = baseline.record.rawObservations.slice(0, 3);
+    const early = assembleTrace(resumedOptions(beforeHeaders, 'completion-possible', {
+      terminal: { kind: 'client-cancelled' },
+      boundaryFacts: {
+        ...options().boundaryFacts,
+        upstream: { outcome: 'cancelled-by-ingress', cause: 'client-disconnect' },
+        clientResponse: { outcome: 'not-started' },
+        decoderDisposition: 'not-applicable',
+        remainder: { knowledge: 'unknown' },
+        losses: { ...options().boundaryFacts.losses, deltaContent: 'not-observed' },
+      },
+    }));
+    expect(new Set(early.budgetMeasurements.terminalAlternatives
+      .filter((preview) => preview.terminal.kind === 'client-cancelled')
+      .map((preview) => preview.boundary.streaming?.clientResponse.outcome))).toEqual(new Set(['not-started']));
+
+    const afterHeaders = assembleTrace(options({ terminal: { kind: 'client-cancelled' }, boundaryFacts: {
+      ...options().boundaryFacts,
+      upstream: { outcome: 'cancelled-by-ingress', cause: 'client-disconnect' },
+      clientResponse: { outcome: 'closed-before-completion' },
+      remainder: { knowledge: 'unknown' },
+    } }));
+    expect(new Set(afterHeaders.budgetMeasurements.terminalAlternatives
+      .filter((preview) => preview.terminal.kind === 'client-cancelled')
+      .map((preview) => preview.boundary.streaming?.clientResponse.outcome))).toEqual(new Set(['closed-before-completion']));
+  });
 
   it('T148 finalizes from the prior valid state when a response candidate exceeds its reservation', () => {
     const baseline = assembleTrace(options());
@@ -535,10 +746,13 @@ describe('Spec 016 S4 assembler', () => {
     }));
     expect(result.record.rawObservations).toHaveLength(2_000);
     expect(result.trace.events.at(-1)).toMatchObject({ kind: 'interaction_end', eventId: 'closed-interaction-end' });
-    expect(result.budgetMeasurements.terminalAlternatives).toHaveLength(1);
-    expect(result.budgetMeasurements.terminalAlternatives[0]).toMatchObject({
-      terminal: { kind: 'completed' }, suffixCount: 1,
-    });
+    expect(result.budgetMeasurements.terminalAlternatives).toHaveLength(2);
+    expect(result.budgetMeasurements.terminalAlternatives.every((preview) =>
+      preview.terminal.kind === 'completed' && preview.suffixCount === 1)).toBe(true);
+    expect(new Set(result.budgetMeasurements.terminalAlternatives.map((preview) =>
+      preview.boundary.streaming?.clientResponse.outcome))).toEqual(
+      new Set(['flushed', 'closed-before-completion']),
+    );
   }, 30_000);
 
   it('T158 preview acceptance and rejection never mutate finalization inputs', () => {
@@ -553,6 +767,89 @@ describe('Spec 016 S4 assembler', () => {
       rawCapturedAt: fixed[0].capturedAt,
     });
     expect(rejected.record.rawObservations.some((observation) => observation.eventId === fixed[1].eventId)).toBe(false);
+  });
+
+  it.each([
+    ['slot 0 eventId', 0, 'eventId'],
+    ['slot 1 eventId', 1, 'eventId'],
+    ['slot 0 observationId', 0, 'observationId'],
+    ['slot 1 observationId', 1, 'observationId'],
+  ] as const)('rejects an initial-state collision with reserved %s', (_label, slot, field) => {
+    const baseline = assembleTrace(options());
+    const collisionBundle = [
+      { eventId: 'initial-reserved-event-0', observationId: 'initial-reserved-observation-0', capturedAt: '2026-08-11T19:03:00.000Z' },
+      { eventId: 'initial-reserved-event-1', observationId: 'initial-reserved-observation-1', capturedAt: '2026-08-11T19:03:01.000Z' },
+    ] as const;
+    const closed = baseline.record.rawObservations.slice(0, -1).map((observation, index) =>
+      index === 0
+        ? { ...observation, [field]: collisionBundle[slot][field] }
+        : observation);
+    expect(() => assembleTrace(resumedOptions(closed, 'span-closed', { finalizationBundle: collisionBundle })))
+      .toThrow(/reserved finalization identity namespace/);
+  });
+
+  it.each([
+    ['slot 0 eventId', 0, 'eventId'],
+    ['slot 1 eventId', 1, 'eventId'],
+    ['slot 0 observationId', 0, 'observationId'],
+    ['slot 1 observationId', 1, 'observationId'],
+  ] as const)('atomically rejects an additional candidate using reserved %s in both reservation states', (_label, slot, field) => {
+    const baseline = assembleTrace(options());
+    const makeCandidate = (seq: number, bundle = options().finalizationBundle): EvidenceObservation => ({
+      observationId: 'reserved-collision-observation',
+      eventId: 'reserved-collision-event',
+      traceId: 'trace-s4',
+      spanId: 'span-model',
+      seq,
+      kind: 'model_response_chunk',
+      capturedAt: '2026-08-11T19:00:00.000Z',
+      evidenceStatus: 'captured',
+      observationRole: 'provider_reported',
+      payload: { responseEnvelope: { providerNativeFidelity: 'structurally_faithful', choiceIndex: 0, chunkIndex: 101, deltaText: 'collision' } },
+      rawCapturedAt: '2026-08-11T19:00:00.000Z',
+      [field]: bundle[slot][field],
+    });
+
+    const preterminal = baseline.record.rawObservations.slice(0, -2);
+    const completionCandidate = makeCandidate(preterminal.length);
+    const completion = assembleTrace(resumedOptions(preterminal, 'completion-possible', {
+      additionalRawObservations: [completionCandidate],
+    }));
+    expect(completion.warnings).toContain('candidate-structurally-rejected');
+    expect(completion.warnings).not.toContain('candidate-budget-rejected');
+    expect(completion.record.rawObservations.slice(0, -1)).toEqual(preterminal);
+    expect(completion.record.rawObservations.some((observation) =>
+      observation.observationId === completionCandidate.observationId && observation.eventId === completionCandidate.eventId)).toBe(false);
+    expect(completion.trace.events.at(-1)).toMatchObject({ error: { type: 'internal-capture-error' } });
+
+    const closed = baseline.record.rawObservations.slice(0, -1);
+    const closedBundle = [
+      { eventId: 'closed-reserved-event-0', observationId: 'closed-reserved-observation-0', capturedAt: '2026-08-11T19:01:00.000Z' },
+      { eventId: 'closed-reserved-event-1', observationId: 'closed-reserved-observation-1', capturedAt: '2026-08-11T19:01:01.000Z' },
+    ] as const;
+    const closedCandidate = makeCandidate(closed.length, closedBundle);
+    const spanClosed = assembleTrace(resumedOptions(closed, 'span-closed', {
+      additionalRawObservations: [closedCandidate],
+      finalizationBundle: closedBundle,
+    }));
+    expect(spanClosed.warnings).toContain('candidate-structurally-rejected');
+    expect(spanClosed.warnings).not.toContain('candidate-budget-rejected');
+    expect(spanClosed.record.rawObservations.slice(0, -1)).toEqual(closed);
+    expect(spanClosed.trace.events.at(-1)).toMatchObject({ kind: 'interaction_end' });
+    expect(JSON.stringify(spanClosed.record)).not.toContain('collision');
+  });
+
+  it('validates that a claimed span-closed state is genuinely eligible only for interaction_end', () => {
+    const baseline = assembleTrace(options());
+    const closedBundle = [
+      { eventId: 'state-check-event-0', observationId: 'state-check-observation-0', capturedAt: '2026-08-11T19:02:00.000Z' },
+      { eventId: 'state-check-event-1', observationId: 'state-check-observation-1', capturedAt: '2026-08-11T19:02:01.000Z' },
+    ] as const;
+    const withoutSpanEnd = baseline.record.rawObservations.slice(0, -2);
+    expect(() => assembleTrace(resumedOptions(withoutSpanEnd, 'span-closed', { finalizationBundle: closedBundle })))
+      .toThrow(/span-closed initial state/);
+    expect(() => assembleTrace(resumedOptions(baseline.record.rawObservations, 'span-closed', { finalizationBundle: closedBundle })))
+      .toThrow(/span-closed initial state/);
   });
 
   it('T160-T164 admits new canonical content and preserves the exact prior prefix on rejection', () => {

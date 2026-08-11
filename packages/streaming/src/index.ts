@@ -34,6 +34,7 @@ export type {
   FailureClassificationRow,
   FinalizationBundle,
   FinalizationValue,
+  TerminalBoundaryPreview,
   TerminalReservationState,
 } from './assembler.js';
 export {

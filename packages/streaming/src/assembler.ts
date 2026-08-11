@@ -13,6 +13,7 @@ import {
   collapseObservations,
   deriveCompleteness,
   deriveTrace,
+  isEvidenceBudgetValidationIssue,
   parseEvidenceRecord,
   serializeEvidenceRecord,
   utf8Encode,
@@ -92,7 +93,15 @@ export type FinalizationBundle = readonly [FinalizationValue, FinalizationValue]
 export type AssemblerBoundaryFacts = Pick<
   StreamingCaptureBoundary,
   'upstream' | 'clientResponse' | 'decoderDisposition' | 'remainder'
-> & { losses: StreamingLossFacts };
+> & { losses: StreamingLossFacts } & Record<string, unknown>;
+
+/** Explicit, preview-only authoritative boundary candidate. The caller owns
+ * exhaustive enumeration; these facts are never substituted for the real
+ * terminal's `boundaryFacts` in the persisted record. */
+export type TerminalBoundaryPreview = {
+  terminal: AssemblyTerminal;
+  boundaryFacts: AssemblerBoundaryFacts;
+};
 
 export type AssemblerOptions = {
   traceId: string;
@@ -105,6 +114,9 @@ export type AssemblerOptions = {
   decodedEvents: readonly AssemblerDecodedEvent[];
   terminal: AssemblyTerminal;
   boundaryFacts: AssemblerBoundaryFacts;
+  /** Preallocated exhaustive terminal/boundary alternatives for exact budget
+   * reservation. The real terminal/boundary pair is always added separately. */
+  terminalBoundaryPreviews: readonly TerminalBoundaryPreview[];
   ids: {
     eventIds: readonly string[];
     observationIds: readonly string[];
@@ -144,6 +156,17 @@ export type AssemblyResult = {
       rawPayloadBytes: number;
       boundary: CaptureBoundary;
     }[];
+    rejectedCandidatePreview?: {
+      maximumSerializedBytes: number;
+      maximumRawPayloadBytes: number;
+      terminalAlternatives: readonly {
+        terminal: AssemblyTerminal;
+        suffixCount: number;
+        serializedBytes: number;
+        rawPayloadBytes: number;
+        boundary: CaptureBoundary;
+      }[];
+    };
   };
 };
 
@@ -194,17 +217,6 @@ export const FAILURE_CLASSIFICATION_ROWS: readonly FailureClassificationRow[] = 
   ...MALFORMED_STREAM_CODES.map((code) => classificationRow(code, 'malformed-stream')),
   ...OBSERVATION_FAILURE_CODES.map((code) => classificationRow(code, 'observation-detached')),
   ...INTERNAL_DECODER_FAILURE_CODES.map((code) => classificationRow(code, 'observation-detached')),
-];
-
-const TERMINAL_SUFFIX_ALTERNATIVES: readonly AssemblyTerminal[] = [
-  { kind: 'completed' },
-  ...UPSTREAM_FAILURE_CODES.map((code) => ({ kind: 'upstream-failed' as const, code })),
-  ...MALFORMED_STREAM_CODES.map((code) => ({ kind: 'malformed-stream' as const, code })),
-  ...CLIENT_REQUEST_FAILURE_CODES.map((code) => ({ kind: 'request-failed' as const, code })),
-  { kind: 'client-cancelled' },
-  { kind: 'ingress-cancelled' },
-  ...OBSERVATION_FAILURE_CODES.map((code) => ({ kind: 'observation-detached' as const, code })),
-  ...INTERNAL_DECODER_FAILURE_CODES.map((code) => ({ kind: 'observation-detached' as const, code })),
 ];
 
 export type TerminalReservationState = 'completion-possible' | 'span-closed';
@@ -263,11 +275,13 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
   const normalizedRequest = normalizeRequestMessages(options.requestMessages);
   const warnings: AssemblyWarning[] = [];
   const retained: EvidenceObservation[] = [...(options.initialState?.observations ?? [])];
-  if (options.initialState !== undefined) assertInitialState(retained, budgets);
+  if (options.initialState !== undefined) assertInitialState(retained, budgets, options);
   let ordinaryIdPosition = 0;
   let terminal = options.terminal;
   const state: AssemblerState = options.initialState?.state ?? 'completion-possible';
   let detachedCode: ObservationFailureCode | InternalDecoderFailureCode | undefined;
+  let admissionStopped = false;
+  let rejectedCandidatePreview: TerminalPreviewMaximum | undefined;
   const requestContentCodePoints = options.initialState === undefined
     ? normalizedRequest.retainedCodePoints
     : retainedRequestContentCodePoints(retained);
@@ -353,14 +367,15 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
   let boundary = buildBoundary(effectiveBoundaryFacts, lossFacts, budgets);
 
   const admitMany = (observations: readonly EvidenceObservation[]): ObservationFailureCode | undefined => {
-    const verdict = admitCandidate(
+    const admission = admitCandidate(
       retained, observations, boundary, options, budgets, requestContentCodePoints, state,
     );
-    if (verdict === 'structural') {
+    if (admission.verdict === 'structural') {
       warnings.push('candidate-structurally-rejected');
       return 'internal-capture-error';
     }
-    if (verdict === 'budget') {
+    if (admission.verdict === 'budget') {
+      rejectedCandidatePreview = admission.preview;
       warnings.push('candidate-budget-rejected');
       return 'record-budget-exceeded';
     }
@@ -389,16 +404,27 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
     if (detachedCode !== undefined) break;
   }
 
-  if (detachedCode === undefined) {
+  if (detachedCode !== undefined && state === 'span-closed') {
+    detachedCode = undefined;
+    admissionStopped = true;
+  }
+
+  if (detachedCode === undefined && !admissionStopped) {
     for (const observation of options.additionalRawObservations ?? []) {
       detachedCode = admitMany([observation]);
-      if (detachedCode !== undefined) break;
+      if (detachedCode !== undefined) {
+        if (state === 'span-closed') {
+          detachedCode = undefined;
+          admissionStopped = true;
+        }
+        break;
+      }
     }
   }
 
   if (detachedCode !== undefined) {
     terminal = { kind: 'observation-detached', code: detachedCode };
-    boundary = transitionBoundaryForTerminal(boundary, terminal, retained);
+    boundary = boundaryAfterObservationDetachment(boundary, retained);
   }
 
   const previews = maximumFinalizableSnapshot(retained, boundary, options, state);
@@ -438,6 +464,19 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
         rawPayloadBytes: snapshot.rawPayloadBytes,
         boundary: snapshot.boundary,
       })),
+      ...(rejectedCandidatePreview === undefined ? {} : {
+        rejectedCandidatePreview: {
+          maximumSerializedBytes: rejectedCandidatePreview.serializedBytes,
+          maximumRawPayloadBytes: rejectedCandidatePreview.rawPayloadBytes,
+          terminalAlternatives: rejectedCandidatePreview.snapshots.map((snapshot) => ({
+            terminal: snapshot.terminal,
+            suffixCount: snapshot.suffix.length,
+            serializedBytes: snapshot.serializedBytes,
+            rawPayloadBytes: snapshot.rawPayloadBytes,
+            boundary: snapshot.boundary,
+          })),
+        },
+      }),
     },
   };
 }
@@ -518,27 +557,31 @@ function admitCandidate(
   budgets: EvidenceBudgets,
   requestContentCodePoints: number,
   state: AssemblerState,
-): 'accepted' | 'structural' | 'budget' {
+): { verdict: 'accepted' | 'structural' | 'budget'; preview?: TerminalPreviewMaximum } {
   const observationIds = new Set(current.map((observation) => observation.observationId));
+  const reservedIds = new Set(options.finalizationBundle.flatMap((value) => [value.eventId, value.observationId]));
   for (const candidate of candidates) {
-    if (observationIds.has(candidate.observationId)) return 'structural';
+    if (observationIds.has(candidate.observationId)) return { verdict: 'structural' };
+    if (reservedIds.has(candidate.eventId) || reservedIds.has(candidate.observationId)) return { verdict: 'structural' };
     observationIds.add(candidate.observationId);
-    if (!idWithinBudget(candidate.eventId, budgets) || !idWithinBudget(candidate.observationId, budgets)) return 'structural';
+    if (!idWithinBudget(candidate.eventId, budgets) || !idWithinBudget(candidate.observationId, budgets)) return { verdict: 'structural' };
   }
   const scratch = [...current, ...candidates];
   const collapse = collapseObservations(scratch, 'rawObservations');
-  if (!collapse.ok) return 'structural';
-  if (!countBudgetAllows(collapse.events.length, scratch.length, budgets, state)) return 'budget';
+  if (!collapse.ok) return { verdict: 'structural' };
+  if (!countBudgetAllows(collapse.events.length, scratch.length, budgets, state)) return { verdict: 'budget' };
   const rawBytes = scratch.reduce((sum, observation) => sum + rawPayloadBytes(observation), 0);
   const deltaCodePoints = collapse.events.reduce((sum, event) => {
     if (event.kind !== 'model_response_chunk') return sum;
     return sum + countCodePoints(event.responseEnvelope.deltaText ?? '');
   }, 0);
-  if (requestContentCodePoints + deltaCodePoints > budgets.maxRetainedContentCodePoints) return 'budget';
+  if (requestContentCodePoints + deltaCodePoints > budgets.maxRetainedContentCodePoints) return { verdict: 'budget' };
   const maximum = maximumFinalizableSnapshot(scratch, boundary, options, state);
-  if (maximum.snapshots.length === 0) return 'structural';
-  if (rawBytes + maximum.rawPayloadBytes > budgets.maxRawObservationPayloadBytes) return 'budget';
-  return maximum.serializedBytes <= budgets.maxSerializedEvidenceBytes ? 'accepted' : 'budget';
+  if (maximum.snapshots.length === 0) return { verdict: 'structural' };
+  if (rawBytes + maximum.rawPayloadBytes > budgets.maxRawObservationPayloadBytes) return { verdict: 'budget', preview: maximum };
+  return maximum.serializedBytes <= budgets.maxSerializedEvidenceBytes
+    ? { verdict: 'accepted', preview: maximum }
+    : { verdict: 'budget', preview: maximum };
 }
 
 export function measureFinalizableSnapshotBytes(record: EvidenceRecord): number {
@@ -552,11 +595,19 @@ function maximumFinalizableSnapshot(
   state: AssemblerState,
 ): TerminalPreviewMaximum {
   const snapshots: TerminalSnapshot[] = [];
-  for (const terminal of TERMINAL_SUFFIX_ALTERNATIVES) {
+  const alternatives = [
+    { terminal: options.terminal, boundary },
+    ...options.terminalBoundaryPreviews.map((preview) => ({
+      terminal: preview.terminal,
+      boundary: buildBoundary(preview.boundaryFacts, preview.boundaryFacts.losses, options.evidenceBudgets ?? DEFAULT_EVIDENCE_BUDGETS),
+    })),
+  ];
+  const seen = new Set<string>();
+  for (const { terminal, boundary: alternativeBoundary } of alternatives) {
+    const identity = JSON.stringify({ terminal, boundary: alternativeBoundary });
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     if (state === 'span-closed' && terminal.kind !== 'completed') continue;
-    const alternativeBoundary = terminalEquals(terminal, options.terminal)
-      ? boundary
-      : transitionBoundaryForTerminal(boundary, terminal, observations);
     const snapshot = finalizeTerminalSnapshot(
       observations,
       alternativeBoundary,
@@ -594,7 +645,8 @@ function finalizeTerminalSnapshot(
     );
     const afterSpan = [...observations, spanEnd];
     const collapsed = collapseObservations(afterSpan, 'rawObservations');
-    if (!collapsed.ok || !countBudgetAllows(collapsed.events.length, afterSpan.length, budgets, 'span-closed')) {
+    if (!collapsed.ok || (diagnose
+      && !countBudgetAllows(collapsed.events.length, afterSpan.length, budgets, 'span-closed'))) {
       return undefined;
     }
     const closed = finalizeTerminalSnapshot(afterSpan, boundary, options, terminal, 'span-closed', budgets, diagnose, 1);
@@ -610,17 +662,20 @@ function finalizeTerminalSnapshot(
   const finalObservations = [...observations, ...suffix];
   const collapse = collapseObservations(finalObservations, 'rawObservations');
   if (!collapse.ok) return undefined;
-  if (collapse.events.length > budgets.maxCanonicalEvents || finalObservations.length > budgets.maxRawObservations) {
+  if (diagnose
+    && (collapse.events.length > budgets.maxCanonicalEvents || finalObservations.length > budgets.maxRawObservations)) {
     return undefined;
   }
   const record = buildRecord(finalObservations, boundary);
-  const validationRecord = diagnose
-    ? record
-    : buildRecord(finalObservations, withValidationBudgets(boundary));
-  const parsed = parseEvidenceRecord(validationRecord);
+  const parsed = parseEvidenceRecord(record);
   if (!parsed.ok) {
-    if (diagnose) throw new Error(`invalid terminal snapshot (${record.trace.events.map((event) => event.kind).join(' -> ')}): ${parsed.issues.map((issue) => `${issue.code}@${issue.path}`).join(', ')}`);
-    return undefined;
+    const blockingIssues = diagnose
+      ? parsed.issues
+      : parsed.issues.filter((issue) => !isEvidenceBudgetValidationIssue(issue));
+    if (blockingIssues.length > 0) {
+      if (diagnose) throw new Error(`invalid terminal snapshot (${record.trace.events.map((event) => event.kind).join(' -> ')}): ${blockingIssues.map((issue) => `${issue.code}@${issue.path}`).join(', ')}`);
+      return undefined;
+    }
   }
   return {
     terminal,
@@ -629,24 +684,6 @@ function finalizeTerminalSnapshot(
     record,
     serializedBytes: measureFinalizableSnapshotBytes(record),
     rawPayloadBytes: suffix.reduce((sum, observation) => sum + rawPayloadBytes(observation), 0),
-  };
-}
-
-function withValidationBudgets(boundary: CaptureBoundary): CaptureBoundary {
-  if (boundary.streaming === undefined) return boundary;
-  return {
-    ...boundary,
-    streaming: {
-      ...boundary.streaming,
-      budgets: {
-        maxCanonicalEvents: 1_000_000,
-        maxRawObservations: 2_000_000,
-        maxRawObservationPayloadBytes: 67_108_864,
-        maxRetainedContentCodePoints: 16_777_216,
-        maxSerializedEvidenceBytes: 67_108_864,
-        maxIdLengthBytes: boundary.streaming.budgets.maxIdLengthBytes,
-      },
-    },
   };
 }
 
@@ -800,148 +837,48 @@ function buildBoundary(
   };
 }
 
-function terminalEquals(left: AssemblyTerminal, right: AssemblyTerminal): boolean {
-  if (left.kind !== right.kind) return false;
-  if ('code' in left && 'code' in right) return left.code === right.code;
-  return !('code' in left) && !('code' in right);
-}
-
-// fallow-ignore-next-line complexity -- closed terminal-specific authoritative boundary matrix
-function transitionBoundaryForTerminal(
+// fallow-ignore-next-line complexity -- closed retained-fact recomputation after observer detachment
+function boundaryAfterObservationDetachment(
   boundary: CaptureBoundary,
-  terminal: AssemblyTerminal,
   observations: readonly EvidenceObservation[],
 ): CaptureBoundary {
   const current = boundary.streaming;
   if (current === undefined) return boundary;
-  let losses: StreamingLossFacts = {
-    ...current.losses,
-    providerErrorBody: terminal.kind === 'upstream-failed'
-      && (terminal.code === 'http-error-status' || terminal.code === 'provider-error-frame')
-      ? 'not-retained'
-      : 'not-applicable',
-  };
-  let facts: AssemblerBoundaryFacts = {
-    upstream: current.upstream,
-    clientResponse: current.clientResponse,
-    decoderDisposition: current.decoderDisposition,
-    remainder: current.remainder,
-    losses,
-  };
   const collapse = collapseObservations(observations, 'rawObservations');
-  const responseMeta = collapse.ok
-    ? collapse.events.find((event) => event.kind === 'model_response')?.responseEnvelope.responseMeta
-    : undefined;
-  const hasResponse = responseMeta !== undefined;
+  const retainedEvents = collapse.ok ? collapse.events : [];
+  const responseMeta = retainedEvents.find((event) => event.kind === 'model_response')?.responseEnvelope.responseMeta;
   const isSse = responseMeta?.statusCode !== undefined
     && responseMeta.statusCode >= 200
     && responseMeta.statusCode <= 299
     && responseMeta.contentType === 'text/event-stream';
-  if (terminal.kind === 'completed') {
-    facts = {
-      ...facts,
-      upstream: { outcome: 'response-completed' },
-      clientResponse: { outcome: 'flushed' },
-      decoderDisposition: 'openai-sse',
-      remainder: { ...facts.remainder, knowledge: 'protocol-terminal-observed' },
-    };
-  } else if (terminal.kind === 'request-failed') {
-    losses = {
-      ...losses,
-      messageContent: 'omitted',
-      deltaContent: 'not-observed',
-      providerErrorBody: 'not-applicable',
-      unmappedDeltaFields: [],
-      sseMetadataObservedButNotRetained: false,
-      contentTypeParametersDropped: false,
-    };
-    facts = {
-      ...facts,
-      losses,
-      upstream: { outcome: 'not-started' },
-      clientResponse: { outcome: 'local-error-flushed' },
-      decoderDisposition: 'not-applicable',
-      remainder: { knowledge: 'not-applicable' },
-    };
-  } else if (terminal.kind === 'client-cancelled' || terminal.kind === 'ingress-cancelled') {
-    facts = {
-      ...facts,
-      upstream: {
-        outcome: 'cancelled-by-ingress',
-        cause: terminal.kind === 'client-cancelled' ? 'client-disconnect' : 'configured-limit',
-      },
-      clientResponse: { outcome: hasResponse ? 'closed-before-completion' : 'not-started' },
-      decoderDisposition: isSse ? 'openai-sse' : 'not-applicable',
-      remainder: { ...facts.remainder, knowledge: 'unknown' },
-    };
-  } else if (terminal.kind === 'observation-detached') {
-    const retainedEvents = collapse.ok ? collapse.events : [];
-    const retainedDeltas = retainedEvents.filter((event) => event.kind === 'model_response_chunk');
-    const retainedRequest = retainedEvents.some((event) => event.kind === 'model_request');
-    losses = {
-      ...losses,
-      messageContent: retainedRequest
-        ? losses.messageContent
-        : losses.messageContent === 'not-observed' ? 'not-observed' : 'omitted',
-      deltaContent: retainedDeltas.length > 0
-        ? retainedDeltas.some((event) => event.evidenceStatus === 'truncated') ? 'partially-retained' : 'fully-retained'
-        : losses.deltaContent === 'not-observed' ? 'not-observed' : 'omitted',
-      sseMetadataObservedButNotRetained: hasResponse && isSse
-        ? losses.sseMetadataObservedButNotRetained
-        : false,
-    };
-    facts = {
-      ...facts,
-      losses,
-      decoderDisposition: isSse ? 'openai-sse' : 'not-applicable',
-      remainder: { ...facts.remainder, knowledge: 'unknown' },
-    };
-  } else if (terminal.kind === 'malformed-stream') {
-    facts = {
-      ...facts,
-      upstream: { outcome: 'response-completed' },
-      clientResponse: { outcome: 'flushed' },
-      decoderDisposition: isSse ? 'openai-sse' : current.decoderDisposition,
-      remainder: {
-        ...facts.remainder,
-        knowledge: terminal.code === 'sse-partial-frame-at-eof' || terminal.code === 'sse-eof-without-done'
-          ? 'transport-eof-observed'
-          : 'protocol-terminal-observed',
-      },
-    };
-  } else if (terminal.code === 'http-error-status') {
-    facts = {
-      ...facts,
-      upstream: { outcome: 'response-completed' },
-      clientResponse: { outcome: 'local-error-flushed' },
-      decoderDisposition: 'not-applicable',
-      remainder: { ...facts.remainder, knowledge: 'transport-eof-observed' },
-    };
-  } else if (terminal.code === 'non-sse-response') {
-    facts = {
-      ...facts,
-      upstream: { outcome: 'response-completed' },
-      clientResponse: { outcome: 'flushed' },
-      decoderDisposition: 'not-applicable',
-      remainder: { ...facts.remainder, knowledge: 'transport-eof-observed' },
-    };
-  } else if (terminal.code === 'provider-error-frame') {
-    facts = {
-      ...facts,
-      upstream: { outcome: 'response-completed' },
-      clientResponse: { outcome: 'flushed' },
-      decoderDisposition: 'openai-sse',
-      remainder: { ...facts.remainder, knowledge: 'protocol-terminal-observed' },
-    };
-  } else {
-    facts = {
-      ...facts,
-      upstream: { outcome: hasResponse ? 'stream-ended-prematurely' : 'connection-failed' },
-      clientResponse: { outcome: hasResponse ? 'closed-before-completion' : 'local-error-flushed' },
-      decoderDisposition: isSse ? 'openai-sse' : 'not-applicable',
-      remainder: { ...facts.remainder, knowledge: 'unknown' },
-    };
-  }
+  const retainedDeltas = retainedEvents.filter((event) => event.kind === 'model_response_chunk');
+  const retainedRequest = retainedEvents.some((event) => event.kind === 'model_request');
+  const retainedProviderNative = retainedEvents.some((event) =>
+    (event.kind === 'model_request' && event.requestEnvelope.providerNative !== undefined)
+    || (event.kind === 'model_response_chunk' && event.responseEnvelope.providerNative !== undefined));
+  const losses: StreamingLossFacts = {
+    ...current.losses,
+    messageContent: retainedRequest
+      ? current.losses.messageContent
+      : current.losses.messageContent === 'not-observed' ? 'not-observed' : 'omitted',
+    deltaContent: retainedDeltas.length > 0
+      ? retainedDeltas.some((event) => event.evidenceStatus === 'truncated') ? 'partially-retained' : 'fully-retained'
+      : current.losses.deltaContent === 'not-observed' ? 'not-observed' : 'omitted',
+    providerErrorBody: 'not-applicable',
+    providerNative: retainedProviderNative
+      ? 'retained'
+      : current.losses.providerNative === 'not-applicable' ? 'not-applicable' : 'not-retained',
+    sseMetadataObservedButNotRetained: responseMeta !== undefined && isSse
+      ? current.losses.sseMetadataObservedButNotRetained
+      : false,
+  };
+  const facts: AssemblerBoundaryFacts = {
+    upstream: current.upstream,
+    clientResponse: current.clientResponse,
+    decoderDisposition: isSse ? 'openai-sse' : 'not-applicable',
+    remainder: { ...current.remainder, knowledge: 'unknown' },
+    losses,
+  };
   return buildBoundary(facts, losses, current.budgets);
 }
 
@@ -1009,6 +946,7 @@ function structuralMessage(code: string): string {
   return [...`SignalGlass observed ${code}.`].slice(0, 200).join('');
 }
 
+// fallow-ignore-next-line complexity -- explicit cross-namespace reservation invariants
 function assertIdentityInputs(options: AssemblerOptions, budgets: EvidenceBudgets): void {
   if (options.traceId !== options.interactionId) throw new RangeError('traceId must equal interactionId');
   const ids = [options.traceId, options.modelSpanId, ...options.ids.eventIds, ...options.ids.observationIds,
@@ -1016,14 +954,24 @@ function assertIdentityInputs(options: AssemblerOptions, budgets: EvidenceBudget
   if (ids.some((id) => !idWithinBudget(id, budgets))) throw new RangeError('assembler id exceeds maxIdLengthBytes');
   const terminalIds = options.finalizationBundle.flatMap((value) => [value.eventId, value.observationId]);
   if (new Set(terminalIds).size !== terminalIds.length) throw new RangeError('finalization bundle ids must be unique');
-  const eventIds = [...options.ids.eventIds, ...options.finalizationBundle.map((value) => value.eventId)];
-  const observationIds = [...options.ids.observationIds, ...options.finalizationBundle.map((value) => value.observationId)];
-  if (new Set(eventIds).size !== eventIds.length || new Set(observationIds).size !== observationIds.length) {
+  const generatedIds = [...options.ids.eventIds, ...options.ids.observationIds, ...terminalIds];
+  if (new Set(generatedIds).size !== generatedIds.length) {
     throw new RangeError('assembler event and observation ids must be collision-free');
+  }
+  const reservedIds = new Set(options.finalizationBundle.flatMap((value) => [value.eventId, value.observationId]));
+  for (const observation of options.initialState?.observations ?? []) {
+    if (reservedIds.has(observation.eventId) || reservedIds.has(observation.observationId)) {
+      throw new RangeError('initial state collides with the reserved finalization identity namespace');
+    }
   }
 }
 
-function assertInitialState(observations: readonly EvidenceObservation[], budgets: EvidenceBudgets): void {
+// fallow-ignore-next-line complexity -- closed resumable-state eligibility invariants
+function assertInitialState(
+  observations: readonly EvidenceObservation[],
+  budgets: EvidenceBudgets,
+  options: AssemblerOptions,
+): void {
   const ids = new Set<string>();
   for (const observation of observations) {
     if (ids.has(observation.observationId)) throw new RangeError('initial state observation ids must be unique');
@@ -1032,8 +980,33 @@ function assertInitialState(observations: readonly EvidenceObservation[], budget
       throw new RangeError('initial state id exceeds maxIdLengthBytes');
     }
   }
-  if (!collapseObservations(observations, 'rawObservations').ok) {
+  const collapse = collapseObservations(observations, 'rawObservations');
+  if (!collapse.ok) {
     throw new RangeError('initial state must satisfy Spec 014 collapse invariants');
+  }
+  if (collapse.events.some((event) => event.traceId !== options.traceId)) {
+    throw new RangeError('initial state events must belong to the assembler trace');
+  }
+  if (options.initialState?.state === 'span-closed') {
+    const matchingStarts = collapse.events.filter((event) =>
+      event.kind === 'span_start' && event.spanId === options.modelSpanId);
+    const matchingEnds = collapse.events.filter((event) =>
+      event.kind === 'span_end' && event.spanId === options.modelSpanId);
+    const final = collapse.events.at(-1);
+    const hasTraceTerminal = collapse.events.some((event) =>
+      event.kind === 'interaction_end'
+      || (event.kind === 'error' && event.lifecycleTarget === 'trace')
+      || (event.kind === 'cancelled' && event.lifecycleTarget === 'trace'));
+    if (
+      options.terminal.kind !== 'completed'
+      || matchingStarts.length !== 1
+      || matchingEnds.length !== 1
+      || final?.kind !== 'span_end'
+      || final.spanId !== options.modelSpanId
+      || hasTraceTerminal
+    ) {
+      throw new RangeError('span-closed initial state must end with the matching model span_end and remain eligible only for interaction_end');
+    }
   }
 }
 
