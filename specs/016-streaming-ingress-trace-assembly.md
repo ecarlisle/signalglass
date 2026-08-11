@@ -5,8 +5,9 @@
 **Accepted — revision 11 (narrow correction pass).** Accepted by human
 architectural review. The S1 schema-foundation slice is implemented in
 PR #24, and the S2 `metadata-safe` v1.1.0 persistence-policy slice is
-implemented in PR #25. The SSE parser, provider decoder/assembler, and ingress
-wiring described by S3–S5 remain pending.
+implemented in PR #25. The S3 network-free SSE parser is implemented in PR
+#26; the provider decoder/assembler and ingress wiring described by S4–S5
+remain pending.
 
 Revision 11 (narrow correction pass) resolves three revision-10 defects
 without redesigning the terminal-suffix or Spec 014 collapse contracts:

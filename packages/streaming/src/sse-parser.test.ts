@@ -58,6 +58,7 @@ describe('@signalglass/streaming SSE parser (Spec 016 S3)', () => {
     expect(lf.results[0]).toMatchObject({ kind: 'frame', data: 'lf' });
     expect(cr.results[0]).toMatchObject({ kind: 'frame', data: 'cr' });
     expect(lf.results[1]).toMatchObject({ terminal: true });
+    // The final CR remains pending until EOF resolves the CR-only delimiter.
     expect(cr.finish[0]).toMatchObject({ terminal: true });
   });
 
@@ -232,6 +233,13 @@ describe('@signalglass/streaming SSE parser (Spec 016 S3)', () => {
         afterTerminal: false,
       },
     ]);
+    const trailingSecret = 'must-not-become-an-ordinary-frame';
+    const trailing = parser.push(bytes(`data: ${trailingSecret}\n\n`));
+    expect(trailing).toEqual([{ kind: 'post-terminal-content' }]);
+    expect(trailing.some((result) => result.kind === 'frame')).toBe(false);
+    expect(JSON.stringify({ trailing, facts: parser.facts() })).not.toContain(
+      trailingSecret,
+    );
   });
 
   it('T11 detaches on overflow and cannot reinterpret discarded suffix bytes', () => {

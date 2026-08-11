@@ -10,8 +10,13 @@ trace assembly remain pending in S4; ingress integration remains pending in S5.
 ## Public API
 
 - `createSseParser(options?)`
+- `SSE_MAX_FRAME_BYTES`
+- `SseParser`
 - `SseParserOptions`
 - `FrameResult`
+- `SseParserFacts`
+- `SseMalformedCode`
+- `SseDecoderDisposition`
 
 The parser accepts `Uint8Array` chunks through `push()` and signals transport
 EOF through `finish()`. `facts()` exposes only closed facts and counters; raw
@@ -24,6 +29,10 @@ no trailing payload bytes, decodes no trailing frame into a string, and emits
 changes from `none-observed` to `observed-not-retained`. Later content creates
 no additional result objects; a later malformed frame or observation failure
 moves the fact to `unknown` without exposing trailing values.
+
+A pre-terminal invalid-UTF-8 frame is a malformed terminal: ordinary frame
+emission stops, and any subsequent bytes affect only the bounded post-terminal
+structural facts.
 
 The default and maximum frame budget is exactly 16 MiB. A smaller positive
 integer budget may be configured for deterministic boundary testing or a more
