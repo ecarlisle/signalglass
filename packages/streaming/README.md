@@ -17,6 +17,14 @@ The parser accepts `Uint8Array` chunks through `push()` and signals transport
 EOF through `finish()`. `facts()` exposes only closed facts and counters; raw
 `event:`, `id:`, and `retry:` values are never returned.
 
+After the exact assembled data value `[DONE]`, the parser releases its ordinary
+frame buffer and switches to constant-space structural accounting. It retains
+no trailing payload bytes, decodes no trailing frame into a string, and emits
+`post-terminal-content` at most once: when the closed post-terminal fact first
+changes from `none-observed` to `observed-not-retained`. Later content creates
+no additional result objects; a later malformed frame or observation failure
+moves the fact to `unknown` without exposing trailing values.
+
 The default and maximum frame budget is exactly 16 MiB. A smaller positive
 integer budget may be configured for deterministic boundary testing or a more
 restrictive observer policy.

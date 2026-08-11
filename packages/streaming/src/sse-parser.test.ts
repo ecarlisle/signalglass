@@ -392,6 +392,180 @@ describe('@signalglass/streaming SSE parser (Spec 016 S3)', () => {
     expect(overflow.facts().postTerminal).toBe('unknown');
   });
 
+  it('retains zero trailing bytes for a long unterminated post-terminal frame', () => {
+    const parser = createSseParser({ maxFrameBytes: 1024 * 1024 });
+    expect(parser.push(bytes('data: [DONE]\n\n'))).toHaveLength(1);
+
+    expect(parser.push(bytes('data: private-prefix-'))).toEqual([]);
+    const block = new Uint8Array(4096).fill(0x61);
+    for (let index = 0; index < 100; index += 1) {
+      expect(parser.push(block)).toEqual([]);
+      expect(parser.facts().bufferedBytes).toBe(0);
+      expect(parser.facts().postTerminal).toBe('none-observed');
+    }
+
+    expect(parser.finish()).toEqual([
+      {
+        kind: 'malformed',
+        code: 'sse-partial-frame-at-eof',
+        afterTerminal: true,
+      },
+    ]);
+    expect(parser.facts()).toMatchObject({
+      bufferedBytes: 0,
+      postTerminal: 'unknown',
+    });
+  });
+
+  it('emits one closed transition result for arbitrarily many trailing frames', () => {
+    const parser = createSseParser();
+    parser.push(bytes('data: [DONE]\n\n'));
+
+    let resultCount = 0;
+    for (let index = 0; index < 10_000; index += 1) {
+      resultCount += parser.push(bytes(`data: trailing-${index}\n\n`)).length;
+      expect(parser.facts().bufferedBytes).toBe(0);
+    }
+
+    expect(resultCount).toBe(1);
+    expect(parser.facts().postTerminal).toBe('observed-not-retained');
+    expect(parser.finish()).toEqual([]);
+  });
+
+  it('keeps output and retained state constant for input beyond the frame limit', () => {
+    const parser = createSseParser({ maxFrameBytes: 64 });
+    parser.push(bytes('data: [DONE]\n\n'));
+
+    expect(parser.push(bytes('data: '))).toEqual([]);
+    expect(parser.facts().bufferedBytes).toBe(0);
+    expect(parser.push(new Uint8Array(58).fill(0x61))).toEqual([]);
+    expect(parser.facts().bufferedBytes).toBe(0);
+    expect(parser.push(Uint8Array.of(0x61))).toEqual([
+      {
+        kind: 'observation-failure',
+        code: 'frame-overflow',
+        afterTerminal: true,
+      },
+    ]);
+    expect(parser.push(new Uint8Array(1024 * 1024).fill(0x62))).toEqual([]);
+    expect(parser.facts()).toMatchObject({
+      detached: true,
+      bufferedBytes: 0,
+      postTerminal: 'unknown',
+    });
+  });
+
+  it('treats comment-only trailing frames as none across all delimiters', () => {
+    const parser = createSseParser();
+    parser.push(bytes('data: [DONE]\n\n'));
+
+    const trailing = bytes(': lf\n\n: cr\r\r: crlf\r\n\r\n:\r\n\r\n');
+    for (const byte of trailing) {
+      expect(parser.push(Uint8Array.of(byte))).toEqual([]);
+      expect(parser.facts().bufferedBytes).toBe(0);
+    }
+
+    expect(parser.finish()).toEqual([]);
+    expect(parser.facts().postTerminal).toBe('none-observed');
+  });
+
+  it('does not expose first or later trailing content, including split UTF-8', () => {
+    const parser = createSseParser();
+    parser.push(bytes('data: [DONE]\n\n'));
+    const firstSecret = 'first-private-🪟';
+    const laterSecret = 'later-private-value';
+    const first = bytes(`data: ${firstSecret}\r\n\r\n`);
+
+    const results: FrameResult[] = [];
+    for (const byte of first) {
+      results.push(...parser.push(Uint8Array.of(byte)));
+    }
+    expect(results).toEqual([{ kind: 'post-terminal-content' }]);
+    expect(parser.push(bytes(`data: ${laterSecret}\n\n`))).toEqual([]);
+
+    const observable = JSON.stringify({ results, facts: parser.facts() });
+    expect(observable).not.toContain(firstSecret);
+    expect(observable).not.toContain(laterSecret);
+    expect(parser.facts()).toMatchObject({
+      bufferedBytes: 0,
+      postTerminal: 'observed-not-retained',
+    });
+  });
+
+  it('reports invalid post-terminal UTF-8 once, without retaining its suffix', () => {
+    const parser = createSseParser();
+    parser.push(bytes('data: [DONE]\n\n'));
+    const prefix = bytes('data: private-');
+    const invalid = new Uint8Array(prefix.byteLength + 4);
+    invalid.set(prefix);
+    invalid.set([0xff, 0x0a, 0x0a, 0x61], prefix.byteLength);
+
+    const results = parser.push(invalid);
+    expect(results).toEqual([
+      {
+        kind: 'malformed',
+        code: 'sse-invalid-utf8',
+        afterTerminal: true,
+      },
+    ]);
+    expect(parser.push(bytes('data: must-not-be-observed\n\n'))).toEqual([]);
+    expect(JSON.stringify({ results, facts: parser.facts() })).not.toContain(
+      'private',
+    );
+    expect(parser.facts()).toMatchObject({
+      bufferedBytes: 0,
+      postTerminal: 'unknown',
+    });
+  });
+
+  it('is deterministic after terminal across whole, bytewise, and split input', () => {
+    const input = bytes(
+      'data: [DONE]\r\n\r\n' +
+        ': comment\r\n\r\n' +
+        'event: message\rdata: first-🪟\r\r' +
+        'data: later\n\n',
+    );
+    const expected = parseChunks([input]);
+
+    expect(
+      parseChunks([...input].map((byte) => Uint8Array.of(byte))),
+    ).toEqual(expected);
+    for (let split = 0; split <= input.byteLength; split += 1) {
+      expect(
+        parseChunks([input.subarray(0, split), input.subarray(split)]),
+      ).toEqual(expected);
+    }
+    expect(expected).toEqual({
+      results: [
+        {
+          kind: 'frame',
+          data: '[DONE]',
+          terminal: true,
+          unrecognizedExtensionFrameObserved: false,
+        },
+        { kind: 'post-terminal-content' },
+      ],
+      finish: [],
+    });
+  });
+
+  it('treats repeated DONE frames as one post-terminal content transition', () => {
+    const parser = createSseParser();
+    parser.push(bytes('data: [DONE]\n\n'));
+
+    let resultCount = 0;
+    for (let index = 0; index < 1_000; index += 1) {
+      resultCount += parser.push(bytes('data: [DONE]\n\n')).length;
+    }
+
+    expect(resultCount).toBe(1);
+    expect(parser.facts()).toMatchObject({
+      doneObserved: true,
+      bufferedBytes: 0,
+      postTerminal: 'observed-not-retained',
+    });
+  });
+
   it('rejects invalid configured budgets with fixed, value-free errors', () => {
     for (const maxFrameBytes of [0, -1, 1.5, Number.NaN, SSE_MAX_FRAME_BYTES + 1]) {
       expect(() => createSseParser({ maxFrameBytes })).toThrowError(

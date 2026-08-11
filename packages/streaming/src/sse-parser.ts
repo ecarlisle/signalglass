@@ -3,6 +3,40 @@ export const SSE_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 const INITIAL_BUFFER_BYTES = 4 * 1024;
 
+const POST_FIELD_DATA = 1 << 0;
+const POST_FIELD_EVENT = 1 << 1;
+const POST_FIELD_ID = 1 << 2;
+const POST_FIELD_RETRY = 1 << 3;
+const POST_FIELD_ALL =
+  POST_FIELD_DATA | POST_FIELD_EVENT | POST_FIELD_ID | POST_FIELD_RETRY;
+
+const POST_FIELD_BYTES: readonly {
+  readonly mask: number;
+  readonly bytes: readonly number[];
+}[] = [
+  { mask: POST_FIELD_DATA, bytes: [0x64, 0x61, 0x74, 0x61] },
+  { mask: POST_FIELD_EVENT, bytes: [0x65, 0x76, 0x65, 0x6e, 0x74] },
+  { mask: POST_FIELD_ID, bytes: [0x69, 0x64] },
+  { mask: POST_FIELD_RETRY, bytes: [0x72, 0x65, 0x74, 0x72, 0x79] },
+];
+
+const POST_UTF8_LEAD_RANGES: readonly {
+  readonly first: number;
+  readonly last: number;
+  readonly remaining: number;
+  readonly nextMin: number;
+  readonly nextMax: number;
+}[] = [
+  { first: 0xc2, last: 0xdf, remaining: 1, nextMin: 0x80, nextMax: 0xbf },
+  { first: 0xe0, last: 0xe0, remaining: 2, nextMin: 0xa0, nextMax: 0xbf },
+  { first: 0xe1, last: 0xec, remaining: 2, nextMin: 0x80, nextMax: 0xbf },
+  { first: 0xed, last: 0xed, remaining: 2, nextMin: 0x80, nextMax: 0x9f },
+  { first: 0xee, last: 0xef, remaining: 2, nextMin: 0x80, nextMax: 0xbf },
+  { first: 0xf0, last: 0xf0, remaining: 3, nextMin: 0x90, nextMax: 0xbf },
+  { first: 0xf1, last: 0xf3, remaining: 3, nextMin: 0x80, nextMax: 0xbf },
+  { first: 0xf4, last: 0xf4, remaining: 3, nextMin: 0x80, nextMax: 0x8f },
+];
+
 export type SseParserOptions = {
   /**
    * Maximum raw bytes retained for one unterminated frame. Defaults to the
@@ -91,6 +125,15 @@ type ParserState = {
   doneObserved: boolean;
   metadataObserved: boolean;
   postTerminal: 'none-observed' | 'observed-not-retained' | 'unknown';
+  postTerminalStopped: boolean;
+  postFrameHasData: boolean;
+  postFrameInvalidUtf8: boolean;
+  postLineKind: 'field' | 'comment' | 'value';
+  postFieldCandidates: number;
+  postFieldLength: number;
+  postUtf8Remaining: number;
+  postUtf8NextMin: number;
+  postUtf8NextMax: number;
 };
 
 export function createSseParser(options: SseParserOptions = {}): SseParser {
@@ -110,6 +153,15 @@ export function createSseParser(options: SseParserOptions = {}): SseParser {
     doneObserved: false,
     metadataObserved: false,
     postTerminal: 'none-observed',
+    postTerminalStopped: false,
+    postFrameHasData: false,
+    postFrameInvalidUtf8: false,
+    postLineKind: 'field',
+    postFieldCandidates: POST_FIELD_ALL,
+    postFieldLength: 0,
+    postUtf8Remaining: 0,
+    postUtf8NextMin: 0x80,
+    postUtf8NextMax: 0xbf,
   };
 
   return {
@@ -131,11 +183,18 @@ function pushChunk(
   state: ParserState,
   chunk: Uint8Array,
 ): readonly FrameResult[] {
-  if (state.ended || state.detached || chunk.byteLength === 0) return [];
+  if (
+    state.ended ||
+    state.detached ||
+    state.postTerminalStopped ||
+    chunk.byteLength === 0
+  ) {
+    return [];
+  }
 
   const results: FrameResult[] = [];
   for (const byte of chunk) {
-    if (state.detached) break;
+    if (state.detached || state.postTerminalStopped) break;
     consumeByte(state, byte, results);
   }
   return results;
@@ -147,15 +206,16 @@ function finishStream(state: ParserState): readonly FrameResult[] {
   if (state.detached) return [];
 
   const results: FrameResult[] = [];
-  if (state.pendingCr) {
-    state.pendingCr = false;
-    endLine(state, 1, results);
-  }
-  if (state.detached) return results;
+  finishPendingCr(state, results);
+  if (state.detached || state.postTerminalStopped) return results;
 
-  if (hasPartialFrame(state)) {
-    signalPartialFrame(state, results);
-  } else if (!state.terminalReached) {
+  if (state.terminalReached) {
+    finishPostTerminal(state, results);
+    return results;
+  }
+
+  if (hasPartialFrame(state)) signalPartialFrame(state, results);
+  else {
     state.terminalReached = true;
     results.push({
       kind: 'malformed',
@@ -164,6 +224,20 @@ function finishStream(state: ParserState): readonly FrameResult[] {
     });
   }
   return results;
+}
+
+function finishPendingCr(state: ParserState, results: FrameResult[]): void {
+  if (!state.pendingCr) return;
+  state.pendingCr = false;
+  if (state.terminalReached) endPostTerminalLine(state, 1, results);
+  else endLine(state, 1, results);
+}
+
+function finishPostTerminal(
+  state: ParserState,
+  results: FrameResult[],
+): void {
+  if (hasPartialFrame(state)) signalPostTerminalPartial(state, results);
 }
 
 function signalPartialFrame(
@@ -201,6 +275,11 @@ function consumeByte(
   byte: number,
   results: FrameResult[],
 ): void {
+  if (state.terminalReached) {
+    consumePostTerminalByte(state, byte, results);
+    return;
+  }
+
   if (state.pendingCr) {
     state.pendingCr = false;
     if (byte === 0x0a) {
@@ -294,7 +373,7 @@ function signalInvalidUtf8(
 ): void {
   const afterTerminal = state.terminalReached;
   if (afterTerminal) state.postTerminal = 'unknown';
-  state.terminalReached = true;
+  enterPostTerminal(state);
   results.push({
     kind: 'malformed',
     code: 'sse-invalid-utf8',
@@ -317,8 +396,8 @@ function emitParsedFrame(
   }
 
   if (parsed.data === '[DONE]') {
-    state.terminalReached = true;
     state.doneObserved = true;
+    enterPostTerminal(state);
     results.push({
       kind: 'frame',
       data: '[DONE]',
@@ -336,6 +415,232 @@ function emitParsedFrame(
     unrecognizedExtensionFrameObserved:
       parsed.unrecognizedExtensionFrameObserved,
   });
+}
+
+function consumePostTerminalByte(
+  state: ParserState,
+  byte: number,
+  results: FrameResult[],
+): void {
+  if (state.pendingCr) {
+    state.pendingCr = false;
+    if (byte === 0x0a) {
+      endPostTerminalLine(state, 2, results);
+      return;
+    }
+    endPostTerminalLine(state, 1, results);
+    if (state.detached || state.postTerminalStopped) return;
+  }
+
+  if (byte === 0x0d) {
+    state.pendingCr = true;
+  } else if (byte === 0x0a) {
+    endPostTerminalLine(state, 1, results);
+  } else {
+    consumePostTerminalContentByte(state, byte, results);
+  }
+}
+
+function consumePostTerminalContentByte(
+  state: ParserState,
+  byte: number,
+  results: FrameResult[],
+): void {
+  if (state.rawFrameBytes === state.maxFrameBytes) {
+    detachForOverflow(state, results);
+    return;
+  }
+
+  state.rawFrameBytes += 1;
+  state.currentLineBytes += 1;
+  validatePostTerminalUtf8Byte(state, byte);
+  classifyPostTerminalLineByte(state, byte);
+}
+
+function classifyPostTerminalLineByte(state: ParserState, byte: number): void {
+  if (state.currentLineBytes === 1 && byte === 0x3a) {
+    state.postLineKind = 'comment';
+    state.postFieldCandidates = 0;
+    return;
+  }
+  if (state.postLineKind !== 'field') return;
+
+  if (byte === 0x3a) {
+    observePostTerminalField(state);
+    state.postLineKind = 'value';
+    return;
+  }
+
+  let matching = 0;
+  for (const candidate of POST_FIELD_BYTES) {
+    if (candidate.bytes[state.postFieldLength] === byte) {
+      matching |= candidate.mask;
+    }
+  }
+  state.postFieldCandidates &= matching;
+  state.postFieldLength += 1;
+}
+
+function observePostTerminalField(state: ParserState): void {
+  const field = resolvedPostTerminalField(state);
+  if (field === POST_FIELD_DATA) {
+    state.postFrameHasData = true;
+  } else if (
+    field === POST_FIELD_EVENT ||
+    field === POST_FIELD_ID ||
+    field === POST_FIELD_RETRY
+  ) {
+    state.metadataObserved = true;
+  }
+}
+
+function resolvedPostTerminalField(state: ParserState): number {
+  for (const candidate of POST_FIELD_BYTES) {
+    if (
+      (state.postFieldCandidates & candidate.mask) !== 0 &&
+      candidate.bytes.length === state.postFieldLength
+    ) {
+      return candidate.mask;
+    }
+  }
+  return 0;
+}
+
+function endPostTerminalLine(
+  state: ParserState,
+  delimiterBytes: 1 | 2,
+  results: FrameResult[],
+): void {
+  if (state.currentLineBytes === 0) {
+    completePostTerminalFrame(state, results);
+    return;
+  }
+
+  if (state.postLineKind === 'field') observePostTerminalField(state);
+  if (state.postUtf8Remaining !== 0) {
+    state.postFrameInvalidUtf8 = true;
+    resetPostTerminalUtf8(state);
+  }
+  if (state.rawFrameBytes > state.maxFrameBytes - delimiterBytes) {
+    detachForOverflow(state, results);
+    return;
+  }
+
+  state.rawFrameBytes += delimiterBytes;
+  state.currentLineBytes = 0;
+  resetPostTerminalLine(state);
+}
+
+function completePostTerminalFrame(
+  state: ParserState,
+  results: FrameResult[],
+): void {
+  if (state.rawFrameBytes === 0) {
+    resetPostTerminalFrame(state);
+    return;
+  }
+
+  if (state.postFrameInvalidUtf8 || state.postUtf8Remaining !== 0) {
+    state.postTerminal = 'unknown';
+    state.postTerminalStopped = true;
+    resetPostTerminalFrame(state);
+    results.push({
+      kind: 'malformed',
+      code: 'sse-invalid-utf8',
+      afterTerminal: true,
+    });
+    return;
+  }
+
+  const firstContentFrame =
+    state.postFrameHasData && state.postTerminal === 'none-observed';
+  if (state.postFrameHasData) {
+    state.postTerminal = 'observed-not-retained';
+  }
+  resetPostTerminalFrame(state);
+  if (firstContentFrame) results.push({ kind: 'post-terminal-content' });
+}
+
+function validatePostTerminalUtf8Byte(state: ParserState, byte: number): void {
+  if (state.postFrameInvalidUtf8) return;
+
+  if (state.postUtf8Remaining !== 0) {
+    if (byte < state.postUtf8NextMin || byte > state.postUtf8NextMax) {
+      state.postFrameInvalidUtf8 = true;
+      resetPostTerminalUtf8(state);
+      return;
+    }
+    state.postUtf8Remaining -= 1;
+    state.postUtf8NextMin = 0x80;
+    state.postUtf8NextMax = 0xbf;
+    return;
+  }
+
+  if (byte <= 0x7f) return;
+  const lead = POST_UTF8_LEAD_RANGES.find(
+    (range) => byte >= range.first && byte <= range.last,
+  );
+  if (lead === undefined) {
+    state.postFrameInvalidUtf8 = true;
+    return;
+  }
+  beginPostTerminalUtf8(
+    state,
+    lead.remaining,
+    lead.nextMin,
+    lead.nextMax,
+  );
+}
+
+function beginPostTerminalUtf8(
+  state: ParserState,
+  remaining: number,
+  nextMin: number,
+  nextMax: number,
+): void {
+  state.postUtf8Remaining = remaining;
+  state.postUtf8NextMin = nextMin;
+  state.postUtf8NextMax = nextMax;
+}
+
+function signalPostTerminalPartial(
+  state: ParserState,
+  results: FrameResult[],
+): void {
+  state.postTerminal = 'unknown';
+  state.postTerminalStopped = true;
+  resetPostTerminalFrame(state);
+  results.push({
+    kind: 'malformed',
+    code: 'sse-partial-frame-at-eof',
+    afterTerminal: true,
+  });
+}
+
+function enterPostTerminal(state: ParserState): void {
+  state.terminalReached = true;
+  state.buffer = new Uint8Array(0);
+  resetPostTerminalFrame(state);
+}
+
+function resetPostTerminalFrame(state: ParserState): void {
+  resetFrame(state);
+  state.postFrameHasData = false;
+  state.postFrameInvalidUtf8 = false;
+  resetPostTerminalLine(state);
+  resetPostTerminalUtf8(state);
+}
+
+function resetPostTerminalLine(state: ParserState): void {
+  state.postLineKind = 'field';
+  state.postFieldCandidates = POST_FIELD_ALL;
+  state.postFieldLength = 0;
+}
+
+function resetPostTerminalUtf8(state: ParserState): void {
+  state.postUtf8Remaining = 0;
+  state.postUtf8NextMin = 0x80;
+  state.postUtf8NextMax = 0xbf;
 }
 
 function parseFrame(text: string): ParsedFrame {
@@ -395,6 +700,7 @@ function detachForOverflow(
   const afterTerminal = state.terminalReached;
   state.detached = true;
   if (afterTerminal) state.postTerminal = 'unknown';
+  state.buffer = new Uint8Array(0);
   resetFrame(state);
   results.push({
     kind: 'observation-failure',
