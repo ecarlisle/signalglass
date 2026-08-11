@@ -1,5 +1,5 @@
 /**
- * Network-free L2 streaming primitives (Spec 016 Slice S3).
+ * Network-free streaming primitives (Spec 016 S3/S4).
  *
  * Provider JSON decoding, evidence assembly, transport I/O, storage, clocks,
  * and randomness deliberately do not belong in this package.
@@ -8,6 +8,43 @@ export {
   SSE_MAX_FRAME_BYTES,
   createSseParser,
 } from './sse-parser.js';
+export {
+  DEFAULT_EVIDENCE_BUDGETS,
+  FAILURE_CLASSIFICATION,
+  OPENAI_SSE_DECODER_CONTRACT_NAME,
+  OPENAI_SSE_DECODER_CONTRACT_VERSION,
+  STREAMING_ASSEMBLER_NAME,
+  STREAMING_ASSEMBLER_VERSION,
+  assembleTrace,
+  classifyFailureCode,
+  countBudgetAllows,
+  measureFinalizableSnapshotBytes,
+  reservedTerminalSuffixCount,
+  validateEvidenceBudgets,
+} from './assembler.js';
+export type {
+  AssemblerBoundaryFacts,
+  AssemblerDecodedEvent,
+  AssemblerOptions,
+  AssemblyResult,
+  AssemblyTerminal,
+  AssemblyWarning,
+  EvidenceBudgets,
+  FinalizationBundle,
+  FinalizationValue,
+  TerminalReservationState,
+} from './assembler.js';
+export {
+  CAPTURE_PROFILE_NAME,
+  CAPTURE_PROFILE_VERSION,
+  DETECTOR_NAME,
+  DETECTOR_VERSION,
+  RETAINED_CONTENT_CODE_POINT_LIMIT,
+  countCodePoints,
+  normalizeRequestMessages,
+  retainText,
+} from './retention.js';
+export type { NormalizeMessagesResult, RetainedText } from './retention.js';
 export type {
   FrameResult,
   SseDecoderDisposition,

@@ -193,6 +193,10 @@ export type { VersionCheck } from './version.js';
 // Deterministic helpers (public contract facades over src/internal/*, §1.3)
 export { projectCanonicalEvent } from './project.js';
 export type { ProjectedEvent } from './project.js';
+export { collapseObservations } from './normalize.js';
+export type { CollapseOutcome } from './normalize.js';
+export { deriveTrace } from './derive-trace.js';
+export type { DeriveTraceResult, TraceMetadata } from './derive-trace.js';
 export { deriveCompleteness } from './completeness.js';
 export { sortUtf8, toJsonView } from './normalize.js';
 export { canonicalJson, isJsonSafe } from './canonical.js';

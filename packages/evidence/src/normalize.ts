@@ -79,6 +79,7 @@ type ExactGroup = {
   seq: number;
   obsIds: string[]; // sorted, unique
   proj: ProjectedEvent;
+  conflicting: boolean;
 };
 
 export type CollapseOutcome =
@@ -109,8 +110,15 @@ export function collapseObservations(
     const existing = groupsByKey.get(key);
     if (existing) {
       existing.obsIds.push(obs.observationId);
+      if (!jsonEqual(existing.proj, proj)) existing.conflicting = true;
     } else {
-      groupsByKey.set(key, { eventId: obs.eventId, seq: obs.seq, obsIds: [obs.observationId], proj });
+      groupsByKey.set(key, {
+        eventId: obs.eventId,
+        seq: obs.seq,
+        obsIds: [obs.observationId],
+        proj,
+        conflicting: false,
+      });
     }
   }
 
@@ -119,15 +127,7 @@ export function collapseObservations(
 
   // Per (eventId, seq) position: exact replay or content conflict.
   for (const g of groupsByKey.values()) {
-    const first = g.proj;
-    let conflicting = false;
-    for (const { obs, proj } of projected) {
-      if (obs.eventId === g.eventId && obs.seq === g.seq && !jsonEqual(first, proj)) {
-        conflicting = true;
-        break;
-      }
-    }
-    if (conflicting) {
+    if (g.conflicting) {
       issues.push({
         code: "same_id_same_seq_content_conflict",
         path: `${pathPrefix}[eventId=${g.eventId},seq=${g.seq}]`,
@@ -141,7 +141,8 @@ export function collapseObservations(
       eventId: g.eventId,
       seq: g.seq,
       obsIds: sortUtf8(g.obsIds),
-      proj: first,
+      proj: g.proj,
+      conflicting: false,
     });
   }
   if (issues.length > 0) return { ok: false, issues };

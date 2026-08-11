@@ -2,10 +2,11 @@
 
 Network-free streaming protocol primitives for SignalGlass.
 
-The current package implements Spec 016 Slice S3: a strict, incremental,
-byte-bounded SSE framing parser. It does not open sockets, perform HTTP I/O,
-decode provider JSON, assemble evidence, or persist data. Provider decoding and
-trace assembly remain pending in S4; ingress integration remains pending in S5.
+The package implements Spec 016 Slices S3–S4: a strict, incremental,
+byte-bounded SSE framing parser plus the provider-neutral deterministic evidence
+assembler. It does not open sockets, perform HTTP I/O, import provider adapters,
+read clocks/randomness, or persist data. The OpenAI SSE decoder lives in
+`@signalglass/providers`; ingress integration remains pending in S5.
 
 ## Public API
 
@@ -17,6 +18,10 @@ trace assembly remain pending in S4; ingress integration remains pending in S5.
 - `SseParserFacts`
 - `SseMalformedCode`
 - `SseDecoderDisposition`
+- `assembleTrace(options)` / `AssemblyResult`
+- `DEFAULT_EVIDENCE_BUDGETS` / `validateEvidenceBudgets()`
+- `retainText()` / `normalizeRequestMessages()`
+- closed failure-classification and terminal-reservation helpers
 
 The parser accepts `Uint8Array` chunks through `push()` and signals transport
 EOF through `finish()`. `facts()` exposes only closed facts and counters; raw
@@ -37,3 +42,12 @@ structural facts.
 The default and maximum frame budget is exactly 16 MiB. A smaller positive
 integer budget may be configured for deterministic boundary testing or a more
 restrictive observer policy.
+
+The assembler takes every nondeterministic value explicitly: ordinary event and
+observation IDs, capture timestamps, and a stable two-slot finalization bundle.
+It assigns canonical sequence positions, applies the v1.0.0 collection profile's
+detect-then-retain policy and 240-code-point leaf cap, admits raw/canonical
+observations atomically through the Spec 014 collapse rules, and reserves the
+complete terminal suffix while enforcing the serialized evidence budgets.
+`EvidenceRecord` remains authoritative; `trace` is its deterministic derived
+view. Post-terminal input is not admitted as a candidate.
