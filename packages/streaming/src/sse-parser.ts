@@ -288,6 +288,10 @@ function consumeByte(
     }
     endLine(state, 1, results);
     if (state.detached) return;
+    if (state.terminalReached) {
+      consumePostTerminalByte(state, byte, results);
+      return;
+    }
   }
 
   if (byte === 0x0d) {

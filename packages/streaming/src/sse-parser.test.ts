@@ -549,6 +549,58 @@ describe('@signalglass/streaming SSE parser (Spec 016 S3)', () => {
     });
   });
 
+  it('routes the first byte after a CR-only terminal into the bounded scanner', () => {
+    const prefixParser = createSseParser();
+    expect(prefixParser.push(bytes('data: [DONE]\r\rd'))).toEqual([
+      {
+        kind: 'frame',
+        data: '[DONE]',
+        terminal: true,
+        unrecognizedExtensionFrameObserved: false,
+      },
+    ]);
+    expect(prefixParser.facts()).toMatchObject({
+      bufferedBytes: 0,
+      postTerminal: 'none-observed',
+    });
+
+    const secret = 'cr-only-private-value';
+    const input = bytes(`data: [DONE]\r\rdata: ${secret}\r\r`);
+    const parse = (chunks: readonly Uint8Array[]) => {
+      const parser = createSseParser();
+      const results = chunks.flatMap((chunk) => [...parser.push(chunk)]);
+      const finish = parser.finish();
+      return { results, finish, facts: parser.facts() };
+    };
+    const expected = {
+      results: [
+        {
+          kind: 'frame',
+          data: '[DONE]',
+          terminal: true,
+          unrecognizedExtensionFrameObserved: false,
+        },
+      ],
+      finish: [{ kind: 'post-terminal-content' }],
+      facts: {
+        doneObserved: true,
+        detached: false,
+        bufferedBytes: 0,
+        maxFrameBytes: SSE_MAX_FRAME_BYTES,
+        postTerminal: 'observed-not-retained',
+        sseMetadataObservedButNotRetained: false,
+      },
+    } satisfies ReturnType<typeof parse>;
+
+    expect(parse([input])).toEqual(expected);
+    expect(JSON.stringify(parse([input]))).not.toContain(secret);
+    for (let split = 0; split <= input.byteLength; split += 1) {
+      expect(parse([input.subarray(0, split), input.subarray(split)])).toEqual(
+        expected,
+      );
+    }
+  });
+
   it('treats repeated DONE frames as one post-terminal content transition', () => {
     const parser = createSseParser();
     parser.push(bytes('data: [DONE]\n\n'));
