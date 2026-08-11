@@ -205,6 +205,25 @@ function rawPayloadByteLength(observation: EvidenceObservation): number {
   return utf8Encode(JSON.stringify(observation.payload)).byteLength;
 }
 
+const RESUMED_CAPACITY_PADDING = { padding: 'x'.repeat(5_100_000) };
+
+function withResumedCapacityPadding(
+  observations: readonly EvidenceObservation[],
+): readonly EvidenceObservation[] {
+  return observations.map((observation) => observation.kind === 'model_request'
+    ? {
+      ...observation,
+      payload: {
+        ...observation.payload,
+        requestEnvelope: {
+          ...observation.payload['requestEnvelope'] as Record<string, unknown>,
+          providerNative: RESUMED_CAPACITY_PADDING,
+        },
+      },
+    }
+    : observation);
+}
+
 let cachedContentBudgetRejection: ReturnType<typeof assembleTrace> | undefined;
 function contentBudgetRejection(): ReturnType<typeof assembleTrace> {
   if (cachedContentBudgetRejection !== undefined) return cachedContentBudgetRejection;
@@ -795,6 +814,144 @@ describe('Spec 016 S4 assembler', () => {
       .toBeLessThanOrEqual(rejected.boundary.streaming!.budgets.maxSerializedEvidenceBytes);
     expect(rejected.trace.events.at(-1)).toMatchObject({ error: { type: 'record-budget-exceeded' } });
   }, 15_000);
+
+  it('capacity-qualifies a resumed prefix against exact ordinary and rollback finalizations before its first candidate', () => {
+    const base = options();
+    const failureBoundary: AssemblerOptions['boundaryFacts'] = {
+      upstream: { outcome: 'connection-failed' },
+      clientResponse: { outcome: 'local-error-flushed' },
+      decoderDisposition: 'not-applicable',
+      remainder: { knowledge: 'unknown' },
+      losses: { ...base.boundaryFacts.losses, deltaContent: 'not-observed', providerNative: 'retained' },
+    };
+    const seed = assembleTrace(options({
+      responseMeta: undefined,
+      decodedEvents: [],
+      terminal: { kind: 'upstream-failed', code: 'connection-error' },
+      boundaryFacts: {
+        ...failureBoundary,
+        losses: { ...failureBoundary.losses, providerNative: 'not-retained' },
+      },
+    }));
+    const prefix = withResumedCapacityPadding(seed.record.rawObservations.slice(0, -1));
+    const roomyOptions = resumedOptions(prefix, 'completion-possible', {
+      terminal: { kind: 'upstream-failed', code: 'connection-error' },
+      boundaryFacts: failureBoundary,
+      terminalBoundaryPreviews: [],
+      evidenceBudgets: {
+        ...DEFAULT_EVIDENCE_BUDGETS,
+        maxRawObservationPayloadBytes: 67_108_864,
+        maxSerializedEvidenceBytes: 67_108_864,
+      },
+    });
+    const roomy = assembleTrace(roomyOptions);
+    const ordinary = roomy.budgetMeasurements.terminalAlternatives.find((alternative) =>
+      alternative.terminal.kind === 'upstream-failed')!;
+    const rollback = roomy.budgetMeasurements.terminalAlternatives.filter((alternative) =>
+      alternative.terminal.kind === 'observation-detached');
+    const exactLimit = roomy.budgetMeasurements.maximumFinalizableSnapshotBytes;
+    expect(rollback).toHaveLength(2);
+    const rollbackLimit = Math.max(...rollback.map((alternative) => alternative.serializedBytes));
+    expect(rollbackLimit).toBeGreaterThan(ordinary.serializedBytes);
+    expect(exactLimit).toBe(rollbackLimit);
+    expect(exactLimit).toBeGreaterThanOrEqual(10_000_000);
+    expect(() => assembleTrace({
+      ...roomyOptions,
+      evidenceBudgets: {
+        ...roomyOptions.evidenceBudgets!,
+        maxSerializedEvidenceBytes: ordinary.serializedBytes,
+      },
+    })).toThrow(/initial state exceeds evidence capacity: serialized evidence bytes/);
+
+    const exactBudgets = {
+      ...roomyOptions.evidenceBudgets!,
+      maxSerializedEvidenceBytes: exactLimit,
+    };
+    const exact = assembleTrace({ ...roomyOptions, evidenceBudgets: exactBudgets });
+    expect(exact.budgetMeasurements.maximumFinalizableSnapshotBytes).toBe(exactLimit);
+    expect(exact.trace.events.at(-1)).toMatchObject({ error: { type: 'connection-error' } });
+
+    const source = prefix.find((observation) => observation.kind === 'model_request')!;
+    const conflictingCandidate: EvidenceObservation = {
+      ...source,
+      observationId: 'resumed-first-conflict',
+      payload: {
+        ...source.payload,
+        requestEnvelope: {
+          ...source.payload['requestEnvelope'] as Record<string, unknown>,
+          model: 'conflicting-model',
+        },
+      },
+      rawCapturedAt: '2026-08-11T19:07:00.000Z',
+    };
+    const rejected = assembleTrace({
+      ...roomyOptions,
+      evidenceBudgets: exactBudgets,
+      additionalRawObservations: [conflictingCandidate],
+    });
+    expect(rejected.warnings).toEqual(['candidate-structurally-rejected']);
+    expect(rejected.record.rawObservations.slice(0, -1)).toEqual(prefix);
+    expect(rejected.record.rawObservations.some((observation) =>
+      observation.observationId === conflictingCandidate.observationId)).toBe(false);
+    expect(rejected.trace.events.at(-1)).toMatchObject({ error: { type: 'internal-capture-error' } });
+
+    let firstCandidateRead = false;
+    const unreadCandidate = {
+      ...conflictingCandidate,
+      get observationId(): string {
+        firstCandidateRead = true;
+        return 'unread-resumed-candidate';
+      },
+    };
+    const prefixBeforeFailure = JSON.stringify(prefix);
+    expect(() => assembleTrace({
+      ...roomyOptions,
+      evidenceBudgets: { ...exactBudgets, maxSerializedEvidenceBytes: exactLimit - 1 },
+      additionalRawObservations: [unreadCandidate],
+    })).toThrow(/initial state exceeds evidence capacity: serialized evidence bytes/);
+    expect(firstCandidateRead).toBe(false);
+    expect(JSON.stringify(prefix)).toBe(prefixBeforeFailure);
+  }, 60_000);
+
+  it('capacity-qualifies exact-fit and one-byte-over span-closed resumed states', () => {
+    const baseline = assembleTrace(options());
+    const closed = withResumedCapacityPadding(baseline.record.rawObservations.slice(0, -1));
+    const base = options();
+    const roomyOptions = resumedOptions(closed, 'span-closed', {
+      terminalBoundaryPreviews: [],
+      finalizationBundle: [
+        { eventId: 'capacity-closed-end', observationId: 'capacity-closed-end-observation', capturedAt: '2026-08-11T19:08:00.000Z' },
+        { eventId: 'capacity-closed-unused', observationId: 'capacity-closed-unused-observation', capturedAt: '2026-08-11T19:08:01.000Z' },
+      ],
+      boundaryFacts: {
+        ...base.boundaryFacts,
+        losses: {
+          ...base.boundaryFacts.losses,
+          deltaContent: 'fully-retained',
+          providerNative: 'retained',
+        },
+      },
+      evidenceBudgets: {
+        ...DEFAULT_EVIDENCE_BUDGETS,
+        maxRawObservationPayloadBytes: 67_108_864,
+        maxSerializedEvidenceBytes: 67_108_864,
+      },
+    });
+    const roomy = assembleTrace(roomyOptions);
+    const exactLimit = roomy.budgetMeasurements.maximumFinalizableSnapshotBytes;
+    expect(exactLimit).toBeGreaterThanOrEqual(10_000_000);
+    const exactBudgets = {
+      ...roomyOptions.evidenceBudgets!,
+      maxSerializedEvidenceBytes: exactLimit,
+    };
+    const exact = assembleTrace({ ...roomyOptions, evidenceBudgets: exactBudgets });
+    expect(exact.budgetMeasurements.maximumFinalizableSnapshotBytes).toBe(exactLimit);
+    expect(exact.trace.events.at(-1)).toMatchObject({ kind: 'interaction_end' });
+    expect(() => assembleTrace({
+      ...roomyOptions,
+      evidenceBudgets: { ...exactBudgets, maxSerializedEvidenceBytes: exactLimit - 1 },
+    })).toThrow(/initial state exceeds evidence capacity: serialized evidence bytes/);
+  }, 60_000);
 
   it('T154/T159 completes at the real two-slot canonical boundary', () => {
     const baseline = assembleTrace(options());

@@ -379,7 +379,12 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
     effectiveBoundaryFacts = withUnknownRemainder(options.boundaryFacts);
   }
   let boundary = buildBoundary(effectiveBoundaryFacts, lossFacts, budgets);
-  if (options.initialState !== undefined) assertInitialState(retained, budgets, options, boundary);
+  if (options.initialState !== undefined) {
+    assertInitialState(retained, budgets, options, boundary);
+    assertInitialStateCapacity(
+      retained, boundary, options, budgets, requestContentCodePoints, state, terminal,
+    );
+  }
 
   const admitMany = (observations: readonly EvidenceObservation[]): ObservationFailureCode | undefined => {
     const admission = admitCandidate(
@@ -605,10 +610,7 @@ function admitCandidate(
   if (!collapse.ok) return reject('structural');
   if (!countBudgetAllows(collapse.events.length, scratch.length, budgets, state)) return reject('budget');
   const rawBytes = scratch.reduce((sum, observation) => sum + rawPayloadBytes(observation), 0);
-  const deltaCodePoints = collapse.events.reduce((sum, event) => {
-    if (event.kind !== 'model_response_chunk') return sum;
-    return sum + countCodePoints(event.responseEnvelope.deltaText ?? '');
-  }, 0);
+  const deltaCodePoints = retainedDeltaContentCodePoints(collapse.events);
   if (requestContentCodePoints + deltaCodePoints > budgets.maxRetainedContentCodePoints) return reject('budget');
   const maximum = maximumFinalizableSnapshot(scratch, boundary, options, state, effectiveTerminal);
   if (maximum.snapshots.length === 0) return reject('structural');
@@ -631,19 +633,7 @@ function maximumFinalizableSnapshot(
 ): TerminalPreviewMaximum {
   const snapshots: TerminalSnapshot[] = [];
   const alternatives: FinalizationPlan[] = [
-    { terminal: effectiveTerminal, boundary, boundaryMode: 'explicit' },
-    ...(state === 'completion-possible' ? [
-      {
-        terminal: { kind: 'observation-detached', code: 'record-budget-exceeded' } as const,
-        boundary,
-        boundaryMode: 'rollback-detachment' as const,
-      },
-      {
-        terminal: { kind: 'observation-detached', code: 'internal-capture-error' } as const,
-        boundary,
-        boundaryMode: 'rollback-detachment' as const,
-      },
-    ] : []),
+    ...authoritativeFinalizationPlans(boundary, state, effectiveTerminal),
     ...options.terminalBoundaryPreviews.map((preview) => ({
       terminal: preview.terminal,
       boundary: buildBoundary(preview.boundaryFacts, preview.boundaryFacts.losses, options.evidenceBudgets ?? DEFAULT_EVIDENCE_BUDGETS),
@@ -669,6 +659,28 @@ function maximumFinalizableSnapshot(
     serializedBytes: Math.max(0, ...snapshots.map((snapshot) => snapshot.serializedBytes)),
     rawPayloadBytes: Math.max(0, ...snapshots.map((snapshot) => snapshot.rawPayloadBytes)),
   };
+}
+
+function authoritativeFinalizationPlans(
+  boundary: CaptureBoundary,
+  state: AssemblerState,
+  effectiveTerminal: AssemblyTerminal,
+): readonly FinalizationPlan[] {
+  return [
+    { terminal: effectiveTerminal, boundary, boundaryMode: 'explicit' },
+    ...(state === 'completion-possible' ? [
+      {
+        terminal: { kind: 'observation-detached', code: 'record-budget-exceeded' } as const,
+        boundary,
+        boundaryMode: 'rollback-detachment' as const,
+      },
+      {
+        terminal: { kind: 'observation-detached', code: 'internal-capture-error' } as const,
+        boundary,
+        boundaryMode: 'rollback-detachment' as const,
+      },
+    ] : []),
+  ];
 }
 
 function constructFinalizationSnapshot(
@@ -857,6 +869,12 @@ function retainedRequestContentCodePoints(observations: readonly EvidenceObserva
     }
   }
   return total;
+}
+
+function retainedDeltaContentCodePoints(events: readonly EventRecord[]): number {
+  return events.reduce((sum, event) => event.kind === 'model_response_chunk'
+    ? sum + countCodePoints(event.responseEnvelope.deltaText ?? '')
+    : sum, 0);
 }
 
 function terminalObservation(
@@ -1051,6 +1069,54 @@ function assertIdentityInputs(options: AssemblerOptions, budgets: EvidenceBudget
     if (reservedIds.has(observation.eventId) || reservedIds.has(observation.observationId)) {
       throw new RangeError('initial state collides with the reserved finalization identity namespace');
     }
+  }
+}
+
+// fallow-ignore-next-line complexity -- closed Spec 016 resumed-state capacity matrix
+function assertInitialStateCapacity(
+  observations: readonly EvidenceObservation[],
+  boundary: CaptureBoundary,
+  options: AssemblerOptions,
+  budgets: EvidenceBudgets,
+  requestContentCodePoints: number,
+  state: AssemblerState,
+  effectiveTerminal: AssemblyTerminal,
+): void {
+  const collapse = collapseObservations(observations, 'rawObservations');
+  if (!collapse.ok) throw new RangeError('initial state must satisfy Spec 014 collapse invariants');
+  if (!countBudgetAllows(collapse.events.length, observations.length, budgets, state)) {
+    throw new RangeError('initial state exceeds evidence capacity: terminal count reservation');
+  }
+  if (requestContentCodePoints + retainedDeltaContentCodePoints(collapse.events)
+    > budgets.maxRetainedContentCodePoints) {
+    throw new RangeError('initial state exceeds evidence capacity: retained content');
+  }
+
+  // A supplied candidate may own facts (for example response metadata or
+  // provider-native content) needed by the ordinary terminal boundary. Before
+  // reading it, only rollback finalizations are candidate-independent. With no
+  // future candidate, or after the span is closed, the ordinary terminal is
+  // also immediately required.
+  const futureCandidateMayCompleteBoundary = state === 'completion-possible'
+    && (options.additionalRawObservations?.length ?? 0) > 0;
+  const requiredPlans = authoritativeFinalizationPlans(boundary, state, effectiveTerminal).filter((plan) =>
+    !futureCandidateMayCompleteBoundary || plan.boundaryMode === 'rollback-detachment');
+  const requiredSnapshots = requiredPlans.map((plan) =>
+    constructFinalizationSnapshot(observations, plan, options, state, budgets));
+  if (requiredSnapshots.some((snapshot) => snapshot === undefined)) {
+    throw new RangeError('initial state cannot produce every required finalization snapshot');
+  }
+  const maximum = maximumFinalizableSnapshot(
+    observations, boundary, options, state, effectiveTerminal,
+  );
+  const retainedRawPayloadBytes = observations.reduce(
+    (sum, observation) => sum + rawPayloadBytes(observation), 0,
+  ) + maximum.rawPayloadBytes;
+  if (retainedRawPayloadBytes > budgets.maxRawObservationPayloadBytes) {
+    throw new RangeError('initial state exceeds evidence capacity: raw observation payload bytes');
+  }
+  if (maximum.serializedBytes > budgets.maxSerializedEvidenceBytes) {
+    throw new RangeError('initial state exceeds evidence capacity: serialized evidence bytes');
   }
 }
 
