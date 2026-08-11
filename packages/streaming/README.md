@@ -48,6 +48,10 @@ observation IDs, capture timestamps, and a stable two-slot finalization bundle.
 It assigns canonical sequence positions, applies the v1.0.0 collection profile's
 detect-then-retain policy and 240-code-point leaf cap, admits raw/canonical
 observations atomically through the Spec 014 collapse rules, and reserves the
-complete terminal suffix while enforcing the serialized evidence budgets.
+complete terminal suffix while enforcing the serialized evidence budgets with
+the canonical evidence serializer. Terminal previews and actual finalization
+share one constructor and apply terminal-specific authoritative boundary facts.
+The completed path transitions through a real span-closed state, where the
+reservation drops from two slots to the one remaining `interaction_end` slot.
 `EvidenceRecord` remains authoritative; `trace` is its deterministic derived
 view. Post-terminal input is not admitted as a candidate.

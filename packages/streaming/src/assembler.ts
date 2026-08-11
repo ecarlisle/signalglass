@@ -14,6 +14,7 @@ import {
   deriveCompleteness,
   deriveTrace,
   parseEvidenceRecord,
+  serializeEvidenceRecord,
   utf8Encode,
   type CaptureBoundary,
   type ClientRequestFailureCode,
@@ -113,6 +114,11 @@ export type AssemblerOptions = {
   evidenceBudgets?: EvidenceBudgets;
   /** Spec 014 observations supplied by replay/capture paths, admitted atomically. */
   additionalRawObservations?: readonly EvidenceObservation[];
+  /** Narrow resumable assembly state for an already-open or already-closed model span. */
+  initialState?: {
+    observations: readonly EvidenceObservation[];
+    state: TerminalReservationState;
+  };
 };
 
 export type AssemblyWarning =
@@ -125,6 +131,20 @@ export type AssemblyResult = {
   boundary: CaptureBoundary;
   warnings: readonly AssemblyWarning[];
   record: EvidenceRecord;
+  budgetMeasurements: {
+    actualSerializedEvidenceBytes: number;
+    maximumFinalizableSnapshotBytes: number;
+    rawObservationPayloadBytes: number;
+    preterminalRawObservationPayloadBytes: number;
+    maximumFinalizableRawPayloadBytes: number;
+    terminalAlternatives: readonly {
+      terminal: AssemblyTerminal;
+      suffixCount: number;
+      serializedBytes: number;
+      rawPayloadBytes: number;
+      boundary: CaptureBoundary;
+    }[];
+  };
 };
 
 export const FAILURE_CLASSIFICATION = {
@@ -134,6 +154,48 @@ export const FAILURE_CLASSIFICATION = {
   observationDetached: [...OBSERVATION_FAILURE_CODES, ...INTERNAL_DECODER_FAILURE_CODES],
 } as const;
 
+export type FailureClassificationRow = {
+  code: ClientRequestFailureCode | UpstreamFailureCode | MalformedStreamCode | ObservationFailureCode | InternalDecoderFailureCode;
+  terminal: Extract<ObservationTerminal, 'request-failed' | 'upstream-failed' | 'malformed-stream' | 'observation-detached'>;
+  eventKind: 'error';
+  eventCode: string;
+  actor: 'capture' | 'model';
+  observationRole: 'application_constructed' | 'provider_reported' | 'unobservable';
+  lifecycleTarget: 'trace' | 'none';
+  lifecycleEffect: 'fail' | 'none';
+  traceStatus: 'failed' | 'unknown';
+  completenessTerminal: ObservationTerminal;
+};
+
+function classificationRow(
+  code: FailureClassificationRow['code'],
+  terminal: FailureClassificationRow['terminal'],
+): FailureClassificationRow {
+  if (terminal === 'request-failed') return {
+    code, terminal, eventKind: 'error', eventCode: code, actor: 'capture',
+    observationRole: 'application_constructed', lifecycleTarget: 'trace', lifecycleEffect: 'fail',
+    traceStatus: 'failed', completenessTerminal: terminal,
+  };
+  if (terminal === 'observation-detached') return {
+    code, terminal, eventKind: 'error', eventCode: code === 'decode-error' ? 'internal-capture-error' : code,
+    actor: 'capture', observationRole: 'unobservable', lifecycleTarget: 'none', lifecycleEffect: 'none',
+    traceStatus: 'unknown', completenessTerminal: terminal,
+  };
+  return {
+    code, terminal, eventKind: 'error', eventCode: code, actor: 'model',
+    observationRole: 'provider_reported', lifecycleTarget: 'trace', lifecycleEffect: 'fail',
+    traceStatus: 'failed', completenessTerminal: terminal,
+  };
+}
+
+export const FAILURE_CLASSIFICATION_ROWS: readonly FailureClassificationRow[] = [
+  ...CLIENT_REQUEST_FAILURE_CODES.map((code) => classificationRow(code, 'request-failed')),
+  ...UPSTREAM_FAILURE_CODES.map((code) => classificationRow(code, 'upstream-failed')),
+  ...MALFORMED_STREAM_CODES.map((code) => classificationRow(code, 'malformed-stream')),
+  ...OBSERVATION_FAILURE_CODES.map((code) => classificationRow(code, 'observation-detached')),
+  ...INTERNAL_DECODER_FAILURE_CODES.map((code) => classificationRow(code, 'observation-detached')),
+];
+
 const TERMINAL_SUFFIX_ALTERNATIVES: readonly AssemblyTerminal[] = [
   { kind: 'completed' },
   ...UPSTREAM_FAILURE_CODES.map((code) => ({ kind: 'upstream-failed' as const, code })),
@@ -142,9 +204,27 @@ const TERMINAL_SUFFIX_ALTERNATIVES: readonly AssemblyTerminal[] = [
   { kind: 'client-cancelled' },
   { kind: 'ingress-cancelled' },
   ...OBSERVATION_FAILURE_CODES.map((code) => ({ kind: 'observation-detached' as const, code })),
+  ...INTERNAL_DECODER_FAILURE_CODES.map((code) => ({ kind: 'observation-detached' as const, code })),
 ];
 
 export type TerminalReservationState = 'completion-possible' | 'span-closed';
+
+type AssemblerState = TerminalReservationState;
+
+type TerminalSnapshot = {
+  terminal: AssemblyTerminal;
+  boundary: CaptureBoundary;
+  suffix: readonly EvidenceObservation[];
+  record: EvidenceRecord;
+  serializedBytes: number;
+  rawPayloadBytes: number;
+};
+
+type TerminalPreviewMaximum = {
+  snapshots: readonly TerminalSnapshot[];
+  serializedBytes: number;
+  rawPayloadBytes: number;
+};
 
 export function reservedTerminalSuffixCount(state: TerminalReservationState): 1 | 2 {
   return state === 'completion-possible' ? 2 : 1;
@@ -182,10 +262,15 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
 
   const normalizedRequest = normalizeRequestMessages(options.requestMessages);
   const warnings: AssemblyWarning[] = [];
-  const retained: EvidenceObservation[] = [];
+  const retained: EvidenceObservation[] = [...(options.initialState?.observations ?? [])];
+  if (options.initialState !== undefined) assertInitialState(retained, budgets);
   let ordinaryIdPosition = 0;
   let terminal = options.terminal;
+  const state: AssemblerState = options.initialState?.state ?? 'completion-possible';
   let detachedCode: ObservationFailureCode | InternalDecoderFailureCode | undefined;
+  const requestContentCodePoints = options.initialState === undefined
+    ? normalizedRequest.retainedCodePoints
+    : retainedRequestContentCodePoints(retained);
 
   const nextOrdinary = (): FinalizationValue => {
     const eventId = options.ids.eventIds[ordinaryIdPosition];
@@ -232,7 +317,7 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
   }
 
   const decodedBlueprints: EventBlueprint[] = [];
-  if (terminal.kind !== 'request-failed') {
+  if (options.initialState === undefined && terminal.kind !== 'request-failed') {
     for (const decoded of options.decodedEvents) {
       if (decoded.kind === 'provider-error') {
         if (terminal.kind !== 'upstream-failed' || terminal.code !== 'provider-error-frame') {
@@ -246,13 +331,15 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
     }
   }
 
-  const lossFacts = deriveLossFacts(
-    options.boundaryFacts.losses,
-    normalizedRequest,
-    options.decodedEvents,
-    terminal.kind !== 'request-failed',
-    options.responseMeta,
-  );
+  const lossFacts = options.initialState === undefined
+    ? deriveLossFacts(
+      options.boundaryFacts.losses,
+      normalizedRequest,
+      options.decodedEvents,
+      terminal.kind !== 'request-failed',
+      options.responseMeta,
+    )
+    : { ...options.boundaryFacts.losses };
   if (
     terminal.kind === 'upstream-failed'
     && (terminal.code === 'http-error-status' || terminal.code === 'provider-error-frame')
@@ -265,9 +352,9 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
   }
   let boundary = buildBoundary(effectiveBoundaryFacts, lossFacts, budgets);
 
-  const admitOne = (observation: EvidenceObservation): ObservationFailureCode | undefined => {
+  const admitMany = (observations: readonly EvidenceObservation[]): ObservationFailureCode | undefined => {
     const verdict = admitCandidate(
-      retained, observation, boundary, options, budgets, normalizedRequest.retainedCodePoints,
+      retained, observations, boundary, options, budgets, requestContentCodePoints, state,
     );
     if (verdict === 'structural') {
       warnings.push('candidate-structurally-rejected');
@@ -277,52 +364,82 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
       warnings.push('candidate-budget-rejected');
       return 'record-budget-exceeded';
     }
-    retained.push(observation);
+    retained.push(...observations);
     return undefined;
   };
 
-  for (const blueprint of [...baseEvents, ...decodedBlueprints]) {
+  const blueprints = options.initialState === undefined ? [...baseEvents, ...decodedBlueprints] : [];
+  for (let position = 0; position < blueprints.length; position += 1) {
+    const blueprint = blueprints[position]!;
     const allocation = nextOrdinary();
     const observation = observationFromBlueprint(blueprint, allocation, retained.length, options.traceId);
-    detachedCode = admitOne(observation);
+    if (blueprint.kind === 'model_request' && blueprints[position + 1]?.kind === 'span_start') {
+      const spanBlueprint = blueprints[position + 1]!;
+      const spanObservation = observationFromBlueprint(
+        spanBlueprint,
+        nextOrdinary(),
+        retained.length + 1,
+        options.traceId,
+      );
+      detachedCode = admitMany([observation, spanObservation]);
+      position += 1;
+    } else {
+      detachedCode = admitMany([observation]);
+    }
     if (detachedCode !== undefined) break;
   }
 
   if (detachedCode === undefined) {
     for (const observation of options.additionalRawObservations ?? []) {
-      detachedCode = admitOne(observation);
+      detachedCode = admitMany([observation]);
       if (detachedCode !== undefined) break;
     }
   }
 
   if (detachedCode !== undefined) {
     terminal = { kind: 'observation-detached', code: detachedCode };
-    boundary = buildBoundary(
-      withUnknownRemainder(options.boundaryFacts),
-      lossFacts,
-      budgets,
-    );
+    boundary = transitionBoundaryForTerminal(boundary, terminal, retained);
   }
 
-  const terminalSeq = nextCanonicalSeq(retained);
-  const terminalObservations = buildTerminalObservations(
-    terminal,
-    terminalSeq,
-    options.traceId,
-    options.modelSpanId,
-    options.finalizationBundle,
-  );
-  const finalObservations = [...retained, ...terminalObservations];
-  const record = buildRecord(finalObservations, boundary);
-  const parsed = parseEvidenceRecord(record);
-  if (!parsed.ok) {
-    const codes = parsed.issues.map((issue) => issue.code).join(', ');
-    throw new Error(`assembleTrace produced invalid evidence (${codes})`);
+  const previews = maximumFinalizableSnapshot(retained, boundary, options, state);
+  const actual = finalizeTerminalSnapshot(retained, boundary, options, terminal, state, budgets, true);
+  if (actual === undefined) {
+    throw new Error('assembleTrace could not construct a valid terminal snapshot');
   }
-  if (utf8Encode(JSON.stringify(record)).byteLength > budgets.maxSerializedEvidenceBytes) {
+  if (actual.serializedBytes > budgets.maxSerializedEvidenceBytes) {
     throw new RangeError('reserved terminal suffix exceeds maxSerializedEvidenceBytes');
   }
-  return { trace: record.trace, boundary, warnings, record };
+  const rawObservationPayloadBytes = actual.record.rawObservations.reduce(
+    (sum, observation) => sum + rawPayloadBytes(observation),
+    0,
+  );
+  const preterminalRawObservationPayloadBytes = retained.reduce(
+    (sum, observation) => sum + rawPayloadBytes(observation),
+    0,
+  );
+  if (rawObservationPayloadBytes > budgets.maxRawObservationPayloadBytes) {
+    throw new RangeError('reserved terminal suffix exceeds maxRawObservationPayloadBytes');
+  }
+  return {
+    trace: actual.record.trace,
+    boundary: actual.boundary,
+    warnings,
+    record: actual.record,
+    budgetMeasurements: {
+      actualSerializedEvidenceBytes: actual.serializedBytes,
+      maximumFinalizableSnapshotBytes: previews.serializedBytes,
+      rawObservationPayloadBytes,
+      preterminalRawObservationPayloadBytes,
+      maximumFinalizableRawPayloadBytes: previews.rawPayloadBytes,
+      terminalAlternatives: previews.snapshots.map((snapshot) => ({
+        terminal: snapshot.terminal,
+        suffixCount: snapshot.suffix.length,
+        serializedBytes: snapshot.serializedBytes,
+        rawPayloadBytes: snapshot.rawPayloadBytes,
+        boundary: snapshot.boundary,
+      })),
+    },
+  };
 }
 
 type EventBlueprint = {
@@ -392,82 +509,166 @@ function observationFromBlueprint(
   };
 }
 
+// fallow-ignore-next-line complexity -- normative atomic-admission budget matrix
 function admitCandidate(
   current: readonly EvidenceObservation[],
-  candidate: EvidenceObservation,
+  candidates: readonly EvidenceObservation[],
   boundary: CaptureBoundary,
   options: AssemblerOptions,
   budgets: EvidenceBudgets,
   requestContentCodePoints: number,
+  state: AssemblerState,
 ): 'accepted' | 'structural' | 'budget' {
-  if (current.some((observation) => observation.observationId === candidate.observationId)) return 'structural';
-  if (!idWithinBudget(candidate.eventId, budgets) || !idWithinBudget(candidate.observationId, budgets)) return 'structural';
-  const scratch = [...current, candidate];
+  const observationIds = new Set(current.map((observation) => observation.observationId));
+  for (const candidate of candidates) {
+    if (observationIds.has(candidate.observationId)) return 'structural';
+    observationIds.add(candidate.observationId);
+    if (!idWithinBudget(candidate.eventId, budgets) || !idWithinBudget(candidate.observationId, budgets)) return 'structural';
+  }
+  const scratch = [...current, ...candidates];
   const collapse = collapseObservations(scratch, 'rawObservations');
   if (!collapse.ok) return 'structural';
-  if (!countBudgetAllows(collapse.events.length, scratch.length, budgets, 'completion-possible')) return 'budget';
-  const rawBytes = scratch.reduce((sum, observation) => sum + utf8Encode(JSON.stringify(observation.payload)).byteLength, 0);
-  const reservedRawBytes = maximumTerminalRawPayloadBytes(
-    nextCanonicalSeq(scratch), options.traceId, options.modelSpanId, options.finalizationBundle,
-  );
-  if (rawBytes + reservedRawBytes > budgets.maxRawObservationPayloadBytes) return 'budget';
+  if (!countBudgetAllows(collapse.events.length, scratch.length, budgets, state)) return 'budget';
+  const rawBytes = scratch.reduce((sum, observation) => sum + rawPayloadBytes(observation), 0);
   const deltaCodePoints = collapse.events.reduce((sum, event) => {
     if (event.kind !== 'model_response_chunk') return sum;
     return sum + countCodePoints(event.responseEnvelope.deltaText ?? '');
   }, 0);
   if (requestContentCodePoints + deltaCodePoints > budgets.maxRetainedContentCodePoints) return 'budget';
-  const maximum = maximumFinalizableSnapshotBytes(scratch, boundary, options);
-  return maximum <= budgets.maxSerializedEvidenceBytes ? 'accepted' : 'budget';
+  const maximum = maximumFinalizableSnapshot(scratch, boundary, options, state);
+  if (maximum.snapshots.length === 0) return 'structural';
+  if (rawBytes + maximum.rawPayloadBytes > budgets.maxRawObservationPayloadBytes) return 'budget';
+  return maximum.serializedBytes <= budgets.maxSerializedEvidenceBytes ? 'accepted' : 'budget';
 }
 
 export function measureFinalizableSnapshotBytes(record: EvidenceRecord): number {
-  return utf8Encode(JSON.stringify(record)).byteLength;
+  return utf8Encode(serializeEvidenceRecord(record, { allowBudgetExcess: true })).byteLength;
 }
 
-function maximumFinalizableSnapshotBytes(
+function maximumFinalizableSnapshot(
   observations: readonly EvidenceObservation[],
   boundary: CaptureBoundary,
   options: AssemblerOptions,
-): number {
-  let maximum = 0;
+  state: AssemblerState,
+): TerminalPreviewMaximum {
+  const snapshots: TerminalSnapshot[] = [];
   for (const terminal of TERMINAL_SUFFIX_ALTERNATIVES) {
-    const suffix = buildTerminalObservations(
-      terminal, nextCanonicalSeq(observations), options.traceId, options.modelSpanId, options.finalizationBundle,
+    if (state === 'span-closed' && terminal.kind !== 'completed') continue;
+    const alternativeBoundary = terminalEquals(terminal, options.terminal)
+      ? boundary
+      : transitionBoundaryForTerminal(boundary, terminal, observations);
+    const snapshot = finalizeTerminalSnapshot(
+      observations,
+      alternativeBoundary,
+      options,
+      terminal,
+      state,
+      options.evidenceBudgets ?? DEFAULT_EVIDENCE_BUDGETS,
     );
-    const record = buildRecord([...observations, ...suffix], boundary);
-    maximum = Math.max(maximum, measureFinalizableSnapshotBytes(record));
+    if (snapshot !== undefined) snapshots.push(snapshot);
   }
-  return maximum;
+  return {
+    snapshots,
+    serializedBytes: Math.max(0, ...snapshots.map((snapshot) => snapshot.serializedBytes)),
+    rawPayloadBytes: Math.max(0, ...snapshots.map((snapshot) => snapshot.rawPayloadBytes)),
+  };
 }
 
-function maximumTerminalRawPayloadBytes(
-  seq: number,
-  traceId: string,
-  modelSpanId: string,
-  bundle: FinalizationBundle,
-): number {
-  let maximum = 0;
-  for (const terminal of TERMINAL_SUFFIX_ALTERNATIVES) {
-    const bytes = buildTerminalObservations(terminal, seq, traceId, modelSpanId, bundle)
-      .reduce((sum, observation) => sum + utf8Encode(JSON.stringify(observation.payload)).byteLength, 0);
-    maximum = Math.max(maximum, bytes);
+// fallow-ignore-next-line complexity -- closed state-dependent terminal finalization matrix
+function finalizeTerminalSnapshot(
+  observations: readonly EvidenceObservation[],
+  boundary: CaptureBoundary,
+  options: AssemblerOptions,
+  terminal: AssemblyTerminal,
+  state: AssemblerState,
+  budgets: EvidenceBudgets,
+  diagnose = false,
+  spanClosedBundleIndex: 0 | 1 = 0,
+): TerminalSnapshot | undefined {
+  if (terminal.kind === 'completed' && state === 'completion-possible') {
+    const spanEnd = terminalObservation(
+      { kind: 'span_end', spanId: options.modelSpanId, evidenceStatus: 'captured' },
+      options.finalizationBundle[0],
+      nextCanonicalSeq(observations),
+      options.traceId,
+    );
+    const afterSpan = [...observations, spanEnd];
+    const collapsed = collapseObservations(afterSpan, 'rawObservations');
+    if (!collapsed.ok || !countBudgetAllows(collapsed.events.length, afterSpan.length, budgets, 'span-closed')) {
+      return undefined;
+    }
+    const closed = finalizeTerminalSnapshot(afterSpan, boundary, options, terminal, 'span-closed', budgets, diagnose, 1);
+    return closed === undefined ? undefined : {
+      ...closed,
+      suffix: [spanEnd, ...closed.suffix],
+      rawPayloadBytes: rawPayloadBytes(spanEnd) + closed.rawPayloadBytes,
+    };
   }
-  return maximum;
+  const seq = nextCanonicalSeq(observations);
+  const suffix = buildTerminalObservations(terminal, state, seq, options, spanClosedBundleIndex);
+  if (suffix === undefined) return undefined;
+  const finalObservations = [...observations, ...suffix];
+  const collapse = collapseObservations(finalObservations, 'rawObservations');
+  if (!collapse.ok) return undefined;
+  if (collapse.events.length > budgets.maxCanonicalEvents || finalObservations.length > budgets.maxRawObservations) {
+    return undefined;
+  }
+  const record = buildRecord(finalObservations, boundary);
+  const validationRecord = diagnose
+    ? record
+    : buildRecord(finalObservations, withValidationBudgets(boundary));
+  const parsed = parseEvidenceRecord(validationRecord);
+  if (!parsed.ok) {
+    if (diagnose) throw new Error(`invalid terminal snapshot (${record.trace.events.map((event) => event.kind).join(' -> ')}): ${parsed.issues.map((issue) => `${issue.code}@${issue.path}`).join(', ')}`);
+    return undefined;
+  }
+  return {
+    terminal,
+    boundary,
+    suffix,
+    record,
+    serializedBytes: measureFinalizableSnapshotBytes(record),
+    rawPayloadBytes: suffix.reduce((sum, observation) => sum + rawPayloadBytes(observation), 0),
+  };
 }
 
+function withValidationBudgets(boundary: CaptureBoundary): CaptureBoundary {
+  if (boundary.streaming === undefined) return boundary;
+  return {
+    ...boundary,
+    streaming: {
+      ...boundary.streaming,
+      budgets: {
+        maxCanonicalEvents: 1_000_000,
+        maxRawObservations: 2_000_000,
+        maxRawObservationPayloadBytes: 67_108_864,
+        maxRetainedContentCodePoints: 16_777_216,
+        maxSerializedEvidenceBytes: 67_108_864,
+        maxIdLengthBytes: boundary.streaming.budgets.maxIdLengthBytes,
+      },
+    },
+  };
+}
+
+// fallow-ignore-next-line complexity -- closed terminal-to-canonical-event matrix
 function buildTerminalObservations(
   terminal: AssemblyTerminal,
+  state: AssemblerState,
   seq: number,
-  traceId: string,
-  modelSpanId: string,
-  bundle: FinalizationBundle,
-): EvidenceObservation[] {
+  options: AssemblerOptions,
+  spanClosedBundleIndex: 0 | 1,
+): readonly EvidenceObservation[] | undefined {
+  const { traceId, modelSpanId, finalizationBundle: bundle } = options;
   if (terminal.kind === 'completed') {
-    return [
-      terminalObservation({ kind: 'span_end', spanId: modelSpanId, evidenceStatus: 'captured' }, bundle[0], seq, traceId),
-      terminalObservation({ kind: 'interaction_end', spanId: null, evidenceStatus: 'captured' }, bundle[1], seq + 1, traceId),
-    ];
+    if (state !== 'span-closed') return undefined;
+    return [terminalObservation(
+      { kind: 'interaction_end', spanId: null, evidenceStatus: 'captured' },
+      bundle[spanClosedBundleIndex],
+      seq,
+      traceId,
+    )];
   }
+  if (state === 'span-closed') return undefined;
   if (terminal.kind === 'client-cancelled' || terminal.kind === 'ingress-cancelled') {
     return [terminalObservation({
       kind: 'cancelled', spanId: null, evidenceStatus: 'captured', observationRole: 'application_constructed',
@@ -497,6 +698,40 @@ function buildTerminalObservations(
       error: { type: code, message: structuralMessage(code) },
     },
   }, bundle[0], seq, traceId)];
+}
+
+function rawPayloadBytes(observation: EvidenceObservation): number {
+  return utf8Encode(JSON.stringify(observation.payload)).byteLength;
+}
+
+// fallow-ignore-next-line complexity -- closed normalized request-part traversal
+function retainedRequestContentCodePoints(observations: readonly EvidenceObservation[]): number {
+  const collapse = collapseObservations(observations, 'rawObservations');
+  if (!collapse.ok) return 0;
+  let total = 0;
+  const countLeaf = (value: unknown): void => {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      const text = (value as Record<string, unknown>)['text'];
+      if (typeof text === 'string') total += countCodePoints(text);
+    }
+  };
+  for (const event of collapse.events) {
+    if (event.kind !== 'model_request' || !Array.isArray(event.requestEnvelope.messages)) continue;
+    for (const message of event.requestEnvelope.messages) {
+      const content = message.content;
+      if (!Array.isArray(content)) {
+        countLeaf(content);
+        continue;
+      }
+      for (const part of content) {
+        if (part.kind === 'text') countLeaf(part.text);
+        else if (part.kind === 'image_url') countLeaf(part.url);
+        else if (part.kind === 'tool_call') countLeaf(part.arguments);
+        else if (part.kind === 'tool_result') countLeaf(part.content);
+      }
+    }
+  }
+  return total;
 }
 
 function terminalObservation(
@@ -563,6 +798,151 @@ function buildBoundary(
       budgets,
     },
   };
+}
+
+function terminalEquals(left: AssemblyTerminal, right: AssemblyTerminal): boolean {
+  if (left.kind !== right.kind) return false;
+  if ('code' in left && 'code' in right) return left.code === right.code;
+  return !('code' in left) && !('code' in right);
+}
+
+// fallow-ignore-next-line complexity -- closed terminal-specific authoritative boundary matrix
+function transitionBoundaryForTerminal(
+  boundary: CaptureBoundary,
+  terminal: AssemblyTerminal,
+  observations: readonly EvidenceObservation[],
+): CaptureBoundary {
+  const current = boundary.streaming;
+  if (current === undefined) return boundary;
+  let losses: StreamingLossFacts = {
+    ...current.losses,
+    providerErrorBody: terminal.kind === 'upstream-failed'
+      && (terminal.code === 'http-error-status' || terminal.code === 'provider-error-frame')
+      ? 'not-retained'
+      : 'not-applicable',
+  };
+  let facts: AssemblerBoundaryFacts = {
+    upstream: current.upstream,
+    clientResponse: current.clientResponse,
+    decoderDisposition: current.decoderDisposition,
+    remainder: current.remainder,
+    losses,
+  };
+  const collapse = collapseObservations(observations, 'rawObservations');
+  const responseMeta = collapse.ok
+    ? collapse.events.find((event) => event.kind === 'model_response')?.responseEnvelope.responseMeta
+    : undefined;
+  const hasResponse = responseMeta !== undefined;
+  const isSse = responseMeta?.statusCode !== undefined
+    && responseMeta.statusCode >= 200
+    && responseMeta.statusCode <= 299
+    && responseMeta.contentType === 'text/event-stream';
+  if (terminal.kind === 'completed') {
+    facts = {
+      ...facts,
+      upstream: { outcome: 'response-completed' },
+      clientResponse: { outcome: 'flushed' },
+      decoderDisposition: 'openai-sse',
+      remainder: { ...facts.remainder, knowledge: 'protocol-terminal-observed' },
+    };
+  } else if (terminal.kind === 'request-failed') {
+    losses = {
+      ...losses,
+      messageContent: 'omitted',
+      deltaContent: 'not-observed',
+      providerErrorBody: 'not-applicable',
+      unmappedDeltaFields: [],
+      sseMetadataObservedButNotRetained: false,
+      contentTypeParametersDropped: false,
+    };
+    facts = {
+      ...facts,
+      losses,
+      upstream: { outcome: 'not-started' },
+      clientResponse: { outcome: 'local-error-flushed' },
+      decoderDisposition: 'not-applicable',
+      remainder: { knowledge: 'not-applicable' },
+    };
+  } else if (terminal.kind === 'client-cancelled' || terminal.kind === 'ingress-cancelled') {
+    facts = {
+      ...facts,
+      upstream: {
+        outcome: 'cancelled-by-ingress',
+        cause: terminal.kind === 'client-cancelled' ? 'client-disconnect' : 'configured-limit',
+      },
+      clientResponse: { outcome: hasResponse ? 'closed-before-completion' : 'not-started' },
+      decoderDisposition: isSse ? 'openai-sse' : 'not-applicable',
+      remainder: { ...facts.remainder, knowledge: 'unknown' },
+    };
+  } else if (terminal.kind === 'observation-detached') {
+    const retainedEvents = collapse.ok ? collapse.events : [];
+    const retainedDeltas = retainedEvents.filter((event) => event.kind === 'model_response_chunk');
+    const retainedRequest = retainedEvents.some((event) => event.kind === 'model_request');
+    losses = {
+      ...losses,
+      messageContent: retainedRequest
+        ? losses.messageContent
+        : losses.messageContent === 'not-observed' ? 'not-observed' : 'omitted',
+      deltaContent: retainedDeltas.length > 0
+        ? retainedDeltas.some((event) => event.evidenceStatus === 'truncated') ? 'partially-retained' : 'fully-retained'
+        : losses.deltaContent === 'not-observed' ? 'not-observed' : 'omitted',
+      sseMetadataObservedButNotRetained: hasResponse && isSse
+        ? losses.sseMetadataObservedButNotRetained
+        : false,
+    };
+    facts = {
+      ...facts,
+      losses,
+      decoderDisposition: isSse ? 'openai-sse' : 'not-applicable',
+      remainder: { ...facts.remainder, knowledge: 'unknown' },
+    };
+  } else if (terminal.kind === 'malformed-stream') {
+    facts = {
+      ...facts,
+      upstream: { outcome: 'response-completed' },
+      clientResponse: { outcome: 'flushed' },
+      decoderDisposition: isSse ? 'openai-sse' : current.decoderDisposition,
+      remainder: {
+        ...facts.remainder,
+        knowledge: terminal.code === 'sse-partial-frame-at-eof' || terminal.code === 'sse-eof-without-done'
+          ? 'transport-eof-observed'
+          : 'protocol-terminal-observed',
+      },
+    };
+  } else if (terminal.code === 'http-error-status') {
+    facts = {
+      ...facts,
+      upstream: { outcome: 'response-completed' },
+      clientResponse: { outcome: 'local-error-flushed' },
+      decoderDisposition: 'not-applicable',
+      remainder: { ...facts.remainder, knowledge: 'transport-eof-observed' },
+    };
+  } else if (terminal.code === 'non-sse-response') {
+    facts = {
+      ...facts,
+      upstream: { outcome: 'response-completed' },
+      clientResponse: { outcome: 'flushed' },
+      decoderDisposition: 'not-applicable',
+      remainder: { ...facts.remainder, knowledge: 'transport-eof-observed' },
+    };
+  } else if (terminal.code === 'provider-error-frame') {
+    facts = {
+      ...facts,
+      upstream: { outcome: 'response-completed' },
+      clientResponse: { outcome: 'flushed' },
+      decoderDisposition: 'openai-sse',
+      remainder: { ...facts.remainder, knowledge: 'protocol-terminal-observed' },
+    };
+  } else {
+    facts = {
+      ...facts,
+      upstream: { outcome: hasResponse ? 'stream-ended-prematurely' : 'connection-failed' },
+      clientResponse: { outcome: hasResponse ? 'closed-before-completion' : 'local-error-flushed' },
+      decoderDisposition: isSse ? 'openai-sse' : 'not-applicable',
+      remainder: { ...facts.remainder, knowledge: 'unknown' },
+    };
+  }
+  return buildBoundary(facts, losses, current.budgets);
 }
 
 // fallow-ignore-next-line complexity -- closed applicability-aware loss matrix
@@ -643,6 +1023,20 @@ function assertIdentityInputs(options: AssemblerOptions, budgets: EvidenceBudget
   }
 }
 
+function assertInitialState(observations: readonly EvidenceObservation[], budgets: EvidenceBudgets): void {
+  const ids = new Set<string>();
+  for (const observation of observations) {
+    if (ids.has(observation.observationId)) throw new RangeError('initial state observation ids must be unique');
+    ids.add(observation.observationId);
+    if (!idWithinBudget(observation.eventId, budgets) || !idWithinBudget(observation.observationId, budgets)) {
+      throw new RangeError('initial state id exceeds maxIdLengthBytes');
+    }
+  }
+  if (!collapseObservations(observations, 'rawObservations').ok) {
+    throw new RangeError('initial state must satisfy Spec 014 collapse invariants');
+  }
+}
+
 function nextCanonicalSeq(observations: readonly EvidenceObservation[]): number {
   const collapse = collapseObservations(observations, 'rawObservations');
   if (!collapse.ok || collapse.events.length === 0) return 0;
@@ -663,11 +1057,9 @@ function assertRange(name: string, value: number, minimum: number, maximum: numb
 export function classifyFailureCode(
   code: ClientRequestFailureCode | UpstreamFailureCode | MalformedStreamCode | ObservationFailureCode | InternalDecoderFailureCode,
 ): ObservationTerminal {
-  if ((CLIENT_REQUEST_FAILURE_CODES as readonly string[]).includes(code)) return 'request-failed';
-  if ((UPSTREAM_FAILURE_CODES as readonly string[]).includes(code)) return 'upstream-failed';
-  if ((MALFORMED_STREAM_CODES as readonly string[]).includes(code)) return 'malformed-stream';
-  if ((OBSERVATION_FAILURE_CODES as readonly string[]).includes(code) || (INTERNAL_DECODER_FAILURE_CODES as readonly string[]).includes(code)) return 'observation-detached';
-  throw new RangeError(`unclassified failure code: ${String(code)}`);
+  const row = FAILURE_CLASSIFICATION_ROWS.find((candidate) => candidate.code === code);
+  if (row === undefined) throw new RangeError(`unclassified failure code: ${String(code)}`);
+  return row.terminal;
 }
 
 // Keep the imported transport union mechanically tied to upstream failures.

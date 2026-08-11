@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { createOpenAiSseDecoder, decodeSseFrame } from './openai-sse-decoder.js';
+import type { DecodableSseFrameResult, FrameDecodeResult } from './openai-sse-decoder.js';
 import type { FrameResult } from '@signalglass/streaming';
 
-function frame(data: string): FrameResult {
+function frame(data: string): Extract<FrameResult, { kind: 'frame' }> {
   return { kind: 'frame', data, terminal: false, unrecognizedExtensionFrameObserved: false };
 }
 
@@ -61,12 +62,39 @@ describe('OpenAI SSE decoder (Spec 016 S4)', () => {
     expect(JSON.stringify(result)).not.toContain('not retained');
   });
 
-  it('distinguishes done, malformed JSON, unrecognized JSON, and parser failures', () => {
+  it('distinguishes done, malformed JSON, and unrecognized JSON', () => {
     expect(decodeSseFrame({ kind: 'frame', data: '[DONE]', terminal: true, unrecognizedExtensionFrameObserved: false })).toEqual({ kind: 'done' });
     expect(decodeSseFrame(frame('{'))).toEqual({ kind: 'malformed', code: 'sse-invalid-data-json' });
     expect(decodeSseFrame(frame('{"future":true}'))).toEqual({ kind: 'unrecognized' });
     expect(decodeSseFrame({ kind: 'malformed', code: 'sse-invalid-utf8', afterTerminal: false })).toEqual({ kind: 'malformed', code: 'sse-invalid-utf8' });
-    expect(decodeSseFrame({ kind: 'observation-failure', code: 'frame-overflow', afterTerminal: false })).toEqual({ kind: 'decode-error', code: 'decode-error' });
+  });
+
+  it('keeps observer failures and post-terminal content outside L3 at the public type boundary', () => {
+    type ObserverFailure = Extract<FrameResult, { kind: 'observation-failure' }>;
+    type PostTerminal = Extract<FrameResult, { kind: 'post-terminal-content' }>;
+    expectTypeOf<ObserverFailure>().not.toMatchTypeOf<DecodableSseFrameResult>();
+    expectTypeOf<PostTerminal>().not.toMatchTypeOf<DecodableSseFrameResult>();
+    expectTypeOf<Extract<ObserverFailure, { code: 'frame-overflow' }>>().not.toMatchTypeOf<DecodableSseFrameResult>();
+  });
+
+  it('uses decode-error only for an actual internal decoder exception', () => {
+    const parsed = new Proxy({}, { get: () => { throw new Error('internal failure'); } });
+    const parse = vi.spyOn(JSON, 'parse').mockReturnValueOnce(parsed);
+    try {
+      expect(createOpenAiSseDecoder().decode(frame('{"choices":[]}'))).toEqual({ kind: 'decode-error', code: 'decode-error' });
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it('preserves the accepted closed FrameDecodeResult contract', () => {
+    type Expected =
+      | { kind: 'events'; events: readonly import('./openai-sse-decoder.js').StreamDecodedEvent[] }
+      | { kind: 'done' }
+      | { kind: 'malformed'; code: import('@signalglass/evidence').MalformedStreamCode }
+      | { kind: 'unrecognized' }
+      | { kind: 'decode-error'; code: import('@signalglass/evidence').InternalDecoderFailureCode };
+    expectTypeOf<FrameDecodeResult>().toEqualTypeOf<Expected>();
   });
 
   it('emits leak-free bounded provider-error structure', () => {

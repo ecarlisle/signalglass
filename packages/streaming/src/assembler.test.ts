@@ -14,6 +14,7 @@ import {
 import {
   DEFAULT_EVIDENCE_BUDGETS,
   FAILURE_CLASSIFICATION,
+  FAILURE_CLASSIFICATION_ROWS,
   assembleTrace,
   classifyFailureCode,
   countBudgetAllows,
@@ -21,6 +22,7 @@ import {
   retainText,
   measureFinalizableSnapshotBytes,
   type AssemblerOptions,
+  type AssemblyTerminal,
 } from './index.js';
 
 const BASE_LOSSES: StreamingLossFacts = {
@@ -69,6 +71,46 @@ function options(overrides: Partial<AssemblerOptions> = {}): AssemblerOptions {
     evidenceBudgets: DEFAULT_EVIDENCE_BUDGETS,
     ...overrides,
   };
+}
+
+function resumedOptions(
+  observations: readonly EvidenceObservation[],
+  state: 'completion-possible' | 'span-closed',
+  overrides: Partial<AssemblerOptions> = {},
+): AssemblerOptions {
+  const base = options();
+  const hasDelta = observations.some((observation) => observation.kind === 'model_response_chunk'
+    && typeof (observation.payload['responseEnvelope'] as Record<string, unknown> | undefined)?.['deltaText'] === 'string');
+  return options({
+    decodedEvents: [],
+    requestMessages: [],
+    initialState: { observations, state },
+    boundaryFacts: {
+      ...base.boundaryFacts,
+      losses: { ...base.boundaryFacts.losses, deltaContent: hasDelta ? 'fully-retained' : 'not-observed' },
+    },
+    ...overrides,
+  });
+}
+
+function rawPayloadByteLength(observation: EvidenceObservation): number {
+  return utf8Encode(JSON.stringify(observation.payload)).byteLength;
+}
+
+let cachedContentBudgetRejection: ReturnType<typeof assembleTrace> | undefined;
+function contentBudgetRejection(): ReturnType<typeof assembleTrace> {
+  if (cachedContentBudgetRejection !== undefined) return cachedContentBudgetRejection;
+  const values = Array.from({ length: 100 }, (_, index) => index);
+  cachedContentBudgetRejection = assembleTrace(options({
+    requestMessages: [],
+    decodedEvents: values.slice(0, 69).map((index) => ({
+      kind: 'chunk' as const, choiceIndex: 0, chunkIndex: index, delta: 'x'.repeat(240),
+    })),
+    ids: { eventIds: values.map((n) => `event-${n}`), observationIds: values.map((n) => `observation-${n}`) },
+    capturedAtBySeq: values.map((n) => new Date(Date.UTC(2026, 7, 11, 12, 0, 0, n)).toISOString()),
+    evidenceBudgets: { ...DEFAULT_EVIDENCE_BUDGETS, maxRetainedContentCodePoints: 16_384 },
+  }));
+  return cachedContentBudgetRejection;
 }
 
 describe('Spec 016 S4 assembler', () => {
@@ -242,20 +284,392 @@ describe('Spec 016 S4 assembler', () => {
   });
 
   it('rejects a content-budget candidate atomically and spends only the reserved detach suffix', () => {
-    const chunkCount = 69;
-    const count = chunkCount + 24;
-    const values = Array.from({ length: count }, (_, index) => index);
-    const result = assembleTrace(options({
-      requestMessages: [],
-      decodedEvents: values.slice(0, chunkCount).map((index) => ({
-        kind: 'chunk' as const, choiceIndex: 0, chunkIndex: index, delta: 'x'.repeat(240),
-      })),
-      ids: { eventIds: values.map((n) => `event-${n}`), observationIds: values.map((n) => `observation-${n}`) },
-      capturedAtBySeq: values.map((n) => new Date(Date.UTC(2026, 7, 11, 12, 0, 0, n)).toISOString()),
-      evidenceBudgets: { ...DEFAULT_EVIDENCE_BUDGETS, maxRetainedContentCodePoints: 16_384 },
-    }));
+    const result = contentBudgetRejection();
     expect(result.warnings).toContain('candidate-budget-rejected');
     expect(result.trace.events.at(-1)).toMatchObject({ kind: 'error', error: { type: 'record-budget-exceeded' } });
     expect(result.trace.events.filter((event) => event.kind === 'model_response_chunk')).toHaveLength(68);
   }, 15_000);
+
+  it('T144 measures the exact persistence serializer for escaping, astral UTF-8, and mixed text', () => {
+    const mixed = 'quote=" slash=\\ newline=\n astral=😀 accents=é漢字';
+    const result = assembleTrace(options({
+      requestMessages: [{ role: 'user', content: mixed }],
+      decodedEvents: [{ kind: 'chunk', choiceIndex: 0, chunkIndex: 0, delta: mixed }],
+    }));
+    const document = serializeEvidenceRecord(result.record);
+    expect(result.budgetMeasurements.actualSerializedEvidenceBytes).toBe(utf8Encode(document).byteLength);
+    expect(measureFinalizableSnapshotBytes(result.record)).toBe(utf8Encode(document).byteLength);
+    expect(document).toContain('\\n');
+    expect(document).toContain('😀');
+  });
+
+  it('T145/T163 accepts exact serialized/raw replay boundaries and rejects boundary minus one', () => {
+    const baseline = assembleTrace(options());
+    const preterminal = baseline.record.rawObservations.slice(0, -2).map((observation) =>
+      observation.kind === 'model_response_chunk'
+        ? {
+          ...observation,
+          payload: {
+            ...observation.payload,
+            responseEnvelope: {
+              ...observation.payload['responseEnvelope'] as object,
+              providerNative: { padding: 'x'.repeat(45_000) },
+            },
+          },
+        }
+        : observation);
+    const source = preterminal.find((observation) => observation.kind === 'model_response_chunk')!;
+    const replays = Array.from({ length: 25 }, (_, index): EvidenceObservation => ({
+      ...source,
+      observationId: `boundary-replay-${String(index).padStart(4, '0')}-${'i'.repeat(80)}`,
+      rawCapturedAt: `2026-08-11T17:${String(Math.floor(index / 60) % 60).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`,
+    }));
+    const candidate: EvidenceObservation = {
+      ...source,
+      observationId: `boundary-candidate-${'i'.repeat(80)}`,
+      rawCapturedAt: '2026-08-11T18:00:00.000Z',
+    };
+    const boundaryFacts = {
+      ...options().boundaryFacts,
+      losses: {
+        ...options().boundaryFacts.losses,
+        deltaContent: 'fully-retained' as const,
+        providerNative: 'retained' as const,
+      },
+    };
+    const roomyOptions = resumedOptions([...preterminal, ...replays], 'completion-possible', {
+      boundaryFacts,
+      additionalRawObservations: [candidate],
+      evidenceBudgets: {
+        ...DEFAULT_EVIDENCE_BUDGETS,
+        maxCanonicalEvents: 1_000,
+        maxRawObservations: 2_000,
+        maxRawObservationPayloadBytes: 67_108_864,
+        maxSerializedEvidenceBytes: 67_108_864,
+      },
+    });
+    const roomy = assembleTrace(roomyOptions);
+    const exactSerialized = roomy.budgetMeasurements.maximumFinalizableSnapshotBytes;
+    const exactRaw = roomy.budgetMeasurements.preterminalRawObservationPayloadBytes
+      + roomy.budgetMeasurements.maximumFinalizableRawPayloadBytes;
+    expect(exactSerialized).toBeGreaterThanOrEqual(1_048_576);
+    expect(exactRaw).toBeGreaterThanOrEqual(1_048_576);
+
+    const stableSerialized = exactSerialized - 2;
+    const stable = assembleTrace({ ...roomyOptions,
+      evidenceBudgets: {
+        ...DEFAULT_EVIDENCE_BUDGETS,
+        maxCanonicalEvents: 1_000,
+        maxRawObservations: 2_000,
+        maxRawObservationPayloadBytes: exactRaw,
+        maxSerializedEvidenceBytes: stableSerialized,
+      },
+    });
+    expect(stable.warnings).not.toContain('candidate-budget-rejected');
+    expect(stable.budgetMeasurements.maximumFinalizableSnapshotBytes).toBe(stableSerialized);
+    expect(stable.budgetMeasurements.preterminalRawObservationPayloadBytes
+      + stable.budgetMeasurements.maximumFinalizableRawPayloadBytes).toBe(exactRaw);
+
+    const serializedRejected = assembleTrace({ ...roomyOptions,
+      evidenceBudgets: {
+        ...DEFAULT_EVIDENCE_BUDGETS,
+        maxCanonicalEvents: 1_000,
+        maxRawObservations: 2_000,
+        maxRawObservationPayloadBytes: 67_108_864,
+        maxSerializedEvidenceBytes: stableSerialized - 1,
+      },
+    });
+    expect(serializedRejected.warnings).toContain('candidate-budget-rejected');
+    expect(serializedRejected.trace.events.at(-1)).toMatchObject({ error: { type: 'record-budget-exceeded' } });
+    expect(serializedRejected.record.rawObservations.slice(0, -1)).toEqual([...preterminal, ...replays]);
+
+    const rawRejected = assembleTrace({ ...roomyOptions,
+      evidenceBudgets: {
+        ...DEFAULT_EVIDENCE_BUDGETS,
+        maxCanonicalEvents: 1_000,
+        maxRawObservations: 2_000,
+        maxRawObservationPayloadBytes: exactRaw - 1,
+        maxSerializedEvidenceBytes: 67_108_864,
+      },
+    });
+    expect(rawRejected.warnings).toContain('candidate-budget-rejected');
+    expect(rawRejected.record.rawObservations.slice(0, -1)).toEqual([...preterminal, ...replays]);
+  }, 30_000);
+
+  it('T146-T147 replay grows raw and derived serialized evidence without canonical growth', () => {
+    const baseline = assembleTrace(options());
+    const original = baseline.record.rawObservations[4]!;
+    const replay = {
+      ...original,
+      observationId: 'derived-growth-replay',
+      rawCapturedAt: '2026-08-11T12:05:00.000Z',
+    };
+    const replayed = assembleTrace(options({ additionalRawObservations: [replay] }));
+    expect(replayed.trace.events).toEqual(baseline.trace.events);
+    expect(replayed.budgetMeasurements.rawObservationPayloadBytes).toBe(
+      baseline.budgetMeasurements.rawObservationPayloadBytes + rawPayloadByteLength(replay),
+    );
+    expect(replayed.budgetMeasurements.actualSerializedEvidenceBytes)
+      .toBeGreaterThan(baseline.budgetMeasurements.actualSerializedEvidenceBytes + rawPayloadByteLength(replay));
+    expect(replayed.record.analysis.duplicateObservations).toHaveLength(1);
+  });
+
+  it('T148/T156/T157 measures each applicable real terminal snapshot and lets the maximum govern', () => {
+    const completed = assembleTrace(options());
+    const previews = completed.budgetMeasurements.terminalAlternatives;
+    expect(previews.length).toBeGreaterThan(7);
+    expect(previews.some((preview) => preview.terminal.kind === 'completed' && preview.suffixCount === 2)).toBe(true);
+    expect(previews.some((preview) => preview.terminal.kind === 'client-cancelled' && preview.suffixCount === 1)).toBe(true);
+    expect(previews.some((preview) => preview.terminal.kind === 'malformed-stream' && preview.suffixCount === 1)).toBe(true);
+    expect(previews.some((preview) => preview.terminal.kind === 'observation-detached' && preview.suffixCount === 1)).toBe(true);
+    expect(previews.some((preview) => preview.terminal.kind === 'observation-detached'
+      && preview.terminal.code === 'decode-error')).toBe(true);
+    expect(completed.budgetMeasurements.maximumFinalizableSnapshotBytes).toBe(
+      Math.max(...previews.map((preview) => preview.serializedBytes)),
+    );
+    for (const preview of previews) {
+      const streaming = preview.boundary.streaming!;
+      const actual = assembleTrace(options({
+        terminal: preview.terminal,
+        boundaryFacts: {
+          upstream: streaming.upstream,
+          clientResponse: streaming.clientResponse,
+          decoderDisposition: streaming.decoderDisposition,
+          remainder: streaming.remainder,
+          losses: streaming.losses,
+        },
+      }));
+      expect(actual.budgetMeasurements.actualSerializedEvidenceBytes).toBe(preview.serializedBytes);
+    }
+  }, 30_000);
+
+  it('T148 finalizes from the prior valid state when a response candidate exceeds its reservation', () => {
+    const baseline = assembleTrace(options());
+    const beforeResponse = baseline.record.rawObservations.slice(0, 3).map((observation) =>
+      observation.kind === 'model_request'
+        ? {
+          ...observation,
+          payload: {
+            ...observation.payload,
+            requestEnvelope: {
+              ...observation.payload['requestEnvelope'] as object,
+              providerNative: { padding: 'x'.repeat(600_000) },
+            },
+          },
+        }
+        : observation);
+    const response = baseline.record.rawObservations.find((observation) => observation.kind === 'model_response')!;
+    const boundaryFacts = {
+      ...options().boundaryFacts,
+      losses: {
+        ...options().boundaryFacts.losses,
+        deltaContent: 'not-observed' as const,
+        providerNative: 'retained' as const,
+      },
+    };
+    const roomyOptions = resumedOptions(beforeResponse, 'completion-possible', {
+      boundaryFacts,
+      additionalRawObservations: [response],
+      decodedEvents: [],
+      evidenceBudgets: { ...DEFAULT_EVIDENCE_BUDGETS, maxSerializedEvidenceBytes: 67_108_864 },
+    });
+    const roomy = assembleTrace(roomyOptions);
+    const rejected = assembleTrace({
+      ...roomyOptions,
+      evidenceBudgets: {
+        ...DEFAULT_EVIDENCE_BUDGETS,
+        maxSerializedEvidenceBytes: roomy.budgetMeasurements.maximumFinalizableSnapshotBytes - 2,
+      },
+    });
+    expect(rejected.warnings).toContain('candidate-budget-rejected');
+    expect(rejected.trace.events.some((event) => event.kind === 'model_response')).toBe(false);
+    expect(rejected.boundary.streaming?.decoderDisposition).toBe('not-applicable');
+    expect(rejected.budgetMeasurements.actualSerializedEvidenceBytes)
+      .toBeLessThanOrEqual(rejected.boundary.streaming!.budgets.maxSerializedEvidenceBytes);
+    expect(rejected.trace.events.at(-1)).toMatchObject({ error: { type: 'record-budget-exceeded' } });
+  }, 15_000);
+
+  it('T154/T159 completes at the real two-slot canonical boundary', () => {
+    const baseline = assembleTrace(options());
+    const preterminal = baseline.record.rawObservations.slice(0, -2);
+    const source = preterminal.find((observation) => observation.kind === 'model_response_chunk')!;
+    const fillers = Array.from({ length: 998 - preterminal.length }, (_, index): EvidenceObservation => ({
+      ...source,
+      observationId: `count-observation-${index}`,
+      eventId: `count-event-${index}`,
+      seq: preterminal.length + index,
+      payload: {
+        responseEnvelope: {
+          providerNativeFidelity: 'structurally_faithful',
+          choiceIndex: 0,
+          chunkIndex: index + 1,
+          deltaText: 'x',
+        },
+      },
+      rawCapturedAt: `2026-08-11T13:${String(Math.floor(index / 60) % 60).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`,
+    }));
+    const result = assembleTrace(resumedOptions([...preterminal, ...fillers], 'completion-possible', {
+      evidenceBudgets: { ...DEFAULT_EVIDENCE_BUDGETS, maxCanonicalEvents: 1_000, maxRawObservations: 2_000 },
+    }));
+    expect(result.trace.events).toHaveLength(1_000);
+    expect(result.trace.events.slice(-2).map((event) => event.kind)).toEqual(['span_end', 'interaction_end']);
+    expect(result.warnings).not.toContain('candidate-budget-rejected');
+  }, 30_000);
+
+  it('T155 exercises the real span-closed one-slot raw boundary', () => {
+    const baseline = assembleTrace(options());
+    const closed = baseline.record.rawObservations.slice(0, -1);
+    const source = closed.find((observation) => observation.kind === 'model_response_chunk')!;
+    const replays = Array.from({ length: 1_999 - closed.length }, (_, index): EvidenceObservation => ({
+      ...source,
+      observationId: `raw-boundary-replay-${index}`,
+      rawCapturedAt: `2026-08-11T14:${String(Math.floor(index / 60) % 60).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`,
+    }));
+    const finalizationBundle = [
+      { eventId: 'closed-interaction-end', observationId: 'closed-interaction-observation', capturedAt: '2026-08-11T15:00:00.000Z' },
+      { eventId: 'unused-closed-slot', observationId: 'unused-closed-observation', capturedAt: '2026-08-11T15:00:01.000Z' },
+    ] as const;
+    const result = assembleTrace(resumedOptions([...closed, ...replays], 'span-closed', {
+      finalizationBundle,
+      evidenceBudgets: { ...DEFAULT_EVIDENCE_BUDGETS, maxCanonicalEvents: 1_000, maxRawObservations: 2_000 },
+    }));
+    expect(result.record.rawObservations).toHaveLength(2_000);
+    expect(result.trace.events.at(-1)).toMatchObject({ kind: 'interaction_end', eventId: 'closed-interaction-end' });
+    expect(result.budgetMeasurements.terminalAlternatives).toHaveLength(1);
+    expect(result.budgetMeasurements.terminalAlternatives[0]).toMatchObject({
+      terminal: { kind: 'completed' }, suffixCount: 1,
+    });
+  }, 30_000);
+
+  it('T158 preview acceptance and rejection never mutate finalization inputs', () => {
+    const fixed = options().finalizationBundle;
+    const accepted = assembleTrace(options());
+    const rejected = contentBudgetRejection();
+    expect(accepted.record.rawObservations.slice(-2).map(({ eventId, observationId, rawCapturedAt }) => ({ eventId, observationId, rawCapturedAt })))
+      .toEqual(fixed.map(({ eventId, observationId, capturedAt }) => ({ eventId, observationId, rawCapturedAt: capturedAt })));
+    expect(rejected.record.rawObservations.at(-1)).toMatchObject({
+      eventId: fixed[0].eventId,
+      observationId: fixed[0].observationId,
+      rawCapturedAt: fixed[0].capturedAt,
+    });
+    expect(rejected.record.rawObservations.some((observation) => observation.eventId === fixed[1].eventId)).toBe(false);
+  });
+
+  it('T160-T164 admits new canonical content and preserves the exact prior prefix on rejection', () => {
+    const baseline = assembleTrace(options());
+    const preterminal = baseline.record.rawObservations.slice(0, -2);
+    const source = preterminal.find((observation) => observation.kind === 'model_response_chunk')!;
+    const genuinelyNew: EvidenceObservation = {
+      ...source,
+      observationId: 'genuinely-new-observation',
+      eventId: 'genuinely-new-event',
+      seq: preterminal.length,
+      payload: {
+        responseEnvelope: {
+          providerNativeFidelity: 'structurally_faithful', choiceIndex: 0, chunkIndex: 99, deltaText: 'new',
+        },
+      },
+      rawCapturedAt: '2026-08-11T16:00:00.000Z',
+    };
+    const admitted = assembleTrace(options({ additionalRawObservations: [genuinelyNew] }));
+    expect(admitted.trace.events.some((event) => event.eventId === genuinelyNew.eventId)).toBe(true);
+    expect(admitted.trace.events).toHaveLength(baseline.trace.events.length + 1);
+
+    const conflict: EvidenceObservation = {
+      ...source,
+      observationId: 'prefix-conflict',
+      payload: { responseEnvelope: { ...source.payload['responseEnvelope'] as object, deltaText: 'conflict' } },
+      rawCapturedAt: '2026-08-11T16:00:01.000Z',
+    };
+    const rejected = assembleTrace(options({ additionalRawObservations: [conflict] }));
+    expect(rejected.record.rawObservations.slice(0, -1)).toEqual(preterminal);
+    expect(rejected.warnings).toEqual(['candidate-structurally-rejected']);
+  });
+
+  it('T165 mechanically verifies every classification row and its emitted/derived properties', () => {
+    const expectedCodes = [
+      ...CLIENT_REQUEST_FAILURE_CODES,
+      ...UPSTREAM_FAILURE_CODES,
+      ...MALFORMED_STREAM_CODES,
+      ...OBSERVATION_FAILURE_CODES,
+      ...INTERNAL_DECODER_FAILURE_CODES,
+    ];
+    expect(FAILURE_CLASSIFICATION_ROWS.map((row) => row.code)).toHaveLength(new Set(expectedCodes).size);
+    expect(new Set(FAILURE_CLASSIFICATION_ROWS.map((row) => row.code))).toEqual(new Set(expectedCodes));
+    for (const row of FAILURE_CLASSIFICATION_ROWS) {
+      let terminal: AssemblyTerminal;
+      let overrides: Partial<AssemblerOptions> = {};
+      if (row.terminal === 'request-failed') {
+        terminal = { kind: 'request-failed', code: row.code as typeof CLIENT_REQUEST_FAILURE_CODES[number] };
+        overrides = {
+          responseMeta: undefined, decodedEvents: [], terminal,
+          boundaryFacts: {
+            upstream: { outcome: 'not-started' }, clientResponse: { outcome: 'local-error-flushed' },
+            decoderDisposition: 'not-applicable', remainder: { knowledge: 'not-applicable' },
+            losses: { ...BASE_LOSSES, messageContent: 'omitted', providerNative: 'not-applicable', wireBytes: 'not-applicable' },
+          },
+        };
+      } else if (row.terminal === 'upstream-failed') {
+        terminal = { kind: 'upstream-failed', code: row.code as typeof UPSTREAM_FAILURE_CODES[number] };
+        if (row.code === 'http-error-status') overrides = {
+          terminal, responseMeta: { statusCode: 503, contentType: 'application/json' }, decodedEvents: [],
+          boundaryFacts: { ...options().boundaryFacts, upstream: { outcome: 'response-completed' }, clientResponse: { outcome: 'local-error-flushed' }, decoderDisposition: 'not-applicable', remainder: { knowledge: 'transport-eof-observed' } },
+        };
+        else if (row.code === 'non-sse-response') overrides = {
+          terminal, responseMeta: { statusCode: 200, contentType: 'application/json' }, decodedEvents: [],
+          boundaryFacts: { ...options().boundaryFacts, decoderDisposition: 'not-applicable', remainder: { knowledge: 'transport-eof-observed' } },
+        };
+        else if (row.code === 'provider-error-frame') overrides = { terminal, decodedEvents: [] };
+        else overrides = {
+          terminal, responseMeta: undefined, decodedEvents: [],
+          boundaryFacts: { ...options().boundaryFacts, upstream: { outcome: 'connection-failed' }, clientResponse: { outcome: 'local-error-flushed' }, decoderDisposition: 'not-applicable', remainder: { knowledge: 'unknown' } },
+        };
+      } else if (row.terminal === 'malformed-stream') {
+        terminal = { kind: 'malformed-stream', code: row.code as typeof MALFORMED_STREAM_CODES[number] };
+        overrides = { terminal, decodedEvents: [] };
+      } else {
+        terminal = { kind: 'observation-detached', code: row.code as typeof OBSERVATION_FAILURE_CODES[number] | 'decode-error' };
+        overrides = { terminal, decodedEvents: [] };
+      }
+      const result = assembleTrace(options(overrides));
+      const final = result.trace.events.at(-1)!;
+      expect(final).toMatchObject({
+        kind: row.eventKind,
+        actor: row.actor,
+        observationRole: row.observationRole,
+        lifecycleTarget: row.lifecycleTarget,
+        lifecycleEffect: row.lifecycleEffect,
+        error: { type: row.eventCode },
+      });
+      expect(result.trace.status).toBe(row.traceStatus);
+      expect(result.record.completeness.lifecycle?.observation.terminal).toBe(row.completenessTerminal);
+      expect(classifyFailureCode(row.code)).toBe(row.terminal);
+    }
+  }, 45_000);
+
+  it.each([
+    ['same-id/same-seq conflict', (source: EvidenceObservation): EvidenceObservation => ({
+      ...source, observationId: 't166-conflict',
+      payload: { responseEnvelope: { ...source.payload['responseEnvelope'] as object, deltaText: 'different' } },
+    })],
+    ['different-id/same-seq collision', (source: EvidenceObservation): EvidenceObservation => ({
+      ...source, observationId: 't166-collision', eventId: 't166-collision-event',
+    })],
+  ])('T166 keeps %s distinct from capacity failure', (_label, mutate) => {
+    const baseline = assembleTrace(options());
+    const preterminal = baseline.record.rawObservations.slice(0, -2);
+    const rejected = mutate(preterminal.find((observation) => observation.kind === 'model_response_chunk')!);
+    const structural = assembleTrace(options({ additionalRawObservations: [rejected] }));
+    expect(structural.warnings).toContain('candidate-structurally-rejected');
+    expect(structural.warnings).not.toContain('candidate-budget-rejected');
+    expect(structural.record.rawObservations.slice(0, -1)).toEqual(preterminal);
+    expect(structural.record.rawObservations.some((observation) => observation.observationId === rejected.observationId)).toBe(false);
+    expect(structural.trace.events.at(-1)).toMatchObject({
+      kind: 'error', actor: 'capture', observationRole: 'unobservable',
+      lifecycleTarget: 'none', lifecycleEffect: 'none', error: { type: 'internal-capture-error' },
+    });
+    const capacity = contentBudgetRejection();
+    expect(capacity.warnings).toContain('candidate-budget-rejected');
+    expect(capacity.trace.events.at(-1)).toMatchObject({ error: { type: 'record-budget-exceeded' } });
+  });
 });

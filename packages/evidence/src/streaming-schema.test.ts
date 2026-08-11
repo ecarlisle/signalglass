@@ -582,6 +582,10 @@ describe('Spec 016 S1 schema foundation', () => {
     expect(reparsed.ok).toBe(false);
     if (!reparsed.ok) expect(reparsed.issues.map((entry) => entry.code)).toContain('serialized_evidence_budget_exceeded');
     expect(() => serializeEvidenceRecord(widened.record)).toThrow(/serialized_evidence_budget_exceeded/);
+    expect(() => serializeEvidenceRecord(widened.record, { allowBudgetExcess: true })).not.toThrow();
+    widened.record.captureBoundary.streaming!.detector.name = 'invalid.detector';
+    expect(() => serializeEvidenceRecord(widened.record, { allowBudgetExcess: true }))
+      .toThrow(/versioned_identity_invalid/);
   });
 
   it('T101/T117/T133 preserves genuine 1.0 messages and rejects 1.1-owned paths', () => {

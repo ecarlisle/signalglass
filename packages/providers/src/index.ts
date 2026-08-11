@@ -8,6 +8,7 @@ export {
   decodeSseFrame,
 } from './openai-sse-decoder.js';
 export type {
+  DecodableSseFrameResult,
   FrameDecodeResult,
   OpenAiSseDecoder,
   StreamDecodedEvent,

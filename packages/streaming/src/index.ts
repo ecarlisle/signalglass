@@ -11,6 +11,7 @@ export {
 export {
   DEFAULT_EVIDENCE_BUDGETS,
   FAILURE_CLASSIFICATION,
+  FAILURE_CLASSIFICATION_ROWS,
   OPENAI_SSE_DECODER_CONTRACT_NAME,
   OPENAI_SSE_DECODER_CONTRACT_VERSION,
   STREAMING_ASSEMBLER_NAME,
@@ -30,6 +31,7 @@ export type {
   AssemblyTerminal,
   AssemblyWarning,
   EvidenceBudgets,
+  FailureClassificationRow,
   FinalizationBundle,
   FinalizationValue,
   TerminalReservationState,

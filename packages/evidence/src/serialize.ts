@@ -28,10 +28,30 @@ const RECORD_KEYS = [
  * fails validation is a caller programming error (invalid evidence must be
  * surfaced through `parseEvidenceRecord`, not here), so this throws.
  */
-export function serializeEvidenceRecord(record: EvidenceRecord): string {
+type EvidenceSerializationOptions = {
+  /** S4 terminal previews must serialize a hypothetical snapshot before its
+   * declared budgets can be tested. All non-budget validation still applies. */
+  allowBudgetExcess?: boolean;
+};
+
+const BUDGET_EXCESS_CODES = new Set([
+  'canonical_event_budget_exceeded',
+  'raw_observation_budget_exceeded',
+  'raw_payload_budget_exceeded',
+  'retained_content_budget_exceeded',
+  'serialized_evidence_budget_exceeded',
+]);
+
+export function serializeEvidenceRecord(
+  record: EvidenceRecord,
+  options: EvidenceSerializationOptions = {},
+): string {
   const parsed = parseEvidenceRecord(record as unknown);
-  if (!parsed.ok) {
-    const codes = parsed.issues.map((i) => i.code).join(', ');
+  const blockingIssues = parsed.ok
+    ? []
+    : parsed.issues.filter((entry) => !options.allowBudgetExcess || !BUDGET_EXCESS_CODES.has(entry.code));
+  if (blockingIssues.length > 0) {
+    const codes = blockingIssues.map((i) => i.code).join(', ');
     throw new Error(`serializeEvidenceRecord: invalid evidence record (${codes})`);
   }
   const out: Record<string, unknown> = {};

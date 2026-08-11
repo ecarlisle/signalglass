@@ -44,8 +44,14 @@ export type FrameDecodeResult =
   | { kind: 'unrecognized' }
   | { kind: 'decode-error'; code: InternalDecoderFailureCode };
 
+/** L2 results that L3 is permitted to decode. Observer failures and
+ * post-terminal bookkeeping stay at the streaming/orchestration boundary. */
+export type DecodableSseFrameResult =
+  | Extract<FrameResult, { kind: 'frame' }>
+  | (Extract<FrameResult, { kind: 'malformed' }> & { afterTerminal: false });
+
 export type OpenAiSseDecoder = {
-  decode(frame: FrameResult): FrameDecodeResult;
+  decode(frame: DecodableSseFrameResult): FrameDecodeResult;
 };
 
 type JsonObject = Record<string, unknown>;
@@ -69,21 +75,17 @@ export function createOpenAiSseDecoder(): OpenAiSseDecoder {
 }
 
 /** Convenience decoder for one frame. Stateful streams should use the factory. */
-export function decodeSseFrame(frame: FrameResult): FrameDecodeResult {
+export function decodeSseFrame(frame: DecodableSseFrameResult): FrameDecodeResult {
   return createOpenAiSseDecoder().decode(frame);
 }
 
 // fallow-ignore-next-line complexity -- closed decoder-result classification matrix
 function decodeFrame(
-  frame: FrameResult,
+  frame: DecodableSseFrameResult,
   nextChunkIndex: Map<number, number>,
 ): FrameDecodeResult {
   try {
     if (frame.kind === 'malformed') return { kind: 'malformed', code: frame.code };
-    if (frame.kind === 'observation-failure') {
-      return { kind: 'decode-error', code: 'decode-error' };
-    }
-    if (frame.kind === 'post-terminal-content') return { kind: 'unrecognized' };
     if (frame.terminal) return { kind: 'done' };
 
     let parsed: unknown;
