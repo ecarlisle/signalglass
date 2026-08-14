@@ -139,6 +139,12 @@ importers:
       '@signalglass/core':
         specifier: workspace:*
         version: link:../core
+      '@signalglass/evidence':
+        specifier: workspace:*
+        version: link:../evidence
+      '@signalglass/streaming':
+        specifier: workspace:*
+        version: link:../streaming
     devDependencies:
       '@types/node':
         specifier: ^20.14.0
@@ -192,6 +198,10 @@ importers:
         version: 1.6.1(@types/node@20.19.43)
 
   packages/streaming:
+    dependencies:
+      '@signalglass/evidence':
+        specifier: workspace:*
+        version: link:../evidence
     devDependencies:
       typescript:
         specifier: ^5.5.4

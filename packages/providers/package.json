@@ -14,7 +14,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@signalglass/core": "workspace:*"
+    "@signalglass/core": "workspace:*",
+    "@signalglass/evidence": "workspace:*",
+    "@signalglass/streaming": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

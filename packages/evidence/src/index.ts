@@ -193,6 +193,10 @@ export type { VersionCheck } from './version.js';
 // Deterministic helpers (public contract facades over src/internal/*, §1.3)
 export { projectCanonicalEvent } from './project.js';
 export type { ProjectedEvent } from './project.js';
+export { collapseObservations } from './normalize.js';
+export type { CollapseOutcome } from './normalize.js';
+export { deriveTrace } from './derive-trace.js';
+export type { DeriveTraceResult, TraceMetadata } from './derive-trace.js';
 export { deriveCompleteness } from './completeness.js';
 export { sortUtf8, toJsonView } from './normalize.js';
 export { canonicalJson, isJsonSafe } from './canonical.js';
@@ -202,7 +206,14 @@ export { isContentHash, isContentType, isJsonContentType, isSemanticVersion, maj
 export { isTimestamp } from './time.js';
 
 // Runtime validation and parse/serialize
-export { parseEvidenceRecord, normalizeEvidenceRecord } from './validate.js';
+export {
+  EVIDENCE_BUDGET_VALIDATION_CODES,
+  isEvidenceBudgetValidationIssue,
+} from './validation-issues.js';
+export {
+  parseEvidenceRecord,
+  normalizeEvidenceRecord,
+} from './validate.js';
 export type { NormalizeOptions } from './validate.js';
 export { serializeEvidenceRecord, serializeEvidenceExport } from './serialize.js';
 

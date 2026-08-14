@@ -3,6 +3,7 @@ import type { EvidenceObservation } from './types-trace.js';
 import type { EventRecord } from './types-event.js';
 import type { CaptureBoundary, StreamingCaptureBoundary, TraceCompleteness } from './types-record.js';
 import { normalizeEvidenceRecord, parseEvidenceRecord, validateStreamingRecordBudgets } from './validate.js';
+import { EVIDENCE_BUDGET_VALIDATION_CODES, isEvidenceBudgetValidationIssue } from './validation-issues.js';
 import { serializeEvidenceRecord } from './serialize.js';
 import { obs, T0, T1, T2, T3, T4, T5 } from './fixtures.js';
 import {
@@ -582,6 +583,25 @@ describe('Spec 016 S1 schema foundation', () => {
     expect(reparsed.ok).toBe(false);
     if (!reparsed.ok) expect(reparsed.issues.map((entry) => entry.code)).toContain('serialized_evidence_budget_exceeded');
     expect(() => serializeEvidenceRecord(widened.record)).toThrow(/serialized_evidence_budget_exceeded/);
+    expect(() => serializeEvidenceRecord(widened.record, { allowBudgetExcess: true })).not.toThrow();
+    widened.record.captureBoundary.streaming!.detector.name = 'invalid.detector';
+    expect(() => serializeEvidenceRecord(widened.record, { allowBudgetExcess: true }))
+      .toThrow(/versioned_identity_invalid/);
+  });
+
+  it('keeps the preview-only budget issue distinction closed and authoritative', () => {
+    expect(new Set(EVIDENCE_BUDGET_VALIDATION_CODES)).toEqual(new Set([
+      'canonical_event_budget_exceeded',
+      'raw_observation_budget_exceeded',
+      'raw_payload_budget_exceeded',
+      'retained_content_budget_exceeded',
+      'serialized_evidence_budget_exceeded',
+      'evidence_id_budget_exceeded',
+    ]));
+    for (const code of EVIDENCE_BUDGET_VALIDATION_CODES) {
+      expect(isEvidenceBudgetValidationIssue({ code, path: '$', message: 'budget' })).toBe(true);
+    }
+    expect(isEvidenceBudgetValidationIssue({ code: 'versioned_identity_invalid', path: '$', message: 'shape' })).toBe(false);
   });
 
   it('T101/T117/T133 preserves genuine 1.0 messages and rejects 1.1-owned paths', () => {

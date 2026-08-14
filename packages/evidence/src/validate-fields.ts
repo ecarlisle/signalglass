@@ -199,7 +199,11 @@ export function validateObservation(obs: unknown, path: string, out: ValidationI
     out.push(issue('missing_observation_role', `${path}.observationRole`, `payload-bearing event (kind '${kind}') missing required observationRole`));
   } else if (!ROLES.has(role as string)) {
     out.push(issue('invalid_observation_role', `${path}.observationRole`, `observationRole '${String(role)}' is not in the closed role vocabulary`));
-  } else if (role === 'unobservable' && v['evidenceStatus'] !== 'unknown') {
+  } else if (
+    role === 'unobservable'
+    && v['evidenceStatus'] !== 'unknown'
+    && !(isAtLeast11(schemaVersion) && isCapturedObserverFailure(v['payload'], kind))
+  ) {
     out.push(issue('unobservable_requires_unknown', `${path}.observationRole`, "observationRole 'unobservable' requires evidenceStatus 'unknown'"));
   }
   const payload = v['payload'];
@@ -209,6 +213,19 @@ export function validateObservation(obs: unknown, path: string, out: ValidationI
     }
   }
   validateKindSpecific(v, payload, kind, path, out, schemaVersion);
+}
+
+/** Spec 016 observer-detach evidence is captured structural metadata even
+ * though the unavailable provider remainder is unobservable. */
+function isCapturedObserverFailure(payload: unknown, kind: string): boolean {
+  const error = isRecord(payload) ? payload['error'] : undefined;
+  return kind === 'error'
+    && isRecord(payload)
+    && payload['actor'] === 'capture'
+    && payload['lifecycleTarget'] === 'none'
+    && payload['lifecycleEffect'] === 'none'
+    && isRecord(error)
+    && OBSERVATION_FAILURE_CODES_SET.has(error['type'] as string);
 }
 
 function validateKindSpecific(

@@ -11,6 +11,7 @@ import type { CaptureBoundary, TraceCompleteness } from './types-record.js';
 import type { EvidenceTrace } from './types-trace.js';
 import type { EvidenceStructuralAnalysis } from './types-analysis.js';
 import { parseEvidenceRecord } from './validate.js';
+import { isEvidenceBudgetValidationIssue } from './validation-issues.js';
 import { toJsonView } from './normalize.js';
 
 const RECORD_KEYS = [
@@ -28,10 +29,24 @@ const RECORD_KEYS = [
  * fails validation is a caller programming error (invalid evidence must be
  * surfaced through `parseEvidenceRecord`, not here), so this throws.
  */
-export function serializeEvidenceRecord(record: EvidenceRecord): string {
+type EvidenceSerializationOptions = {
+  /** Narrow S4 measurement capability: a hypothetical snapshot must be
+   * serialized before its declared budgets can be tested. Only the evidence
+   * package's closed magnitude-only issue class is ignored; normal persistence
+   * serialization remains strict and every non-budget issue still blocks. */
+  allowBudgetExcess?: boolean;
+};
+
+export function serializeEvidenceRecord(
+  record: EvidenceRecord,
+  options: EvidenceSerializationOptions = {},
+): string {
   const parsed = parseEvidenceRecord(record as unknown);
-  if (!parsed.ok) {
-    const codes = parsed.issues.map((i) => i.code).join(', ');
+  const blockingIssues = parsed.ok
+    ? []
+    : parsed.issues.filter((entry) => !options.allowBudgetExcess || !isEvidenceBudgetValidationIssue(entry));
+  if (blockingIssues.length > 0) {
+    const codes = blockingIssues.map((i) => i.code).join(', ');
     throw new Error(`serializeEvidenceRecord: invalid evidence record (${codes})`);
   }
   const out: Record<string, unknown> = {};
