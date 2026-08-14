@@ -259,6 +259,14 @@ One executable row per discarded error field, emitted only for actual `error` ev
 | E2L-086 | (no legacy field) | unavailable | legacy `TraceEvent provider_error` has no lifecycle-effect field; the canonical error `lifecycleEffect` is not projected | field-loss suite; matrix runtime check (`events[15].lifecycleEffect` unavailable, all-kinds fixture) |
 | E2L-087 | (no legacy field) | unavailable | legacy `TraceEvent provider_error` has no error payload field; the canonical error payload (`type`, `message`, details) is not projected | field-loss suite; matrix runtime check (`events[15].error` unavailable, all-kinds fixture, sentinel error message additionally asserted absent from the view and report) |
 
+## Spec 016 streaming-field projection loss
+
+| Claim | Legacy target | Classification | Reason | Verified by |
+|---|---|---|---|---|
+| E2L-088 | (no legacy excerpt) | unavailable | legacy `TraceEvent` has no retained streaming-delta field; canonical `deltaText` is not projected into an excerpt | matrix streaming fixture; streaming sentinel absence check |
+| E2L-089 | (no legacy excerpt) | unavailable | normalized request-message leaves are not representable in the legacy excerpt surface and are never inlined | matrix streaming fixture; request sentinel absence check |
+| E2L-090 | (no legacy field) | unavailable | legacy `Trace` has no streaming decoder-participation field; the authoritative `decoderDisposition` is not projected | matrix streaming fixture |
+
 ## Legacy Trace → AgentRun conversion preservation
 
 The second stage is exact **legacy-behavior preservation**, not canonical
@@ -305,7 +313,7 @@ agent-run parity blocks.
 ## Runtime verification
 
 - `packages/core/src/evidenceProjections/projectionMappingMatrix.test.ts` —
-  pins the claim-ID registry (87 claims), validates classifications and
+  pins the claim-ID registry (90 claims), validates classifications and
   claim modes (exactly one of `runtime`/`gateVerified`/`conceptual`),
   enforces event-kind exclusivity, **executes every runtime claim against an
   actual projection report over a real fixture** (mapping path + stage +

@@ -19,7 +19,9 @@ GET  /v1/models
 POST /v1/chat/completions
 ```
 
-`POST /v1/chat/completions` forwards a non-streaming OpenAI-compatible chat completion request to the selected upstream provider. On success the upstream response is returned to the client. On failure a normalized SignalGlass error envelope is returned instead of the raw upstream error body.
+`POST /v1/chat/completions` forwards both streaming and non-streaming OpenAI-compatible chat completion requests to the selected upstream provider. On success a streaming SSE response is relayed byte-for-byte, with downstream backpressure propagated upstream. On failure before streaming begins, a normalized SignalGlass error envelope is returned instead of the raw upstream error body.
+
+For SSE responses, SignalGlass observes a bounded decoder tee without changing the forwarded bytes. Identity, gzip, and deflate encodings are observed incrementally; an unsupported or corrupt encoding remains transparent to the client and is recorded as an observation limitation. Client disconnects, ingress shutdown, forward-progress timeouts, premature upstream endings, malformed frames, provider error frames, and post-`[DONE]` content all produce explicit terminal or loss facts.
 
 ## Starting the ingress
 
@@ -37,6 +39,15 @@ pnpm --filter @signalglass/cli dev -- ingress \
   --config signalglass.config.json \
   --port 8080 \
   --storage .signalglass/traces.db
+```
+
+Canonical evidence persistence for streaming interactions is configured separately:
+
+```bash
+pnpm --filter @signalglass/cli dev -- ingress \
+  --config signalglass.config.json \
+  --port 8080 \
+  --evidence-storage .signalglass/evidence.db
 ```
 
 The ingress exposes an OpenAI-compatible base URL:
@@ -78,6 +89,7 @@ By default, the ingress captures:
 - Routing decisions and transformation summaries when present.
 - Short redacted excerpts of content.
 - `provider_error` events for upstream non-2xx responses, invalid upstream response bodies, and forwarding failures.
+- For streaming interactions, one bounded schema-1.1 canonical `EvidenceRecord` with normalized request-message leaves, decoded delta/usage observations, transport outcomes, and explicit loss facts.
 
 ## What the ingress does not capture by default
 
@@ -90,13 +102,13 @@ Full payload capture is debug-mode opt-in in the trace model and storage policy,
 
 ## Storage
 
-Storage is opt-in. Passing `--storage <path>` wires the ingress `onTrace` callback to SQLite-backed storage:
+Storage is opt-in. Passing `--storage <path>` wires legacy non-streaming traces to SQLite-backed storage:
 
 ```bash
 pnpm --filter @signalglass/cli dev -- ingress --config signalglass.config.json --storage .signalglass/traces.db
 ```
 
-If `--storage` is omitted, ingress still forwards requests but does not persist traces.
+Passing `--evidence-storage <path>` enables append-only canonical evidence storage for streaming interactions under the metadata-safe v1.1.0 policy. If the corresponding option is omitted, ingress still forwards requests but does not persist that record type. Evidence persistence happens only after the downstream response has flushed or closed; storage contention or failure is reported with a closed operational code and never changes the client response.
 
 Inspect persisted traces with:
 
@@ -111,7 +123,7 @@ pnpm --filter @signalglass/cli dev -- traces --storage .signalglass/traces.db sh
 
 ```bash
 signalglass analyze <file> [--report terminal|json|html] [--output <file>]
-signalglass ingress --config <file> [--port <port>] [--storage <path>]
+signalglass ingress --config <file> [--port <port>] [--storage <path>] [--evidence-storage <path>]
 signalglass traces --storage <path> list [--report terminal|json] [--output <file>]
 signalglass traces --storage <path> show <trace-id> [--report terminal|json|html] [--output <file>]
 ```

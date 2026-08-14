@@ -15,10 +15,12 @@
   },
   "dependencies": {
     "@signalglass/core": "workspace:*",
-    "@signalglass/providers": "workspace:*"
+    "@signalglass/evidence": "workspace:*",
+    "@signalglass/providers": "workspace:*",
+    "@signalglass/storage": "workspace:*",
+    "@signalglass/streaming": "workspace:*"
   },
   "devDependencies": {
-    "@signalglass/storage": "workspace:*",
     "@types/node": "^20.14.0",
     "typescript": "^5.5.4",
     "vitest": "^1.6.0"

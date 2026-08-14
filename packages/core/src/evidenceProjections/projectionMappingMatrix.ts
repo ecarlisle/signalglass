@@ -61,7 +61,8 @@ export type MatrixFixtureName =
   | 'chunks'
   | 'all-kinds'
   | 'enriched'
-  | 'redacted';
+  | 'redacted'
+  | 'streaming';
 
 /** Projection stage names used by the runtime checks. */
 export type MatrixProjectionStage =
@@ -1289,6 +1290,53 @@ export const PROJECTION_MAPPING_MATRIX: ReadonlyArray<ProjectionMatrixClaim> = [
       outcome: 'unavailable',
       reasonIncludes: 'error payload field',
       viewAbsence: [ALL_KINDS_ERROR_MESSAGE],
+    },
+  },
+  {
+    id: 'E2L-088',
+    primitive: 'ResponseEnvelope',
+    spec013: '§3.2; Spec 016 §13.5 retained streaming delta text',
+    legacyTarget: '(no legacy excerpt)',
+    classification: 'unavailable',
+    reason: 'legacy TraceEvent has no retained streaming-delta field; canonical deltaText is not projected into an excerpt',
+    verifiedBy: 'projectionMappingMatrix.test.ts streaming fixture; projectionParity.test.ts streaming integration assertions',
+    runtime: {
+      fixture: 'streaming',
+      path: 'events[4].responseEnvelope.deltaText',
+      outcome: 'unavailable',
+      reasonIncludes: 'streaming-delta field',
+      viewAbsence: ['streaming-delta-sentinel'],
+    },
+  },
+  {
+    id: 'E2L-089',
+    primitive: 'RequestEnvelope',
+    spec013: '§3.2; Spec 016 §8.7 normalized request-message leaves',
+    legacyTarget: '(no legacy excerpt)',
+    classification: 'unavailable',
+    reason: 'normalized request-message leaves are not representable in the legacy excerpt surface and are never inlined',
+    verifiedBy: 'projectionMappingMatrix.test.ts streaming fixture',
+    runtime: {
+      fixture: 'streaming',
+      path: 'events[1].requestEnvelope.messages',
+      outcome: 'unavailable',
+      reasonIncludes: 'normalized request',
+      viewAbsence: ['streaming-request-sentinel'],
+    },
+  },
+  {
+    id: 'E2L-090',
+    primitive: 'Capture surface',
+    spec013: '§5; Spec 016 §13.4 decoder participation',
+    legacyTarget: '(no legacy field)',
+    classification: 'unavailable',
+    reason: 'legacy Trace has no streaming decoder-participation field; the authoritative decoderDisposition is not projected',
+    verifiedBy: 'projectionMappingMatrix.test.ts streaming fixture',
+    runtime: {
+      fixture: 'streaming',
+      path: 'captureBoundary.streaming.decoderDisposition',
+      outcome: 'unavailable',
+      reasonIncludes: 'decoder-participation field',
     },
   },
 ];

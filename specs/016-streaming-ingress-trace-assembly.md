@@ -2,12 +2,14 @@
 
 ## Status
 
-**Accepted — revision 11 (narrow correction pass).** Accepted by human
+**Implemented — revision 11 (all five slices).** Accepted by human
 architectural review. The S1 schema-foundation slice is implemented in
 PR #24, and the S2 `metadata-safe` v1.1.0 persistence-policy slice is
 implemented in PR #25. The S3 network-free SSE parser is implemented in PR
 #26. S4's OpenAI SSE decoder and provider-neutral deterministic assembler are
-implemented; only the S5 ingress wiring remains pending.
+implemented. S5 wires the bounded decoder tee, byte-transparent backpressured
+transport, lifecycle finalization, canonical persistence, and compatibility
+projection accounting into `apps/ingress`.
 
 Revision 11 (narrow correction pass) resolves three revision-10 defects
 without redesigning the terminal-suffix or Spec 014 collapse contracts:
@@ -3925,9 +3927,7 @@ reinterpretation.**
 **Decision 20 — implementation proceeds in five slices, each with a
 shippable, testable outcome; the 1.1 schema foundation lands first, policy
 second, parser third, decoder/assembler fourth, ingress wiring last; every
-slice builds against the fields it actually consumes. S1 is implemented in
-PR #24, S2 is implemented in PR #25, and S3–S4 are implemented; S5 remains
-pending.**
+slice builds against the fields it actually consumes. S1–S5 are implemented.**
 
 | Slice | Scope | Outcome | Depends on |
 |---|---|---|---|
@@ -3935,7 +3935,7 @@ pending.**
 | **S2 — implemented in PR #25** | `metadata-safe` v1.1.0 persistence policy (Rules 1–2 with the closed admitted paths §14.2, **inspecting each leaf's own status/declaration/path/length** — never the aggregate event status; cap exactly 240 code points; **v1.0.0 unchanged — whole-payload event-level authorization, `unknown-additive-field` refusal, no `ContentLeaf` interpretation; v1.1.0 delegating v1.0 admission/classification semantics for 1.0.x records with truthful v1.1.0 deciding-policy identity**) in `@signalglass/storage` + construction-time policy selection (Spec 015 model) + policy-version recording + leak-free `policy-failed` reasons (no `unknown-policy-version`) | persistence admits bounded captured content mechanically at closed paths; v1.0.0 unchanged; delegation status/code equivalent with truthful identity; policy chosen at construction | S1 (1.1 records exist, deltaText/messages leaf shapes) |
 | **S3 — implemented** | `@signalglass/streaming`: L2 SSE parser (incremental, bounded, `[DONE]`-aware, deterministic post-terminal continuation, frame-overflow, **SSE-metadata fact `sseMetadataObservedButNotRetained` (openai-sse applicability only, §7.3) with comments-ignored-by-canonical-semantics §6.1**) | parser unit-tested (T01–T12, T131, T142); network-free | none |
 | **S4 — implemented** | `@signalglass/streaming` assembler + `@signalglass/providers` L3 decoder (openai-sse contract): normalization, `choiceIndex` identity, closed-category unmapped fields, usage, terminalization, honest evidence statuses, explicit nondeterministic inputs, remainder knowledge, `deltaText` assembly, **leaf-level request-message assembly with role sentinel (§8.7), evidence-budget enforcement with the normative snapshot measurement (maximum over valid terminal-suffix alternatives), state-dependent terminal-suffix reservation, deterministic finalization inputs, atomic observation admission running actual Spec 014 collapse with structural rejection routed separately from budget exhaustion, first-terminal-wins, and classification-matrix exhaustiveness (§3.5, §9.3)** | decoder/assembler unit-tested (T13–T44, T49–T61, T72–T87, T101–T166); builds against S1 schema fields and S2 Rule 2 admitted-path contracts | S1 (schema fields), S2 (policy contracts as applicable), S3 |
-| **S5** | `apps/ingress` wiring: streaming path on the existing route, passthrough pipeline + backpressure, bounded decoder tee, client-response orchestration (Spec 006 error-envelope semantics preserved), **evidence-budget configuration and validation at startup (§3.5) including the count-budget cross-field invariants and the terminal-suffix reservation**, save-after-response-end, observability projection, **projection-matrix and parity rows in `@signalglass/core` updated for the new canonical fields** (deltaText, normalized leaf messages, decoderDisposition) | e2e tests (T62–T71, T98–T100, T125–T127, T150, T154, T155) + parity/projection updates + integration with the existing suite | S2, S4 |
+| **S5 — implemented** | `apps/ingress` wiring: streaming path on the existing route, passthrough pipeline + backpressure, bounded decoder tee, client-response orchestration (Spec 006 error-envelope semantics preserved), **evidence-budget configuration and validation at startup (§3.5) including the count-budget cross-field invariants and the terminal-suffix reservation**, save-after-response-end, observability projection, **projection-matrix and parity rows in `@signalglass/core` updated for the new canonical fields** (deltaText, normalized leaf messages, decoderDisposition) | e2e tests (T62–T71, T98–T100, T125–T127, T150, T154, T155) + parity/projection updates + integration with the existing suite | S2, S4 |
 
 Each slice runs the full validation sequence before commit (AGENTS.md):
 `pnpm test`, `pnpm build`, evidence-example validation, projection-matrix

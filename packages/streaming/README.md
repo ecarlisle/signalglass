@@ -2,11 +2,12 @@
 
 Network-free streaming protocol primitives for SignalGlass.
 
-The package implements Spec 016 Slices S3–S4: a strict, incremental,
+The package implements the network-free parts of Spec 016 Slices S3–S5: a strict, incremental,
 byte-bounded SSE framing parser plus the provider-neutral deterministic evidence
 assembler. It does not open sockets, perform HTTP I/O, import provider adapters,
 read clocks/randomness, or persist data. The OpenAI SSE decoder lives in
-`@signalglass/providers`; ingress integration remains pending in S5.
+`@signalglass/providers`; the S5 HTTP lifecycle and persistence wiring live in
+`apps/ingress`.
 
 ## Public API
 
@@ -19,6 +20,8 @@ read clocks/randomness, or persist data. The OpenAI SSE decoder lives in
 - `SseMalformedCode`
 - `SseDecoderDisposition`
 - `assembleTrace(options)` / `AssemblyResult`
+- `observationFromDecodedEvent()` for exact incremental admission
+- `buildTerminalBoundaryPreviews()` for the closed S5 reservation bundle
 - `DEFAULT_EVIDENCE_BUDGETS` / `validateEvidenceBudgets()`
 - `retainText()` / `normalizeRequestMessages()`
 - closed failure-classification and terminal-reservation helpers

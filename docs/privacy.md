@@ -104,7 +104,11 @@ Canonical `EvidenceRecord`s ([Spec 015](../specs/015-append-only-evidence-store.
 
 The conservative `signalglass.persistence.metadata-safe` reference policy is a **schema-category policy**, not proof that arbitrary metadata strings contain no sensitive content: v1.0.0 retains its whole-payload declared-content rules, while v1.1.0 adds per-leaf declared admission and bounded captured admission only at the closed Spec 016 paths (at most 240 Unicode code points, with the exact known capture-profile and detector versions). The mandatory safety gate still scans the actual submitted content first, regardless of policy.
 
+Streaming ingress applies that detect-then-retain rule incrementally. It never stores the full request body, raw SSE bytes, authorization headers, or a provider error body. Only normalized request-message leaves and decoded delta text that pass masking, the per-leaf cap, and the record-wide evidence budgets may enter canonical observations. Once observation capture detaches because of an encoding, decoder, structural, or budget failure, transport forwarding continues and the record declares the corresponding limitation; content observed after `[DONE]` is structurally accounted for but not retained.
+
 Policy decisions, policy exceptions, and validation results are **storage-safe (leak-free)**: rejection codes, paths, and structural reason codes only — never rejected values, payload content, credentials, or secret material. Persistence-policy name/version and the storage digest live only in administrative metadata (manifest and columns), never inside the stored document. This slice implements **no canonical hard-delete**: no API deletes or overwrites canonical rows; legacy `deleteTrace()` / `deleteExpiredTraces()` never touch canonical rows.
+
+Streaming persistence notifications follow the same leak-free rule: operational observers receive only the closed codes `contention-exhausted` or `storage-unavailable` plus the generated trace id. Raw exceptions, database details, and captured content are not logged by the ingress CLI.
 
 ## Compliance notes
 

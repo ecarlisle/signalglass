@@ -10,6 +10,26 @@ export interface UpstreamResponse {
   body: unknown;
 }
 
+/** Shared upstream request header construction (env-var-only API key, Spec
+ * 006). `extraHeaders` lets callers add request-shape-specific values (e.g.
+ * the streaming path's `accept-encoding: identity` preference, §5.5)
+ * without duplicating the base header set. */
+export function buildUpstreamRequestHeaders(
+  provider: ProviderConfig,
+  apiKey: string | undefined,
+  body: string,
+  extraHeaders: Record<string, string> = {},
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    'content-length': String(Buffer.byteLength(body)),
+    ...extraHeaders,
+    ...provider.headers,
+  };
+  if (apiKey) headers['authorization'] = `Bearer ${apiKey}`;
+  return headers;
+}
+
 export async function forwardToUpstream(
   provider: ProviderConfig,
   apiKey: string | undefined,
@@ -20,16 +40,7 @@ export async function forwardToUpstream(
   const makeRequest = url.protocol === 'https:' ? httpsRequest : httpRequest;
 
   const body = JSON.stringify(requestBody);
-
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-    'content-length': String(Buffer.byteLength(body)),
-    ...provider.headers,
-  };
-
-  if (apiKey) {
-    headers['authorization'] = `Bearer ${apiKey}`;
-  }
+  const headers = buildUpstreamRequestHeaders(provider, apiKey, body);
 
   return new Promise((resolve, reject) => {
     const req = makeRequest(

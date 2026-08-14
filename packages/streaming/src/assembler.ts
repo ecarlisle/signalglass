@@ -143,6 +143,14 @@ export type AssemblyResult = {
   boundary: CaptureBoundary;
   warnings: readonly AssemblyWarning[];
   record: EvidenceRecord;
+  /** Retained preterminal observations after atomic admission. This is the
+   * resumable S5 handoff; terminal-suffix observations in `record` are never
+   * included here and rejected candidates are never exposed. */
+  captureState: {
+    observations: readonly EvidenceObservation[];
+    state: TerminalReservationState;
+    detachedCode?: ObservationFailureCode | InternalDecoderFailureCode;
+  };
   budgetMeasurements: {
     actualSerializedEvidenceBytes: number;
     maximumFinalizableSnapshotBytes: number;
@@ -478,6 +486,11 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
     boundary: actual.boundary,
     warnings,
     record: actual.record,
+    captureState: {
+      observations: [...retained],
+      state,
+      ...(detachedCode === undefined ? {} : { detachedCode }),
+    },
     budgetMeasurements: {
       actualSerializedEvidenceBytes: actual.serializedBytes,
       maximumFinalizableSnapshotBytes: previews.serializedBytes,
@@ -506,6 +519,24 @@ export function assembleTrace(options: AssemblerOptions): AssemblyResult {
       }),
     },
   };
+}
+
+/** Build the single raw observation owned by one decoded L3 event. Provider
+ * errors are terminal signals and deliberately have no ordinary observation. */
+export function observationFromDecodedEvent(
+  decoded: Exclude<AssemblerDecodedEvent, { kind: 'provider-error' }>,
+  allocation: FinalizationValue,
+  seq: number,
+  traceId: string,
+  modelSpanId: string,
+): EvidenceObservation {
+  const blueprint = decoded.kind === 'chunk' ? chunkBlueprint(decoded) : usageBlueprint(decoded);
+  return observationFromBlueprint(
+    { ...blueprint, spanId: modelSpanId },
+    allocation,
+    seq,
+    traceId,
+  );
 }
 
 type EventBlueprint = {
@@ -570,7 +601,12 @@ function observationFromBlueprint(
     capturedAt: allocation.capturedAt,
     evidenceStatus: blueprint.evidenceStatus,
     observationRole: blueprint.observationRole ?? null,
-    payload: blueprint.rawPayload ?? blueprint.payload ?? {},
+    // `interaction_start`/`interaction_end` carry no payload fields at all
+    // (Spec 014 §2.2.12) — `null`, never `{}`. Every other control kind that
+    // reaches this default (e.g. `span_end` with no `durationMs`) still
+    // expects an (empty) record.
+    payload: blueprint.rawPayload ?? blueprint.payload
+      ?? (blueprint.kind === 'interaction_start' || blueprint.kind === 'interaction_end' ? null : {}),
     rawCapturedAt: allocation.capturedAt,
   };
 }
@@ -957,7 +993,12 @@ function boundaryAfterObservationDetachment(
     && responseMeta.statusCode >= 200
     && responseMeta.statusCode <= 299
     && responseMeta.contentType === 'text/event-stream';
-  const retainedDeltas = retainedEvents.filter((event) => event.kind === 'model_response_chunk');
+  const allChunks = retainedEvents.filter((event) => event.kind === 'model_response_chunk');
+  // Mirrors the canonical deltaAggregate derivation (validate-fields.ts): only
+  // chunks whose deltaText actually round-tripped count as retained — an
+  // observed-but-textless chunk (e.g. a role-only delta) is `not-observed`,
+  // never `fully-retained` merely because the event kind is present.
+  const retainedDeltas = allChunks.filter((event) => event.responseEnvelope.deltaText !== undefined);
   const retainedRequest = retainedEvents.some((event) => event.kind === 'model_request');
   const retainedProviderNative = retainedEvents.some((event) =>
     (event.kind === 'model_request' && event.requestEnvelope.providerNative !== undefined)
@@ -968,7 +1009,8 @@ function boundaryAfterObservationDetachment(
       ? current.losses.messageContent
       : current.losses.messageContent === 'not-observed' ? 'not-observed' : 'omitted',
     deltaContent: retainedDeltas.length > 0
-      ? retainedDeltas.some((event) => event.evidenceStatus === 'truncated') ? 'partially-retained' : 'fully-retained'
+      ? retainedDeltas.some((event) => event.evidenceStatus === 'truncated' || event.truncation !== undefined)
+        ? 'partially-retained' : 'fully-retained'
       : 'not-observed',
     providerErrorBody: 'not-applicable',
     providerNative: retainedProviderNative

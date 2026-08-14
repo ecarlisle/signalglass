@@ -7,9 +7,18 @@ import {
   type Trace,
   type TraceEvent,
 } from '@signalglass/core';
+import { validateEvidenceBudgets, type EvidenceBudgets } from '@signalglass/streaming';
+import type { EvidenceRecord } from '@signalglass/evidence';
+import type { EvidenceStorage, SaveOutcome } from '@signalglass/storage';
 import type { IngressConfig } from './config.js';
 import { selectProvider } from './routing.js';
 import { forwardToUpstream } from './forward.js';
+import {
+  handleStreamingChatCompletion,
+  handleStreamingRequestFailure,
+} from './streaming.js';
+import type { PersistenceFailureCode } from './streamingEvidence.js';
+import { sendJson } from './httpResponses.js';
 
 const DEFAULT_PORT = 8080;
 export const DEFAULT_BODY_SIZE_LIMIT_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -38,7 +47,7 @@ async function readJsonBody(
         if (!limitExceeded) {
           limitExceeded = true;
           body = '';
-          reject(new Error(`Request body exceeds ${limitBytes} byte limit`));
+          reject(new RequestBodyError('over-limit', size, `Request body exceeds ${limitBytes} byte limit`));
         }
         req.resume();
         return;
@@ -52,26 +61,21 @@ async function readJsonBody(
       try {
         resolve(body ? JSON.parse(body) : undefined);
       } catch (error) {
-        reject(error);
+        reject(new RequestBodyError('malformed', size, error instanceof Error ? error.message : 'Invalid JSON'));
       }
     });
-    req.on('error', reject);
+    req.on('error', () => reject(new RequestBodyError('read-failure', size, 'Request body read failed')));
   });
 }
 
-function sendJson(
-  res: ServerResponse,
-  status: number,
-  payload: unknown,
-  extraHeaders: Record<string, string> = {},
-): void {
-  const body = JSON.stringify(payload);
-  res.writeHead(status, {
-    'content-type': 'application/json',
-    'content-length': String(Buffer.byteLength(body)),
-    ...extraHeaders,
-  });
-  res.end(body);
+class RequestBodyError extends Error {
+  constructor(
+    readonly kind: 'over-limit' | 'malformed' | 'read-failure',
+    readonly bytesRead: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 function handleHealth(res: ServerResponse): void {
@@ -94,6 +98,15 @@ export interface IngressServerOptions {
   port?: number;
   bodySizeLimitBytes?: number;
   onTrace?: (trace: Trace) => void | Promise<void>;
+  /** Spec 016 S5: persistence for streaming interactions' canonical
+   * EvidenceRecord. Optional, mirroring the existing legacy `onTrace`
+   * pattern — when absent, streaming still runs but nothing is persisted. */
+  evidenceStorage?: EvidenceStorage;
+  evidenceBudgets?: EvidenceBudgets;
+  onEvidenceRecord?: (record: EvidenceRecord, traceId: string) => void;
+  onSaveOutcome?: (outcome: SaveOutcome, traceId: string) => void;
+  onEvidenceSaveError?: (code: PersistenceFailureCode, traceId: string) => void;
+  streamIdleTimeoutMs?: number;
 }
 
 function sanitizeErrorSummary(value: string): string {
@@ -154,24 +167,110 @@ async function emitTrace(
   }
 }
 
+type ReadChatBodyResult = { ok: true; body: unknown } | { ok: false };
+
+async function readChatBody(
+  options: IngressServerOptions,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<ReadChatBodyResult> {
+  try {
+    return { ok: true, body: await readJsonBody(req, options.bodySizeLimitBytes ?? DEFAULT_BODY_SIZE_LIMIT_BYTES) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid request body';
+    const bodyError = error instanceof RequestBodyError
+      ? error
+      : new RequestBodyError('read-failure', 0, message);
+    await handleStreamingRequestFailure(
+      streamingRuntime(options),
+      res,
+      { traceId: generateId(), provider: 'unknown', model: 'unknown', requestMessages: [] },
+      bodyError.kind === 'read-failure' ? 'body-read-failure' : 'invalid-request',
+      bodyError.kind === 'over-limit' ? 413 : 400,
+      message,
+      requestBodyLoss(bodyError),
+      'not-observed',
+    );
+    return { ok: false };
+  }
+}
+
+function requestBodyLoss(error: RequestBodyError) {
+  if (error.kind === 'malformed') return 'fully-observed-not-retained' as const;
+  return error.bytesRead === 0 ? 'no-bytes-observed' as const : 'partially-observed-not-retained' as const;
+}
+
+function streamingRuntime(options: IngressServerOptions, shutdownSignal?: AbortSignal) {
+  return {
+    evidenceStorage: options.evidenceStorage,
+    evidenceBudgets: options.evidenceBudgets,
+    onEvidenceRecord: options.onEvidenceRecord,
+    onSaveOutcome: options.onSaveOutcome,
+    onEvidenceSaveError: options.onEvidenceSaveError,
+    streamIdleTimeoutMs: options.streamIdleTimeoutMs,
+    shutdownSignal,
+  };
+}
+
+async function handleStreamingBody(
+  options: IngressServerOptions,
+  req: IncomingMessage,
+  res: ServerResponse,
+  requestBody: unknown,
+  reqRecord: Record<string, unknown>,
+  shutdownSignal?: AbortSignal,
+): Promise<boolean> {
+  if (reqRecord.stream !== true) return false;
+  if (!validStreamingRequest(reqRecord)) {
+    await handleStreamingRequestFailure(
+      streamingRuntime(options),
+      res,
+      {
+        traceId: generateId(),
+        provider: 'unknown',
+        model: typeof reqRecord.model === 'string' ? reqRecord.model : 'unknown',
+        requestMessages: [],
+      },
+      'invalid-request',
+      400,
+      'Streaming chat completion requires a messages array and a string model when model is present',
+      'fully-observed-not-retained',
+      Object.hasOwn(reqRecord, 'messages') ? 'omitted' : 'not-observed',
+    );
+    return true;
+  }
+  await handleStreamingChatCompletion(
+    streamingRuntime(options, shutdownSignal),
+    options.config.providers,
+    req,
+    res,
+    requestBody,
+    reqRecord,
+    generateId(),
+  );
+  return true;
+}
+
+function validStreamingRequest(request: Record<string, unknown>): boolean {
+  if (!Array.isArray(request.messages)) return false;
+  if (request.model !== undefined && typeof request.model !== 'string') return false;
+  return request.messages.every((message) =>
+    typeof message === 'object' && message !== null && !Array.isArray(message));
+}
+
 async function handleChatCompletion(
   options: IngressServerOptions,
   req: IncomingMessage,
   res: ServerResponse,
+  shutdownSignal?: AbortSignal,
 ): Promise<void> {
-  const { config, bodySizeLimitBytes = DEFAULT_BODY_SIZE_LIMIT_BYTES, onTrace } = options;
-
-  let requestBody: unknown;
-  try {
-    requestBody = await readJsonBody(req, bodySizeLimitBytes);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Invalid request body';
-    const status = message.includes('limit') ? 413 : 400;
-    sendJson(res, status, { error: { message, type: 'invalid_request_error' } });
-    return;
-  }
-
+  const { config, onTrace } = options;
+  const read = await readChatBody(options, req, res);
+  if (!read.ok) return;
+  const requestBody = read.body;
   const reqRecord = (requestBody ?? {}) as Record<string, unknown>;
+  if (await handleStreamingBody(options, req, res, requestBody, reqRecord, shutdownSignal)) return;
+
   const model = typeof reqRecord.model === 'string' ? reqRecord.model : undefined;
   const provider = selectProvider(config.providers, model);
 
@@ -297,6 +396,13 @@ async function handleChatCompletion(
 export function createIngressServer(options: IngressServerOptions): Server {
   const { config, port = DEFAULT_PORT } = options;
 
+  // Spec 016 §3.5: evidence budgets are refused at startup when invalid or
+  // an impossible combination — never silently clamped.
+  if (options.evidenceBudgets !== undefined) {
+    validateEvidenceBudgets(options.evidenceBudgets);
+  }
+
+  const shutdownController = new AbortController();
   const server = createServer(async (req, res) => {
     const url = req.url ?? '/';
     const method = req.method ?? 'GET';
@@ -307,15 +413,25 @@ export function createIngressServer(options: IngressServerOptions): Server {
       } else if (url === '/v1/models' && method === 'GET') {
         handleModels(config.providers, res);
       } else if (url === '/v1/chat/completions' && method === 'POST') {
-        await handleChatCompletion(options, req, res);
+        await handleChatCompletion(options, req, res, shutdownController.signal);
       } else {
         sendJson(res, 404, { error: { message: 'Not found', type: 'invalid_request_error' } });
       }
     } catch (error) {
+      if (res.headersSent || res.destroyed) {
+        res.destroy();
+        return;
+      }
       const message = error instanceof Error ? error.message : 'Internal server error';
       sendJson(res, 500, { error: { message, type: 'server_error' } });
     }
   });
+
+  const close = server.close.bind(server);
+  server.close = ((callback?: (error?: Error) => void) => {
+    shutdownController.abort();
+    return close(callback);
+  }) as Server['close'];
 
   return server;
 }
