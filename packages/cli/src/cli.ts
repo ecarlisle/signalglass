@@ -6,7 +6,7 @@ import { analyzeRun } from '@signalglass/core';
 import type { Trace } from '@signalglass/core';
 import { renderTerminal, renderJson, renderHtml, renderTraceTerminal, renderTraceJson, renderTraceHtml, renderTraceListSummary, renderTraceListJson } from '@signalglass/reports';
 import { loadConfig, startIngressServer } from '@signalglass/ingress';
-import { TraceStorage } from '@signalglass/storage';
+import { TraceStorage, EvidenceStorage, createMetadataSafePolicy } from '@signalglass/storage';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 function printAnalyzeUsage() {
@@ -14,7 +14,7 @@ function printAnalyzeUsage() {
 }
 
 function printIngressUsage() {
-  console.error('Usage: signalglass ingress --config <file> [--port <port>] [--storage <path>]');
+  console.error('Usage: signalglass ingress --config <file> [--port <port>] [--storage <path>] [--evidence-storage <path>]');
 }
 
 function printTracesUsage() {
@@ -28,7 +28,7 @@ function printUsage() {
   console.error('Usage: signalglass <command> [options]');
   console.error('Commands:');
   console.error('  analyze <file> [--report terminal|json|html] [--output <file>]');
-  console.error('  ingress --config <file> [--port <port>] [--storage <path>]');
+  console.error('  ingress --config <file> [--port <port>] [--storage <path>] [--evidence-storage <path>]');
   console.error('  traces --storage <path> list|show <trace-id>');
 }
 
@@ -102,6 +102,7 @@ async function ingressCommand(args: string[]) {
       config: { type: 'string' },
       port: { type: 'string' },
       storage: { type: 'string' },
+      'evidence-storage': { type: 'string' },
     },
   });
 
@@ -145,12 +146,39 @@ async function ingressCommand(args: string[]) {
     }
   }
 
+  // Spec 016 S5: initialize evidence storage if --evidence-storage is provided.
+  let evidenceStorage: EvidenceStorage | undefined;
+  if (values['evidence-storage']) {
+    try {
+      evidenceStorage = new EvidenceStorage({
+        databasePath: values['evidence-storage'],
+        persistencePolicy: createMetadataSafePolicy('1.1.0'),
+      });
+      console.log(`Evidence storage enabled: ${values['evidence-storage']}`);
+    } catch (error) {
+      console.error(`Error initializing evidence storage: ${error instanceof Error ? error.message : error}`);
+      if (storage) storage.close();
+      process.exit(1);
+    }
+  }
+
   let server;
   try {
-    server = await startIngressServer({ config, port, onTrace });
+    server = await startIngressServer({
+      config,
+      port,
+      onTrace,
+      evidenceStorage,
+      onEvidenceSaveError: (code) => {
+        console.error(`Evidence persistence failed: ${code}`);
+      },
+    });
   } catch (error) {
     if (storage) {
       storage.close();
+    }
+    if (evidenceStorage) {
+      evidenceStorage.close();
     }
     throw error;
   }
@@ -165,6 +193,9 @@ async function ingressCommand(args: string[]) {
     server.close(() => {
       if (storage) {
         storage.close();
+      }
+      if (evidenceStorage) {
+        evidenceStorage.close();
       }
       process.exit(0);
     });

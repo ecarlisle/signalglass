@@ -20,6 +20,7 @@ export {
   classifyFailureCode,
   countBudgetAllows,
   measureFinalizableSnapshotBytes,
+  observationFromDecodedEvent,
   reservedTerminalSuffixCount,
   validateEvidenceBudgets,
 } from './assembler.js';
@@ -37,6 +38,7 @@ export type {
   TerminalBoundaryPreview,
   TerminalReservationState,
 } from './assembler.js';
+export { buildTerminalBoundaryPreviews } from './boundary-previews.js';
 export {
   CAPTURE_PROFILE_NAME,
   CAPTURE_PROFILE_VERSION,

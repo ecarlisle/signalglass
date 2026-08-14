@@ -253,6 +253,10 @@ describe('Spec 016 S4 assembler', () => {
     expect(first.trace.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     expect(first.trace.status).toBe('completed');
     expect(first.trace.events.at(-1)?.kind).toBe('interaction_end');
+    expect(first.record.rawObservations.find((observation) =>
+      observation.kind === 'interaction_start')?.payload).toBeNull();
+    expect(first.record.rawObservations.find((observation) =>
+      observation.kind === 'interaction_end')?.payload).toBeNull();
     const response = first.trace.events.find((event) => event.kind === 'model_response');
     expect(response?.responseEnvelope.responseMeta).toEqual({ statusCode: 200, contentType: 'text/event-stream' });
     const chunk = first.trace.events.find((event) => event.kind === 'model_response_chunk');
@@ -497,6 +501,31 @@ describe('Spec 016 S4 assembler', () => {
       kind: 'error', actor: 'capture', lifecycleTarget: 'none', lifecycleEffect: 'none',
       error: { type: 'internal-capture-error' },
     });
+  });
+
+  it('does not claim retained delta text after detaching behind a role-only chunk', () => {
+    const roleOnly = options({
+      decodedEvents: [{
+        kind: 'chunk', choiceIndex: 0, chunkIndex: 0, delta: null,
+        unmappedDeltaFields: ['role'],
+      }],
+    });
+    const baseline = assembleTrace(roleOnly);
+    const chunk = baseline.record.rawObservations.find((observation) =>
+      observation.kind === 'model_response_chunk')!;
+    const result = assembleTrace({
+      ...roleOnly,
+      additionalRawObservations: [{
+        ...chunk,
+        observationId: 'role-only-sequence-collision',
+        eventId: 'role-only-sequence-collision-event',
+      }],
+    });
+
+    expect(result.warnings).toContain('candidate-structurally-rejected');
+    expect(result.boundary.streaming?.losses.deltaContent).toBe('not-observed');
+    expect(result.trace.events.find((event) =>
+      event.kind === 'model_response_chunk')?.responseEnvelope.deltaText).toBeUndefined();
   });
 
   it('uses state-dependent terminal suffix count reservations', () => {

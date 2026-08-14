@@ -299,6 +299,7 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
     outcome: 'unavailable',
     reason: 'legacy Trace has no completeness record; the canonical derived EvidenceRecord.completeness (eventsByStatus, seqGaps, duplicatesDetected, boundaryStatement) is not projected',
   });
+  pushStreamingBoundaryLossMapping(mappings, record);
 
   // ---- Conditions (only when present) ----
   if (trace.conditions != null && trace.conditions.length > 0) {
@@ -403,6 +404,19 @@ export function evidenceToLegacyTrace(record: EvidenceRecord): ProjectionResult<
   return { ok: true, view, report };
 }
 
+function pushStreamingBoundaryLossMapping(
+  mappings: ProjectionMapping[],
+  record: EvidenceRecord,
+): void {
+  if (record.captureBoundary.streaming === undefined) return;
+  mappings.push({
+    path: 'captureBoundary.streaming.decoderDisposition',
+    stage: STAGE,
+    outcome: 'unavailable',
+    reason: 'legacy Trace has no streaming decoder-participation field; the authoritative decoderDisposition is not projected',
+  });
+}
+
 /**
  * Event-specific unavailable mappings for losses that only exist when the
  * canonical event actually carries the information: the `unobservable`
@@ -477,6 +491,8 @@ function pushResponseEnvelopeLossMappings(
     'legacy TraceEvent carries no fidelity discriminant; the canonical response providerNativeFidelity (structurally_faithful | byte_faithful) is not projected');
   pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.finishReason`, envelope.finishReason,
     'legacy TraceEvent has no finish-reason field; the canonical response finishReason is not projected');
+  pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.deltaText`, envelope.deltaText,
+    'legacy TraceEvent has no retained streaming-delta field; canonical deltaText is not projected into an excerpt');
   pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.providerNative`, envelope.providerNative,
     'legacy TraceEvent has no provider-native payload field; the canonical response providerNative body is not projected');
   pushUnavailableIfPresent(mappings, `${path}.responseEnvelope.usage`, envelope.usage,

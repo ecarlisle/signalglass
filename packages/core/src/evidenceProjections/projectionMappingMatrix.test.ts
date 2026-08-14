@@ -46,6 +46,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { EVENT_KINDS, sha256Hex, utf8Encode } from '@signalglass/evidence';
+import type { CaptureBoundary } from '@signalglass/evidence';
 import type { ProjectionMapping, ProjectionReport } from './types.js';
 import { evidenceToAgentRun } from './evidenceToAgentRun.js';
 import { evidenceToLegacyTrace } from './evidenceToLegacyTrace.js';
@@ -144,6 +145,7 @@ const PINNED_CLAIM_IDS: ReadonlyArray<string> = [
   'E2L-075', 'E2L-076', 'E2L-077', 'E2L-078', 'E2L-079', 'E2L-080',
   'E2L-081', 'E2L-082', 'E2L-083', 'E2L-084', 'E2L-085', 'E2L-086',
   'E2L-087',
+  'E2L-088', 'E2L-089', 'E2L-090',
 ];
 
 /**
@@ -228,6 +230,87 @@ function enrichedRecord(): EvidenceRecord {
   );
 }
 
+function streamingRecord(): EvidenceRecord {
+  const losses = {
+    requestBody: 'fully-observed-not-retained' as const,
+    messageContent: 'fully-retained' as const,
+    deltaContent: 'fully-retained' as const,
+    providerNative: 'not-retained' as const,
+    providerErrorBody: 'not-applicable' as const,
+    wireBytes: 'not-retained' as const,
+    postTerminalContent: 'none-observed' as const,
+    unmappedDeltaFields: [] as const,
+    unrecognizedExtensionFrameObserved: false,
+    headerValuesBeyondAllowlist: false,
+    contentTypeParametersDropped: false,
+    maskedContent: false,
+    contentEncodingUnsupported: false,
+    multimodalContentObserved: false,
+    requestMessageUnknownKeysObserved: false,
+    unrecognizedRoleObserved: false,
+    sseMetadataObservedButNotRetained: false,
+  };
+  const traceId = 'trace-1';
+  const spanId = 'span-streaming';
+  const observation = (
+    seq: number,
+    kind: Parameters<typeof obs>[0]['kind'],
+    payload: unknown,
+    role: Parameters<typeof obs>[0]['observationRole'] = null,
+  ) => obs({
+    observationId: `stream-observation-${seq}`, eventId: `stream-event-${seq}`, traceId, spanId,
+    seq, kind, capturedAt: T0, rawCapturedAt: T0, observationRole: role,
+    payload: payload as Parameters<typeof obs>[0]['payload'],
+  });
+  const boundary: CaptureBoundary = {
+    captureSurface: 'ingress_proxy', observationBoundary: 'provider_reported',
+    declaredEventKinds: [
+      'interaction_start', 'interaction_end', 'span_start', 'span_end', 'model_request',
+      'model_response', 'model_response_chunk', 'model_usage', 'error', 'cancelled',
+    ],
+    declaredSurfaces: ['ingress_proxy'], missingRecord: null,
+    streaming: {
+      upstream: { outcome: 'response-completed' }, clientResponse: { outcome: 'flushed' },
+      decoderDisposition: 'openai-sse',
+      remainder: { knowledge: 'protocol-terminal-observed', lastObservedFramePosition: 2, rawForwardedBytes: 128 },
+      losses,
+      assembly: {
+        assembler: { name: 'signalglass.streaming.assembler', version: '1.0.0' },
+        decoderContract: { name: 'signalglass.providers.openai-sse', version: '1.0.0' },
+      },
+      captureProfile: { name: 'signalglass.collection.ingress-metadata-safe', version: '1.0.0' },
+      detector: { name: 'signalglass.collection.sensitive-detector', version: '1.0.0' },
+      budgets: {
+        maxCanonicalEvents: 10_000, maxRawObservations: 20_000,
+        maxRawObservationPayloadBytes: 4 * 1024 * 1024,
+        maxRetainedContentCodePoints: 262_144,
+        maxSerializedEvidenceBytes: 16 * 1024 * 1024,
+        maxIdLengthBytes: 128,
+      },
+    },
+  };
+  return buildRecord([
+    observation(0, 'interaction_start', null),
+    observation(1, 'model_request', { requestEnvelope: {
+      model: 'gpt-test', provider: 'openai', providerNativeFidelity: 'structurally_faithful',
+      messages: [{ role: 'user', content: { text: 'streaming-request-sentinel', evidenceStatus: 'captured' } }],
+    } }, 'client_sent'),
+    observation(2, 'span_start', { span: { kind: 'model', name: 'model', parentSpanId: null } }),
+    observation(3, 'model_response', { responseEnvelope: {
+      providerNativeFidelity: 'structurally_faithful',
+      responseMeta: { statusCode: 200, contentType: 'text/event-stream' },
+    } }, 'provider_reported'),
+    observation(4, 'model_response_chunk', { responseEnvelope: {
+      providerNativeFidelity: 'structurally_faithful', choiceIndex: 0, chunkIndex: 0,
+      deltaText: 'streaming-delta-sentinel', finishReason: 'stop',
+    } }, 'provider_reported'),
+    observation(5, 'span_end', {}),
+    { ...observation(6, 'interaction_end', null), spanId: null },
+  ], boundary, '1.1.0', {
+    captureProfile: { name: 'signalglass.collection.ingress-metadata-safe', version: '1.0.0' },
+  });
+}
+
 function fixtureFor(name: MatrixFixtureName): EvidenceRecord {
   switch (name) {
     case 'lifecycle-only':
@@ -273,6 +356,8 @@ function fixtureFor(name: MatrixFixtureName): EvidenceRecord {
       ]);
     case 'all-kinds':
       return buildRecord(allKindsObservations());
+    case 'streaming':
+      return streamingRecord();
     case 'redacted':
       // Declarations live on the raw observation payloads (Spec 014 §5.8);
       // redacted/missing/truncated evidence must project without fabricating

@@ -6,7 +6,7 @@ SignalGlass follows SemVer and is currently pre-1.0. Minor versions represent mi
 
 ## Near-term implementation forecast (non-binding)
 
-**Updated:** August 4, 2026
+**Updated:** August 14, 2026
 
 This forecast translates the dependency-ordered roadmap into ten near-term implementation slices after the Spec 014 compatibility-projection work in PR #18, then extends the sequence through a working 1.0 target. It is a planning aid, not an architectural contract, release promise, or change to any specification.
 
@@ -23,7 +23,7 @@ The forecast assumes:
 |---|---:|---|---|
 | Analyzer parity | #20 | Aug 7–13 | **Done** — Spec 014 slice 4: projection parity and loss verification — paired projection gates, analyzer/report parity over the real pipelines, and the loss-and-mapping matrix. Implemented and merged to main in PR #20; see `packages/reports/src/projectionParity.test.ts`, `docs/evidence-projection-matrix.md`, and the executable claim table `packages/core/src/evidenceProjections/projectionMappingMatrix.ts`. |
 | Append-only evidence store | #22 | Aug 12–18 | Persist and retrieve canonical records without overwriting authoritative observations. [Spec 015 — Append-only evidence store](../specs/015-append-only-evidence-store.md) is **Implemented** (accepted in documentation PR #21; append-only save/retrieve beside the legacy `TraceStorage`, authoritative identity, exact-text conflict resolution, a mandatory non-bypassable storage-safety gate with a closed deterministic `StorageSafetyCode` taxonomy (S1/S2/S3/S5/S6) and short-circuit retained-bytes rejection, the conservative `metadata-safe` reference persistence policy with field-level content classification aligned to the exact TypeScript shapes, unspoofable reference-policy identity with bounded policy-version metadata, hardened runtime-validated policy decisions, stored-versus-in-memory parity at the serializer snapshot, clock-independent idempotency classification, read integrity verified before any `unsupported-version` result, a dedicated WAL connection with contention contract, atomic initialization with rollback, and a namespaced storage-format ledger). Implemented and merged to main in PR #22. |
-| Streaming ingress and trace assembly | #23 | Aug 17–21 | Assemble and persist one canonical `EvidenceRecord` per streaming OpenAI-compatible interaction, per [Spec 016](../specs/016-streaming-ingress-trace-assembly.md) (Accepted in documentation-only PR #23; S1 schema foundation implemented in PR #24; S2 `metadata-safe` v1.1.0 persistence policy implemented in PR #25; S3 network-free incremental SSE parser implemented; S4 provider decoding/assembly and S5 ingress wiring remain pending). S3 alone does not provide live streaming ingress. |
+| Streaming ingress and trace assembly | #23 | Aug 17–21 | **Done** — [Spec 016](../specs/016-streaming-ingress-trace-assembly.md) S1–S5 assemble and persist one canonical `EvidenceRecord` per streaming OpenAI-compatible interaction, with byte-transparent backpressure, bounded identity/gzip/deflate observation, explicit lifecycle outcomes, exact evidence-budget detachment, and compatibility-projection accounting. |
 | Pi provider-boundary capture | #24 | Aug 20–27 | Enable the first Pi smoke test, initially through stored evidence and JSON/report output. |
 | Pi agent, tool, and MCP instrumentation | #25 | Aug 25–Sep 1 | Make Pi testing representative of agent behavior by observing tool calls, MCP activity, context assembly, and provenance. |
 | Deterministic measurements | #26 | Aug 28–Sep 4 | Add versioned latency, token, usage, completeness, and cost derivations without changing evidence. |
@@ -153,7 +153,7 @@ Spec 014 slice 4: paired canonical/legacy fixtures with the exact-equality proje
 
 ### Streaming
 
-- Transparent streaming capture (SSE passthrough with event extraction), so real agent-harness traffic (Pi, OpenCode) can be observed without being changed (see [Spec 016](../specs/016-streaming-ingress-trace-assembly.md), Accepted in documentation-only PR #23). Its network-free L2 SSE parser is implemented in S3; provider decoding/assembly and ingress wiring remain pending in S4–S5.
+- Transparent streaming capture (SSE passthrough with event extraction), so real agent-harness traffic (Pi, OpenCode) can be observed without being changed (see [Spec 016](../specs/016-streaming-ingress-trace-assembly.md)). S1–S5 are implemented, including the live ingress route, encoded-stream decoder tee, lifecycle finalization, and canonical evidence persistence.
 
 ### Multi-span interactions
 

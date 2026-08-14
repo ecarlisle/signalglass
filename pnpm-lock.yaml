@@ -48,13 +48,19 @@ importers:
       '@signalglass/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@signalglass/evidence':
+        specifier: workspace:*
+        version: link:../../packages/evidence
       '@signalglass/providers':
         specifier: workspace:*
         version: link:../../packages/providers
-    devDependencies:
       '@signalglass/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@signalglass/streaming':
+        specifier: workspace:*
+        version: link:../../packages/streaming
+    devDependencies:
       '@types/node':
         specifier: ^20.14.0
         version: 20.19.43
